@@ -8,10 +8,14 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 DEFAULT_HEADERS = {
-    "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-    "Accept": "image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8",
-    "Referer": "https://www.artic.edu/"
+    "User-Agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
 }
+
+# Multiple search terms for diverse artwork results from Met Museum
+MET_SEARCH_TERMS = [
+    "painting", "oil painting", "portrait", "landscape", "impressionism",
+    "renaissance", "baroque", "romanticism", "still life", "mythology"
+]
 
 def format_caption(title: str, artist: str, date: str, museum: str) -> str:
     """Formats artwork metadata into a clean Instagram caption without hashtags or extra text."""
@@ -19,7 +23,7 @@ def format_caption(title: str, artist: str, date: str, museum: str) -> str:
     clean_artist = artist.strip() if artist else "Unknown Artist"
     clean_date = date.strip() if date else "Unknown Date"
     clean_museum = museum.strip() if museum else "Public Collection"
-    
+
     caption = (
         f"🎨 {clean_title}\n"
         f"👨‍🎨 {clean_artist}\n"
@@ -28,87 +32,59 @@ def format_caption(title: str, artist: str, date: str, museum: str) -> str:
     )
     return caption
 
-def fetch_artic_artwork(posted_ids: set) -> Optional[Dict[str, Any]]:
-    """Fetches a random public domain artwork from Art Institute of Chicago."""
-    try:
-        page = random.randint(1, 100)
-        url = f"{config.ARTIC_API_URL}?page={page}&limit=50&fields=id,title,artist_title,date_display,image_id,is_public_domain"
-        response = requests.get(url, headers=DEFAULT_HEADERS, timeout=15)
-        if response.status_code != 200:
-            logger.warning(f"ArtIC API error status: {response.status_code}")
-            return None
-
-        data = response.json()
-        artworks = data.get("data", [])
-        iiif_url = data.get("config", {}).get("iiif_url", config.ARTIC_IIIF_URL)
-
-        # Shuffle list to get random artwork
-        random.shuffle(artworks)
-
-        for item in artworks:
-            artwork_id = f"artic_{item.get('id')}"
-            if artwork_id in posted_ids:
-                continue
-
-            if not item.get("is_public_domain"):
-                continue
-
-            image_id = item.get("image_id")
-            if not image_id:
-                continue
-
-            title = item.get("title") or "Untitled"
-            artist = item.get("artist_title") or "Unknown Artist"
-            date = item.get("date_display") or "Unknown Date"
-            image_url = f"{iiif_url}/{image_id}/full/1600,/0/default.jpg"
-
-            caption = format_caption(title, artist, date, "Art Institute of Chicago")
-
-            return {
-                "id": artwork_id,
-                "title": title,
-                "artist": artist,
-                "date": date,
-                "museum": "Art Institute of Chicago",
-                "image_url": image_url,
-                "caption": caption
-            }
-    except Exception as e:
-        logger.error(f"Error fetching from ArtIC: {e}")
-    return None
-
 def fetch_met_artwork(posted_ids: set) -> Optional[Dict[str, Any]]:
-    """Fetches a random public domain artwork from The Metropolitan Museum of Art."""
+    """
+    Fetches a random public domain painting from The Metropolitan Museum of Art.
+    Uses multiple search terms for variety and samples a wider pool to find new artworks.
+    """
     try:
-        search_url = f"{config.MET_API_BASE}/search?hasImages=true&isPublicDomain=true&q=painting"
-        res = requests.get(search_url, timeout=15)
+        # Pick a random search term for diversity
+        search_term = random.choice(MET_SEARCH_TERMS)
+        search_url = (
+            f"{config.MET_API_BASE}/search"
+            f"?hasImages=true&isPublicDomain=true&q={search_term}"
+        )
+        logger.info(f"Searching Met Museum with term: '{search_term}'")
+        res = requests.get(search_url, headers=DEFAULT_HEADERS, timeout=20)
         if res.status_code != 200:
             logger.warning(f"MET API search error: {res.status_code}")
             return None
 
         object_ids = res.json().get("objectIDs", [])
         if not object_ids:
+            logger.warning("No object IDs returned from Met Museum search.")
             return None
 
-        # Sample up to 30 random IDs to check
-        sample_ids = random.sample(object_ids, min(30, len(object_ids)))
+        logger.info(f"Met Museum returned {len(object_ids)} results for '{search_term}'.")
+
+        # Filter out already-posted IDs first
+        unposted_ids = [oid for oid in object_ids if f"met_{oid}" not in posted_ids]
+        if not unposted_ids:
+            unposted_ids = object_ids  # fallback: ignore history if all posted
+
+        # Sample a larger pool to increase chances of finding a valid image
+        sample_ids = random.sample(unposted_ids, min(50, len(unposted_ids)))
 
         for obj_id in sample_ids:
             artwork_id = f"met_{obj_id}"
-            if artwork_id in posted_ids:
-                continue
 
             detail_url = f"{config.MET_API_BASE}/objects/{obj_id}"
-            d_res = requests.get(detail_url, timeout=10)
+            d_res = requests.get(detail_url, headers=DEFAULT_HEADERS, timeout=15)
             if d_res.status_code != 200:
                 continue
 
             detail = d_res.json()
+
             if not detail.get("isPublicDomain"):
                 continue
 
+            # Prefer high-res primaryImage, fallback to small version
             image_url = detail.get("primaryImage") or detail.get("primaryImageSmall")
             if not image_url:
+                continue
+
+            # Skip if image URL looks invalid
+            if not image_url.startswith("http"):
                 continue
 
             title = detail.get("title") or "Untitled"
@@ -117,6 +93,7 @@ def fetch_met_artwork(posted_ids: set) -> Optional[Dict[str, Any]]:
 
             caption = format_caption(title, artist, date, "The Metropolitan Museum of Art")
 
+            logger.info(f"Found artwork: '{title}' by {artist} ({date})")
             return {
                 "id": artwork_id,
                 "title": title,
@@ -126,18 +103,23 @@ def fetch_met_artwork(posted_ids: set) -> Optional[Dict[str, Any]]:
                 "image_url": image_url,
                 "caption": caption
             }
+
     except Exception as e:
         logger.error(f"Error fetching from Met Museum: {e}")
     return None
 
 def fetch_random_artwork(posted_ids: set) -> Dict[str, Any]:
-    """Tries fetching artwork from ArtIC or Met Museum randomly."""
-    fetchers = [fetch_artic_artwork, fetch_met_artwork]
-    random.shuffle(fetchers)
-
-    for fetcher in fetchers:
-        art = fetcher(posted_ids)
+    """
+    Fetches a random public domain artwork. Retries up to 3 times if needed.
+    Exclusively uses The Metropolitan Museum of Art API (no IP blocking).
+    """
+    for attempt in range(1, 4):
+        logger.info(f"Artwork fetch attempt {attempt}/3...")
+        art = fetch_met_artwork(posted_ids)
         if art:
             return art
+        logger.warning(f"Attempt {attempt} failed. Retrying...")
 
-    raise RuntimeError("Failed to fetch artwork from all configured museum APIs!")
+    raise RuntimeError(
+        "Failed to fetch artwork after 3 attempts from the Metropolitan Museum of Art API!"
+    )
