@@ -44,8 +44,10 @@ def main():
     access_token = os.environ.get("INSTAGRAM_ACCESS_TOKEN")
     public_image_url = args.image_url or os.environ.get("PUBLIC_IMAGE_URL")
 
+    logger.info(f"Checking environment variables: INSTAGRAM_ACCOUNT_ID={'[SET]' if account_id else '[MISSING]'}, INSTAGRAM_ACCESS_TOKEN={'[SET]' if access_token else '[MISSING]'}")
+
     if not account_id or not access_token:
-        logger.error("Missing INSTAGRAM_ACCOUNT_ID or INSTAGRAM_ACCESS_TOKEN environment variables!")
+        logger.error("❌ ERROR: Missing INSTAGRAM_ACCOUNT_ID or INSTAGRAM_ACCESS_TOKEN secrets! Please add them to your GitHub Repository Settings -> Secrets and variables -> Actions.")
         sys.exit(1)
 
     if not public_image_url:
