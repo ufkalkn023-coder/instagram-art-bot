@@ -79,48 +79,98 @@ def process_artwork_image(image_url: str, output_path: str = config.OUTPUT_IMAGE
     # Paste crisp artwork
     bg.paste(fg, (pos_x, pos_y))
 
-    # Save output JPEG
-    bg.save(output_path, "JPEG", quality=95)
+    # Ensure clean RGB format (no RGBA, no CMYK, no ICC profile issues)
+    if bg.mode != "RGB":
+        bg = bg.convert("RGB")
+
+    # Save output as clean JPEG (Instagram compatible)
+    bg.save(output_path, "JPEG", quality=95, icc_profile=None)
     logger.info(f"Artwork processed and saved to: {output_path}")
 
     return output_path
 
 def upload_temp_image(image_path: str = config.OUTPUT_IMAGE_PATH) -> str:
     """
-    Uploads processed image to a temporary public HTTPS host (catbox/tmpfiles)
-    so Instagram Graph API can download it directly.
+    Uploads processed image to a public HTTPS host that returns a DIRECT image URL
+    with Content-Type: image/jpeg header (required by Instagram Graph API).
     """
-    logger.info("Uploading image to temporary public HTTPS host for Instagram Graph API...")
+    logger.info("Uploading image to public HTTPS host for Instagram Graph API...")
+
+    # Method 1: catbox.moe (returns direct raw image URL, no redirects)
     try:
-        # Try tmpfiles.org
+        logger.info("Trying catbox.moe...")
         with open(image_path, "rb") as f:
-            res = requests.post("https://tmpfiles.org/api/v1/upload", files={"file": f}, timeout=20)
+            res = requests.post(
+                "https://catbox.moe/user/api.php",
+                data={"reqtype": "fileupload"},
+                files={"fileToUpload": ("artwork.jpg", f, "image/jpeg")},
+                timeout=30
+            )
+        if res.status_code == 200 and res.text.strip().startswith("http"):
+            url = res.text.strip()
+            logger.info(f"catbox.moe upload successful: {url}")
+            # Verify the URL returns actual image data
+            if _verify_image_url(url):
+                return url
+            else:
+                logger.warning("catbox.moe URL did not pass verification.")
+    except Exception as e:
+        logger.warning(f"catbox.moe upload failed: {e}")
+
+    # Method 2: freeimage.host (free, no API key needed for anonymous uploads)
+    try:
+        logger.info("Trying freeimage.host...")
+        import base64
+        with open(image_path, "rb") as f:
+            image_data = base64.b64encode(f.read()).decode("utf-8")
+        res = requests.post(
+            "https://freeimage.host/api/1/upload",
+            data={
+                "key": "6d207e02198a847aa98d0a2a901485a5",  # Public demo key
+                "action": "upload",
+                "source": image_data,
+                "format": "json"
+            },
+            timeout=30
+        )
         if res.status_code == 200:
             data = res.json()
-            url = data.get("data", {}).get("url")
+            url = data.get("image", {}).get("url")
             if url:
-                # Convert https://tmpfiles.org/1234/img.jpg -> https://tmpfiles.org/dl/1234/img.jpg for direct access
-                direct_url = url.replace("tmpfiles.org/", "tmpfiles.org/dl/")
-                logger.info(f"Image uploaded successfully: {direct_url}")
-                return direct_url
+                logger.info(f"freeimage.host upload successful: {url}")
+                return url
     except Exception as e:
-        logger.warning(f"tmpfiles.org upload failed: {e}")
+        logger.warning(f"freeimage.host upload failed: {e}")
 
+    # Method 3: litterbox.catbox.moe (1 hour retention, direct URL)
     try:
-        # Fallback to litterbox.catbox.moe (1 hour retention)
+        logger.info("Trying litterbox.catbox.moe...")
         with open(image_path, "rb") as f:
             res = requests.post(
                 "https://litterbox.catbox.moe/resources/internals/api.php",
                 data={"reqtype": "fileupload", "time": "1h"},
-                files={"fileToUpload": f},
-                timeout=20
+                files={"fileToUpload": ("artwork.jpg", f, "image/jpeg")},
+                timeout=30
             )
-        if res.status_code == 200 and res.text.startswith("http"):
+        if res.status_code == 200 and res.text.strip().startswith("http"):
             url = res.text.strip()
-            logger.info(f"Image uploaded to litterbox: {url}")
+            logger.info(f"litterbox upload successful: {url}")
             return url
     except Exception as e:
         logger.warning(f"litterbox upload failed: {e}")
 
-    raise RuntimeError("Could not upload image to any temporary public host!")
+    raise RuntimeError("Could not upload image to any public host!")
+
+
+def _verify_image_url(url: str) -> bool:
+    """Verifies that a URL returns actual image data with correct Content-Type."""
+    try:
+        head_res = requests.head(url, timeout=10, allow_redirects=True)
+        content_type = head_res.headers.get("Content-Type", "")
+        is_image = "image/" in content_type
+        logger.info(f"URL verification - Status: {head_res.status_code}, Content-Type: {content_type}, Is Image: {is_image}")
+        return is_image and head_res.status_code == 200
+    except Exception as e:
+        logger.warning(f"URL verification failed: {e}")
+        return False
 
