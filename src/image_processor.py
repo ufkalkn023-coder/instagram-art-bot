@@ -1,16 +1,95 @@
 import io
+import random
 import logging
 import requests
-from PIL import Image, ImageFilter, ImageEnhance, ImageOps
+from PIL import Image, ImageOps, ImageDraw
+from collections import Counter
 import config
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
+# Available frame styles
+FRAME_STYLES = ["palette_border", "gradient_border", "clean"]
+
+
+def _get_dominant_colors(img: Image.Image, num_colors: int = 5) -> list:
+    """Extracts dominant colors from an image using color quantization."""
+    small = img.copy()
+    small.thumbnail((100, 100))
+    small = small.convert("RGB")
+
+    # Quantize to a small number of colors
+    quantized = small.quantize(colors=num_colors, method=Image.Quantize.MEDIANCUT)
+    palette = quantized.getpalette()
+
+    # Extract RGB tuples from palette
+    colors = []
+    for i in range(num_colors):
+        r = palette[i * 3]
+        g = palette[i * 3 + 1]
+        b = palette[i * 3 + 2]
+        colors.append((r, g, b))
+
+    return colors
+
+
+def _apply_palette_border(img: Image.Image, border_size: int = 60) -> Image.Image:
+    """
+    Applies a solid-color border derived from the painting's dominant color palette.
+    Creates an elegant museum-card aesthetic.
+    """
+    colors = _get_dominant_colors(img, num_colors=5)
+
+    # Pick a muted/dark color for the border (prefer darker tones)
+    # Sort by luminance and pick a mid-dark shade
+    colors_with_lum = [(c, 0.299 * c[0] + 0.587 * c[1] + 0.114 * c[2]) for c in colors]
+    colors_with_lum.sort(key=lambda x: x[1])
+
+    # Pick from the darker half of the palette
+    border_color = colors_with_lum[random.randint(0, min(2, len(colors_with_lum) - 1))][0]
+
+    # Create new canvas with border
+    new_w = img.width + border_size * 2
+    new_h = img.height + border_size * 2
+    canvas = Image.new("RGB", (new_w, new_h), border_color)
+    canvas.paste(img, (border_size, border_size))
+
+    logger.info(f"Applied palette border with color {border_color}")
+    return canvas
+
+
+def _apply_gradient_border(img: Image.Image, border_size: int = 60) -> Image.Image:
+    """
+    Applies a subtle vertical gradient border using the painting's two dominant colors.
+    """
+    colors = _get_dominant_colors(img, num_colors=3)
+    color_top = colors[0]
+    color_bottom = colors[-1]
+
+    new_w = img.width + border_size * 2
+    new_h = img.height + border_size * 2
+    canvas = Image.new("RGB", (new_w, new_h))
+    draw = ImageDraw.Draw(canvas)
+
+    # Draw vertical gradient
+    for y in range(new_h):
+        ratio = y / new_h
+        r = int(color_top[0] * (1 - ratio) + color_bottom[0] * ratio)
+        g = int(color_top[1] * (1 - ratio) + color_bottom[1] * ratio)
+        b = int(color_top[2] * (1 - ratio) + color_bottom[2] * ratio)
+        draw.line([(0, y), (new_w, y)], fill=(r, g, b))
+
+    canvas.paste(img, (border_size, border_size))
+
+    logger.info(f"Applied gradient border: {color_top} -> {color_bottom}")
+    return canvas
+
+
 def process_artwork_image(image_url: str, output_path: str = config.OUTPUT_IMAGE_PATH) -> str:
     """
-    Downloads an image from URL and formats it directly as a clean RGB JPEG
-    preserving the original painting's natural aspect ratio (no blurred background).
+    Downloads an image from URL, applies a random frame style
+    (palette border, gradient border, or clean), and saves as JPEG.
     """
     logger.info(f"Downloading artwork image from: {image_url}")
     headers = {
@@ -25,7 +104,7 @@ def process_artwork_image(image_url: str, output_path: str = config.OUTPUT_IMAGE
     if img.mode != "RGB":
         img = img.convert("RGB")
 
-    # Optionally resize if image is excessively large (> 2048px on max dimension)
+    # Resize if image is excessively large (> 2048px on max dimension)
     max_dim = 2048
     orig_w, orig_h = img.size
     if orig_w > max_dim or orig_h > max_dim:
@@ -35,11 +114,26 @@ def process_artwork_image(image_url: str, output_path: str = config.OUTPUT_IMAGE
         img = img.resize((new_w, new_h), Image.Resampling.LANCZOS)
         logger.info(f"Resized image from ({orig_w}x{orig_h}) to ({new_w}x{new_h})")
 
-    # Save clean RGB JPEG
+    # Apply random frame style
+    style = random.choice(FRAME_STYLES)
+    logger.info(f"Applying frame style: '{style}'")
+
+    if style == "palette_border":
+        img = _apply_palette_border(img, border_size=random.randint(40, 80))
+    elif style == "gradient_border":
+        img = _apply_gradient_border(img, border_size=random.randint(40, 80))
+    # "clean" = no frame, just the painting
+
+    # Ensure clean RGB format
+    if img.mode != "RGB":
+        img = img.convert("RGB")
+
+    # Save clean JPEG
     img.save(output_path, "JPEG", quality=95, icc_profile=None)
     logger.info(f"Artwork processed and saved to: {output_path}")
 
     return output_path
+
 
 def upload_temp_image(image_path: str = config.OUTPUT_IMAGE_PATH) -> str:
     """
@@ -61,7 +155,6 @@ def upload_temp_image(image_path: str = config.OUTPUT_IMAGE_PATH) -> str:
         if res.status_code == 200 and res.text.strip().startswith("http"):
             url = res.text.strip()
             logger.info(f"catbox.moe upload successful: {url}")
-            # Verify the URL returns actual image data
             if _verify_image_url(url):
                 return url
             else:
@@ -69,7 +162,7 @@ def upload_temp_image(image_path: str = config.OUTPUT_IMAGE_PATH) -> str:
     except Exception as e:
         logger.warning(f"catbox.moe upload failed: {e}")
 
-    # Method 2: freeimage.host (free, no API key needed for anonymous uploads)
+    # Method 2: freeimage.host
     try:
         logger.info("Trying freeimage.host...")
         import base64
@@ -78,7 +171,7 @@ def upload_temp_image(image_path: str = config.OUTPUT_IMAGE_PATH) -> str:
         res = requests.post(
             "https://freeimage.host/api/1/upload",
             data={
-                "key": "6d207e02198a847aa98d0a2a901485a5",  # Public demo key
+                "key": "6d207e02198a847aa98d0a2a901485a5",
                 "action": "upload",
                 "source": image_data,
                 "format": "json"
@@ -94,7 +187,7 @@ def upload_temp_image(image_path: str = config.OUTPUT_IMAGE_PATH) -> str:
     except Exception as e:
         logger.warning(f"freeimage.host upload failed: {e}")
 
-    # Method 3: litterbox.catbox.moe (1 hour retention, direct URL)
+    # Method 3: litterbox.catbox.moe (1 hour retention)
     try:
         logger.info("Trying litterbox.catbox.moe...")
         with open(image_path, "rb") as f:
@@ -125,4 +218,3 @@ def _verify_image_url(url: str) -> bool:
     except Exception as e:
         logger.warning(f"URL verification failed: {e}")
         return False
-
