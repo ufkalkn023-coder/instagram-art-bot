@@ -18,14 +18,14 @@ MET_SEARCH_TERMS = [
 ]
 
 def format_caption(title: str, artist: str, date: str, museum: str) -> str:
-    """Formats artwork metadata into a clean Instagram caption without hashtags or extra text."""
+    """Formats artwork metadata into a clean Instagram caption starting on a fresh new line."""
     clean_title = title.strip() if title else "Untitled"
     clean_artist = artist.strip() if artist else "Unknown Artist"
     clean_date = date.strip() if date else "Unknown Date"
     clean_museum = museum.strip() if museum else "Public Collection"
 
     caption = (
-        f"🎨 {clean_title}\n"
+        f"\n🎨 {clean_title}\n"
         f"👨‍🎨 {clean_artist}\n"
         f"🗓️ {clean_date}\n"
         f"🏛️ {clean_museum}"
