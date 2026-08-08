@@ -24,14 +24,17 @@ CMA_TYPES = [
 
 
 def format_caption(title: str, artist: str, date: str, museum: str) -> str:
-    """Formats artwork metadata into a clean Instagram caption starting on a fresh new line."""
+    """Formats artwork metadata into a clean Instagram caption starting on a fresh new line using Braille blank space."""
     clean_title = title.strip() if title else "Untitled"
     clean_artist = artist.strip() if artist else "Unknown Artist"
     clean_date = date.strip() if date else "Unknown Date"
     clean_museum = museum.strip() if museum else "Public Collection"
 
+    # Instagram strips leading raw \n, so we use Braille blank character (⠀\n)
+    # to force Instagram to start the artwork title on a fresh new line below the username.
     caption = (
-        f"\n🎨 {clean_title}\n"
+        f"⠀\n"
+        f"🎨 {clean_title}\n"
         f"👨‍🎨 {clean_artist}\n"
         f"🗓️ {clean_date}\n"
         f"🏛️ {clean_museum}"
