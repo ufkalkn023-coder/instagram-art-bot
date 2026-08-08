@@ -55,6 +55,14 @@
       "museum": "Cleveland Museum of Art",
       "media_id": "dry_run_id",
       "posted_at": "2026-08-08 17:58:20"
+    },
+    {
+      "id": "cma_141220",
+      "title": "Calvary with a Carthusian Monk",
+      "artist": "Jean de Beaumetz",
+      "museum": "Cleveland Museum of Art",
+      "media_id": "18091614032453255",
+      "posted_at": "2026-08-08 15:09:46"
     }
   ]
 }
