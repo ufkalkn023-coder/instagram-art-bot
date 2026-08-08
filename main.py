@@ -1,6 +1,8 @@
 import argparse
 import os
 import sys
+import time
+import random
 import logging
 
 import config
@@ -17,6 +19,12 @@ def main():
 
     logger.info("Starting Instagram Art Automation Bot...")
 
+    # Random delay (1-5 minutes) to avoid posting at exact clock hours
+    if not args.dry_run:
+        delay = random.randint(60, 300)
+        logger.info(f"⏳ Waiting {delay} seconds ({delay // 60}m {delay % 60}s) random delay before posting...")
+        time.sleep(delay)
+
     # 1. Load history
     posted_ids = history_tracker.get_posted_ids()
     logger.info(f"Loaded {len(posted_ids)} previously posted artworks.")
@@ -27,8 +35,8 @@ def main():
     logger.info(f"Selected Artwork: '{artwork['title']}' by {artwork['artist']} ({artwork['museum']})")
     logger.info(f"Caption:\n---\n{artwork['caption']}\n---")
 
-    # 3. Process image with Blurred Passe-Partout Background
-    logger.info("Processing image (1080x1350 vertical with blurred passe-partout)...")
+    # 3. Process image with random frame style
+    logger.info("Processing image with random frame style...")
     output_image_path = image_processor.process_artwork_image(artwork["image_url"])
     logger.info(f"Image successfully processed: {output_image_path}")
 
