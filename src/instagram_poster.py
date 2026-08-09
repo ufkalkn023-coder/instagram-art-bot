@@ -119,3 +119,29 @@ def post_story_to_instagram_graph_api(image_url: str, account_id: str, access_to
     story_id = pub_data["id"]
     logger.info(f"Successfully published Story to Instagram! Story ID: {story_id}")
     return story_id
+
+def get_instagram_permalink(media_id: str, access_token: str) -> str:
+    """
+    Fetches the direct permalink (URL) for an Instagram post using its media ID.
+    Returns the URL string (e.g., https://www.instagram.com/p/CODE/), or None if failed.
+    """
+    if not media_id or not access_token:
+        return None
+        
+    url = f"{config.GRAPH_API_BASE_URL}/{media_id}"
+    params = {
+        "fields": "permalink",
+        "access_token": access_token
+    }
+    
+    try:
+        res = requests.get(url, params=params, timeout=10)
+        if res.status_code == 200:
+            data = res.json()
+            return data.get("permalink")
+        else:
+            logger.warning(f"Failed to fetch permalink for media {media_id}. Status: {res.status_code}")
+            return None
+    except Exception as e:
+        logger.error(f"Exception while fetching permalink: {e}")
+        return None

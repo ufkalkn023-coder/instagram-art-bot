@@ -83,9 +83,13 @@ def main():
         # Clean title for Pinterest
         title = f"{artwork['title']} by {artwork['artist']}"
         desc = artwork['caption']
-        # Link back to Instagram profile to drive organic traffic
-        profile_link = "https://instagram.com/ufkalkn023.db"
-        pinterest_poster.post_to_pinterest(public_media_url, title, desc, profile_link)
+        # Fetch direct permalink to the Instagram post
+        permalink = instagram_poster.get_instagram_permalink(media_id, access_token)
+        # Fallback to profile link if permalink fetch fails
+        target_link = permalink if permalink else "https://instagram.com/ufkalkn023.db"
+        
+        logger.info(f"Target Pinterest link set to: {target_link}")
+        pinterest_poster.post_to_pinterest(public_media_url, title, desc, target_link)
 
 if __name__ == "__main__":
     try:
