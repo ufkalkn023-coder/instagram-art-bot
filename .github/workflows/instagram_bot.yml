@@ -44,5 +44,6 @@ jobs:
           git config --global user.name "github-actions[bot]"
           git config --global user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add data/posted_history.json
+          git add -f data/output_post.jpg 2>/dev/null || true
           git commit -m "auto: update posted history [skip ci]" || echo "No changes to commit"
           git push

@@ -33,16 +33,17 @@ def main():
     logger.info("Fetching new artwork from museum APIs...")
     artwork = art_fetcher.fetch_random_artwork(posted_ids)
     logger.info(f"Selected Artwork: '{artwork['title']}' by {artwork['artist']} ({artwork['museum']})")
+    logger.info(f"Alt Text (SEO): {artwork.get('alt_text')}")
     logger.info(f"Caption:\n---\n{artwork['caption']}\n---")
 
-    # 3. Process image with random frame style
-    logger.info("Processing image with random frame style...")
+    # 3. Process feed image (1080x1350, Instagram 4:5 portrait)
+    logger.info("Processing feed artwork image with random frame style...")
     output_image_path = image_processor.process_artwork_image(artwork["image_url"])
-    logger.info(f"Image successfully processed: {output_image_path}")
+    logger.info(f"Feed image successfully processed: {output_image_path}")
 
     # 4. Post to Instagram or Dry-Run
     if args.dry_run:
-        logger.info("[DRY-RUN MODE] Skipping actual Instagram upload.")
+        logger.info("[DRY-RUN MODE] Skipping actual Instagram post upload.")
         history_tracker.save_posted_artwork(artwork, media_id="dry_run_id")
         logger.info("✅ Dry-run completed successfully!")
         return
@@ -59,15 +60,16 @@ def main():
         sys.exit(1)
 
     if not public_image_url:
-        logger.info("PUBLIC_IMAGE_URL not specified. Automatically uploading image to temporary public HTTPS host...")
+        logger.info("PUBLIC_IMAGE_URL not specified. Automatically uploading feed image to temporary public HTTPS host...")
         public_image_url = image_processor.upload_temp_image(output_image_path)
 
-    logger.info(f"Posting to Instagram using public image URL: {public_image_url}")
+    logger.info(f"Posting Feed post to Instagram using public image URL: {public_image_url}")
     media_id = instagram_poster.post_to_instagram_graph_api(
         image_url=public_image_url,
         caption=artwork["caption"],
         account_id=account_id,
-        access_token=access_token
+        access_token=access_token,
+        alt_text=artwork.get("alt_text")
     )
 
     # 5. Record to history
@@ -75,4 +77,8 @@ def main():
     logger.info("🎉 Post completed and recorded to history successfully!")
 
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    except Exception as e:
+        logger.error(f"❌ Bot failed with error: {e}")
+        sys.exit(1)

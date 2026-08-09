@@ -1,9 +1,9 @@
 import io
+import os
 import random
 import logging
 import requests
-from PIL import Image, ImageOps, ImageDraw
-from collections import Counter
+from PIL import Image, ImageOps, ImageDraw, ImageFilter
 import config
 
 logging.basicConfig(level=logging.INFO)
@@ -88,8 +88,8 @@ def _apply_gradient_border(img: Image.Image, border_size: int = 60) -> Image.Ima
 
 def process_artwork_image(image_url: str, output_path: str = config.OUTPUT_IMAGE_PATH) -> str:
     """
-    Downloads an image from URL, applies a random frame style
-    (palette border, gradient border, or clean), and saves as JPEG.
+    Downloads artwork from URL, fits it onto a 1080x1350 (Instagram 4:5 portrait)
+    canvas with a blurred background and random frame style, saves as JPEG.
     """
     logger.info(f"Downloading artwork image from: {image_url}")
     headers = {
@@ -104,34 +104,71 @@ def process_artwork_image(image_url: str, output_path: str = config.OUTPUT_IMAGE
     if img.mode != "RGB":
         img = img.convert("RGB")
 
-    # Resize if image is excessively large (> 2048px on max dimension)
-    max_dim = 2048
-    orig_w, orig_h = img.size
-    if orig_w > max_dim or orig_h > max_dim:
-        scale = max_dim / max(orig_w, orig_h)
-        new_w = int(orig_w * scale)
-        new_h = int(orig_h * scale)
-        img = img.resize((new_w, new_h), Image.Resampling.LANCZOS)
-        logger.info(f"Resized image from ({orig_w}x{orig_h}) to ({new_w}x{new_h})")
+    canvas_w = config.TARGET_WIDTH   # 1080
+    canvas_h = config.TARGET_HEIGHT  # 1350
 
-    # Apply random frame style
+    # --- Create blurred background filling the 1080x1350 canvas ---
+    bg = img.copy()
+    bg_aspect = bg.width / bg.height
+    target_aspect = canvas_w / canvas_h
+
+    if bg_aspect > target_aspect:
+        new_h = canvas_h
+        new_w = int(canvas_h * bg_aspect)
+    else:
+        new_w = canvas_w
+        new_h = int(canvas_w / bg_aspect)
+
+    bg = bg.resize((new_w, new_h), Image.Resampling.LANCZOS)
+    crop_left = (new_w - canvas_w) // 2
+    crop_top = (new_h - canvas_h) // 2
+    bg = bg.crop((crop_left, crop_top, crop_left + canvas_w, crop_top + canvas_h))
+    bg = bg.filter(ImageFilter.GaussianBlur(radius=config.BLUR_RADIUS))
+
+    # Darken background slightly for contrast
+    dark_overlay = Image.new("RGB", (canvas_w, canvas_h), (0, 0, 0))
+    canvas = Image.blend(bg, dark_overlay, alpha=0.25)
+
+    # --- Determine frame style and border size ---
     style = random.choice(FRAME_STYLES)
     logger.info(f"Applying frame style: '{style}'")
 
+    border_size = 0
+    if style in ("palette_border", "gradient_border"):
+        border_size = random.randint(10, 20)
+
+    # --- Fit the painting within the canvas (with padding for border) ---
+    padding = 50
+    max_w = canvas_w - (padding + border_size) * 2
+    max_h = canvas_h - (padding + border_size) * 2
+
+    paint_ratio = img.width / img.height
+    if paint_ratio > max_w / max_h:
+        paint_w = max_w
+        paint_h = int(paint_w / paint_ratio)
+    else:
+        paint_h = max_h
+        paint_w = int(paint_h * paint_ratio)
+
+    painting = img.resize((paint_w, paint_h), Image.Resampling.LANCZOS)
+
+    # --- Apply frame style ---
     if style == "palette_border":
-        img = _apply_palette_border(img, border_size=random.randint(40, 80))
+        painting = _apply_palette_border(painting, border_size=border_size)
     elif style == "gradient_border":
-        img = _apply_gradient_border(img, border_size=random.randint(40, 80))
-    # "clean" = no frame, just the painting
+        painting = _apply_gradient_border(painting, border_size=border_size)
+    elif style == "clean":
+        # Thin white mat border for museum card look
+        painting = ImageOps.expand(painting, border=6, fill=(255, 255, 255))
 
-    # Ensure clean RGB format
-    if img.mode != "RGB":
-        img = img.convert("RGB")
+    # --- Center painting on canvas ---
+    paste_x = (canvas_w - painting.width) // 2
+    paste_y = (canvas_h - painting.height) // 2
+    canvas.paste(painting, (paste_x, paste_y))
 
-    # Save clean JPEG
-    img.save(output_path, "JPEG", quality=95, icc_profile=None)
-    logger.info(f"Artwork processed and saved to: {output_path}")
-
+    # Save
+    canvas.save(output_path, "JPEG", quality=95, icc_profile=None)
+    logger.info(f"Artwork processed ({canvas_w}x{canvas_h}) and saved to: {output_path}")
     return output_path
 
 
@@ -183,7 +220,10 @@ def upload_temp_image(image_path: str = config.OUTPUT_IMAGE_PATH) -> str:
             url = data.get("image", {}).get("url")
             if url:
                 logger.info(f"freeimage.host upload successful: {url}")
-                return url
+                if _verify_image_url(url):
+                    return url
+                else:
+                    logger.warning("freeimage.host URL did not pass verification.")
     except Exception as e:
         logger.warning(f"freeimage.host upload failed: {e}")
 
@@ -200,7 +240,10 @@ def upload_temp_image(image_path: str = config.OUTPUT_IMAGE_PATH) -> str:
         if res.status_code == 200 and res.text.strip().startswith("http"):
             url = res.text.strip()
             logger.info(f"litterbox upload successful: {url}")
-            return url
+            if _verify_image_url(url):
+                return url
+            else:
+                logger.warning("litterbox URL did not pass verification.")
     except Exception as e:
         logger.warning(f"litterbox upload failed: {e}")
 
