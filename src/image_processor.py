@@ -3,6 +3,11 @@ import os
 import random
 import logging
 import requests
+import time
+import uuid
+import boto3
+from datetime import datetime
+from botocore.exceptions import ClientError
 from typing import Tuple, Optional
 from PIL import Image, ImageOps, ImageDraw, ImageFilter
 import moviepy as mpy
@@ -256,110 +261,94 @@ def create_reels_video(raw_image_path: str, output_path: str = config.OUTPUT_VID
 
 def upload_temp_media(file_path: str, media_type: str = "image") -> str:
     """
-    Uploads processed image or video to a public HTTPS host that returns a DIRECT URL.
+    Uploads processed image or video to Cloudflare R2.
     media_type: 'image' or 'video'
+    Returns the public HTTP URL of the uploaded file.
     """
-    logger.info(f"Uploading {media_type} to public HTTPS host...")
-    mime_type = "video/mp4" if media_type == "video" else "image/jpeg"
-    file_ext = "mp4" if media_type == "video" else "jpg"
-    filename = f"artwork.{file_ext}"
-
-    # Method 1: catbox.moe
-    try:
-        logger.info("Trying catbox.moe...")
-        with open(file_path, "rb") as f:
-            res = requests.post(
-                "https://catbox.moe/user/api.php",
-                data={"reqtype": "fileupload"},
-                files={"fileToUpload": (filename, f, mime_type)},
-                timeout=120
-            )
-        if res.status_code == 200 and res.text.strip().startswith("http"):
-            url = res.text.strip()
-            logger.info(f"catbox.moe upload successful: {url}")
-            return url
-    except Exception as e:
-        logger.warning(f"catbox.moe upload failed: {e}")
-
-    # Method 2: freeimage.host (Images only)
-    if media_type == "image":
+    logger.info(f"Uploading {media_type} to Cloudflare R2...")
+    
+    account_id = os.environ.get("CLOUDFLARE_R2_ACCOUNT_ID")
+    access_key = os.environ.get("CLOUDFLARE_R2_ACCESS_KEY_ID")
+    secret_key = os.environ.get("CLOUDFLARE_R2_SECRET_ACCESS_KEY")
+    bucket_name = os.environ.get("CLOUDFLARE_R2_BUCKET_NAME")
+    public_url_base = os.environ.get("CLOUDFLARE_R2_PUBLIC_URL")
+    
+    if not all([account_id, access_key, secret_key, bucket_name, public_url_base]):
+        raise ValueError("Missing one or more CLOUDFLARE_R2_* environment variables!")
+        
+    public_url_base = public_url_base.rstrip('/')
+    
+    # Generate unique object key
+    timestamp = datetime.now().strftime("%Y%m%d%H%M%S")
+    unique_id = str(uuid.uuid4())[:8]
+    
+    if media_type == "video":
+        content_type = "video/mp4"
+        object_key = f"videos/{timestamp}_{unique_id}.mp4"
+    else:
+        content_type = "image/jpeg"
+        object_key = f"images/{timestamp}_{unique_id}.jpg"
+        
+    endpoint_url = f"https://{account_id}.r2.cloudflarestorage.com"
+    
+    # Initialize boto3 S3 client
+    s3_client = boto3.client(
+        "s3",
+        endpoint_url=endpoint_url,
+        aws_access_key_id=access_key,
+        aws_secret_access_key=secret_key,
+        region_name="auto"
+    )
+    
+    # Upload with 3 retries
+    upload_success = False
+    for attempt in range(1, 4):
         try:
-            logger.info("Trying freeimage.host...")
-            import base64
-            with open(file_path, "rb") as f:
-                image_data = base64.b64encode(f.read()).decode("utf-8")
-            res = requests.post(
-                "https://freeimage.host/api/1/upload",
-                data={
-                    "key": "6d207e02198a847aa98d0a2a901485a5",
-                    "action": "upload",
-                    "source": image_data,
-                    "format": "json"
-                },
-                timeout=60
+            logger.info(f"R2 upload attempt {attempt}/3...")
+            s3_client.upload_file(
+                file_path, 
+                bucket_name, 
+                object_key,
+                ExtraArgs={"ContentType": content_type}
             )
-            if res.status_code == 200:
-                data = res.json()
-                url = data.get("image", {}).get("url")
-                if url:
-                    logger.info(f"freeimage.host upload successful: {url}")
-                    return url
+            upload_success = True
+            break
+        except ClientError as e:
+            logger.warning(f"R2 upload failed on attempt {attempt}: {e}")
+            if attempt < 3:
+                time.sleep(2)
         except Exception as e:
-            logger.warning(f"freeimage.host upload failed: {e}")
-
-    # Method 3: uguu.se
-    try:
-        logger.info("Trying uguu.se...")
-        with open(file_path, "rb") as f:
-            res = requests.post(
-                "https://uguu.se/upload.php",
-                files={"files[]": (filename, f, mime_type)},
-                timeout=120
-            )
-        if res.status_code == 200:
-            data = res.json()
-            if data.get("success") and data.get("files"):
-                url = data["files"][0].get("url")
-                if url:
-                    logger.info(f"uguu.se upload successful: {url}")
-                    return url
-    except Exception as e:
-        logger.warning(f"uguu.se upload failed: {e}")
-
-    # Method 4: pomf.lain.la
-    try:
-        logger.info("Trying pomf.lain.la...")
-        with open(file_path, "rb") as f:
-            res = requests.post(
-                "https://pomf.lain.la/upload.php",
-                files={"files[]": (filename, f, mime_type)},
-                timeout=120
-            )
-        if res.status_code == 200:
-            data = res.json()
-            if data.get("success") and data.get("files"):
-                url = data["files"][0].get("url")
-                if url:
-                    logger.info(f"pomf.lain.la upload successful: {url}")
-                    return url
-    except Exception as e:
-        logger.warning(f"pomf.lain.la upload failed: {e}")
-
-    # Method 5: litterbox.catbox.moe (1 hour retention, accepts up to 1GB)
-    try:
-        logger.info("Trying litterbox.catbox.moe...")
-        with open(file_path, "rb") as f:
-            res = requests.post(
-                "https://litterbox.catbox.moe/resources/internals/api.php",
-                data={"reqtype": "fileupload", "time": "1h"},
-                files={"fileToUpload": (filename, f, mime_type)},
-                timeout=120
-            )
-        if res.status_code == 200 and res.text.strip().startswith("http"):
-            url = res.text.strip()
-            logger.info(f"litterbox upload successful: {url}")
-            return url
-    except Exception as e:
-        logger.warning(f"litterbox upload failed: {e}")
-
-    raise RuntimeError("Could not upload media to any public host!")
+            logger.warning(f"Unexpected R2 upload error on attempt {attempt}: {e}")
+            if attempt < 3:
+                time.sleep(2)
+                
+    if not upload_success:
+        raise RuntimeError("Failed to upload media to Cloudflare R2 after 3 attempts.")
+        
+    # Construct public URL
+    final_url = f"{public_url_base}/{object_key}"
+    logger.info(f"File uploaded to R2. Validating public URL: {final_url}")
+    
+    # HEAD check to ensure Instagram can reach it
+    for head_attempt in range(1, 4):
+        try:
+            head_res = requests.head(final_url, allow_redirects=True, timeout=10)
+            if head_res.status_code == 200:
+                res_content_type = head_res.headers.get("Content-Type", "")
+                res_content_length = int(head_res.headers.get("Content-Length", 0))
+                
+                # Verify length and type
+                if res_content_length > 0 and content_type in res_content_type:
+                    logger.info("Public URL health check passed!")
+                    return final_url
+                else:
+                    logger.warning(f"Health check warning: type={res_content_type}, length={res_content_length}")
+            else:
+                logger.warning(f"Health check failed with HTTP {head_res.status_code}")
+                
+        except Exception as e:
+            logger.warning(f"Health check error: {e}")
+            
+        time.sleep(2)
+        
+    raise RuntimeError(f"R2 uploaded successfully, but public URL health check failed: {final_url}")
