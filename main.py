@@ -2,9 +2,10 @@ import argparse
 import os
 import sys
 import logging
+import hashlib
 
 import config
-from src import art_fetcher, image_processor, instagram_poster, history_tracker, pinterest_poster
+from src import art_fetcher, image_processor, instagram_poster, history_tracker, pinterest_poster, gemini_ai
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 logger = logging.getLogger(__name__)
@@ -28,13 +29,56 @@ def main():
     logger.info(f"Alt Text (SEO): {artwork.get('alt_text')}")
     logger.info(f"Caption:\n---\n{artwork['caption']}\n---")
 
+    # 2.5 Reserve artwork (PRE-WRITE) to prevent duplicates
+    if not args.dry_run:
+        logger.info("Reserving artwork in history (PRE-WRITE) to prevent duplicates...")
+        history_tracker.reserve_artwork(artwork)
+
     # 3. Download and determine orientation
     raw_image_path, orientation = image_processor.download_raw_image(artwork["image_url"])
+    
+    # 3.5. ✨ Gemini AI Analysis ✨
+    logger.info("Analyzing artwork with Google Gemini AI...")
+    ai_analysis = gemini_ai.analyze_artwork(
+        raw_image_path, 
+        artwork["title"], 
+        artwork["artist"], 
+        artwork["date"], 
+        artwork["museum"]
+    )
+    
+    track_index = None
+    if ai_analysis:
+        logger.info("Gemini analysis successful! Updating metadata...")
+        # Keep the catalog number logic
+        clean_title = artwork['title'].strip() if artwork.get('title') else "Untitled"
+        clean_artist = artwork['artist'].strip() if artwork.get('artist') else "Unknown Artist"
+        ref_num = int(hashlib.md5(f"{clean_title}{clean_artist}".encode('utf-8')).hexdigest()[:8], 16) % 100000
+        catalog_index = f"ARTFOLIO / REF-{ref_num:05d}"
+        
+        artwork["caption"] = (
+            f"⠀\n"
+            f"🎨 {clean_title}\n"
+            f"👨‍🎨 {clean_artist}\n"
+            f"🗓️ {artwork.get('date', 'Unknown')}\n"
+            f"🏛️ {artwork.get('museum', 'Unknown')}\n"
+            f"🌊 Movement: {ai_analysis.get('art_movement', 'Unknown')}\n"
+            f"🗃️ {catalog_index}\n"
+            f"\n"
+            f"{ai_analysis.get('caption', '')}\n"
+            f"\n"
+            f"⠀\n"
+            f"{ai_analysis.get('hashtags', '')}"
+        )
+        artwork["alt_text"] = ai_analysis.get("alt_text", artwork.get("alt_text", ""))
+        track_index = ai_analysis.get("suggested_track_index")
+    else:
+        logger.info("Gemini analysis skipped or failed. Using fallback templates.")
     
     media_type = "IMAGE"
     if orientation == "horizontal":
         logger.info("Horizontal image detected. Preparing REELS video...")
-        output_media_path = image_processor.create_reels_video(raw_image_path)
+        output_media_path = image_processor.create_reels_video(raw_image_path, track_index=track_index)
         media_type = "REELS"
     else:
         logger.info("Vertical/Square image detected. Preparing FEED post...")
@@ -43,7 +87,6 @@ def main():
     # 4. Post to Instagram or Dry-Run
     if args.dry_run:
         logger.info(f"[DRY-RUN MODE] Skipping actual Instagram {media_type} post upload.")
-        history_tracker.save_posted_artwork(artwork, media_id="dry_run_id")
         logger.info("✅ Dry-run completed successfully!")
         return
 
@@ -73,9 +116,10 @@ def main():
         media_type=media_type
     )
 
-    # 5. Record to history
-    history_tracker.save_posted_artwork(artwork, media_id=media_id)
-    logger.info("🎉 Post completed and recorded to history successfully!")
+    # 5. Confirm to history (POST-WRITE)
+    if not args.dry_run:
+        history_tracker.confirm_artwork(artwork["id"], media_id)
+        logger.info("🎉 Post completed and recorded to history successfully!")
 
     # 6. Post to Pinterest (Images only)
     if media_type == "IMAGE":

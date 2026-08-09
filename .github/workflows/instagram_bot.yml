@@ -9,6 +9,10 @@ on:
 permissions:
   contents: write
 
+concurrency:
+  group: instagram-bot
+  cancel-in-progress: false
+
 jobs:
   post-to-instagram:
     runs-on: ubuntu-latest
@@ -34,6 +38,7 @@ jobs:
         env:
           INSTAGRAM_ACCOUNT_ID: ${{ secrets.INSTAGRAM_ACCOUNT_ID }}
           INSTAGRAM_ACCESS_TOKEN: ${{ secrets.INSTAGRAM_ACCESS_TOKEN }}
+          GOOGLE_GEMINI_API_KEY: ${{ secrets.GOOGLE_GEMINI_API_KEY }}
           RIJKSMUSEUM_API_KEY: ${{ secrets.RIJKSMUSEUM_API_KEY }}
           CLOUDFLARE_R2_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_R2_ACCOUNT_ID }}
           CLOUDFLARE_R2_ACCESS_KEY_ID: ${{ secrets.CLOUDFLARE_R2_ACCESS_KEY_ID }}
@@ -46,13 +51,3 @@ jobs:
           PINTEREST_BOARD_ID: ${{ secrets.PINTEREST_BOARD_ID }}
         run: |
           python main.py
-
-      - name: Auto-commit posted history to repository
-        if: always()
-        run: |
-          git config --global user.name "github-actions[bot]"
-          git config --global user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add data/posted_history.json
-          git add -f data/output_post.jpg 2>/dev/null || true
-          git commit -m "auto: update posted history [skip ci]" || echo "No changes to commit"
-          git push

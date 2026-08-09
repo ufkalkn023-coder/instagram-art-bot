@@ -91,8 +91,7 @@ def download_raw_image(image_url: str, output_path: str = config.OUTPUT_RAW_IMAG
     """
     logger.info(f"Downloading raw artwork image from: {image_url}")
     headers = {
-        "User-Agent": "Mozilla/5.0",
-        "Accept": "image/*",
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
     }
     res = requests.get(image_url, headers=headers, timeout=30)
     res.raise_for_status()
@@ -175,74 +174,128 @@ def create_feed_post(raw_image_path: str, output_path: str = config.OUTPUT_IMAGE
     return output_path
 
 
-def download_random_audio(output_path: str = config.TEMP_AUDIO_PATH) -> Optional[str]:
-    """Downloads a random classical music track from PUBLIC_AUDIO_URLS."""
-    urls = list(config.PUBLIC_AUDIO_URLS)
-    random.shuffle(urls)
+def download_audio(output_path: str = config.TEMP_AUDIO_PATH, track_index: Optional[int] = None) -> Tuple[Optional[str], Optional[dict]]:
+    """Downloads a classical music track from PUBLIC_AUDIO_TRACKS, prioritizing track_index if provided."""
+    tracks = list(config.PUBLIC_AUDIO_TRACKS)
     
-    for url in urls:
-        logger.info(f"Attempting to download audio from: {url}")
-        try:
-            headers = {
-                "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7)"
-            }
-            res = requests.get(url, headers=headers, timeout=30)
-            res.raise_for_status()
-            with open(output_path, "wb") as f:
-                f.write(res.content)
-            logger.info("Audio download successful.")
-            return output_path
-        except Exception as e:
-            logger.warning(f"Failed to download audio from {url}: {e}")
-            continue
-            
-    logger.error("Could not download any audio files.")
-    return None
+    # Put the selected track first if valid
+    if track_index is not None and 0 <= track_index < len(tracks):
+        selected_track = tracks.pop(track_index)
+        random.shuffle(tracks)
+        tracks.insert(0, selected_track)
+    else:
+        random.shuffle(tracks)
+    
+    import time
+    for track in tracks:
+        url = track["url"]
+        logger.info(f"Attempting to download audio from: {url} ({track.get('title', 'Unknown')})")
+        
+        max_retries = 3
+        for attempt in range(max_retries):
+            try:
+                headers = {
+                    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
+                }
+                res = requests.get(url, headers=headers, timeout=15)
+                
+                if res.status_code == 429:
+                    retry_after = res.headers.get("Retry-After")
+                    sleep_time = int(retry_after) if retry_after else (2 ** attempt)
+                    logger.warning(f"HTTP 429 Too Many Requests for audio. Retrying in {sleep_time}s (Attempt {attempt+1}/{max_retries})...")
+                    time.sleep(sleep_time)
+                    continue
+                    
+                res.raise_for_status()
+                
+                content_type = res.headers.get("Content-Type", "")
+                if "audio" not in content_type and "ogg" not in content_type and "mpeg" not in content_type:
+                    logger.warning(f"Invalid Content-Type {content_type} for audio track: {url}")
+                    break # Skip to next track
+                    
+                if len(res.content) == 0:
+                    logger.warning(f"Downloaded audio file is empty: {url}")
+                    break
+                    
+                with open(output_path, "wb") as f:
+                    f.write(res.content)
+                
+                # Validate with MoviePy
+                try:
+                    clip = mpy.AudioFileClip(output_path)
+                    if clip.duration <= 0:
+                        raise ValueError("Audio duration is <= 0")
+                    clip.close()
+                except Exception as e:
+                    logger.warning(f"MoviePy failed to read downloaded audio {url}: {e}")
+                    break # Skip to next track
+                
+                logger.info("Audio download and validation successful.")
+                return output_path, track
+                
+            except requests.exceptions.RequestException as e:
+                logger.warning(f"Network error downloading audio from {url}: {e}")
+                if attempt == max_retries - 1:
+                    break
+                time.sleep(2 ** attempt)
+            except Exception as e:
+                logger.warning(f"Unexpected error for {url}: {e}")
+                break
+                
+    raise RuntimeError("All audio sources failed. Cannot proceed with silent video.")
 
 
-def create_reels_video(raw_image_path: str, output_path: str = config.OUTPUT_VIDEO_PATH) -> str:
+def create_reels_video(raw_image_path: str, output_path: str = config.OUTPUT_VIDEO_PATH, track_index: Optional[int] = None) -> str:
     """
-    Creates a 6-second vertical Reels video with zoom-in effect and dynamic audio.
+    Creates a 15-second vertical Reels video with zoom-in effect and dynamic audio.
     """
     logger.info("Creating Reels video (1080x1920) for horizontal image...")
     
     # 1. Prepare audio
-    audio_path = download_random_audio()
-    audio_clip = None
-    if audio_path:
-        try:
-            audio_clip = mpy.AudioFileClip(audio_path)
-            # Pick a random start point if the audio is long
-            max_start = max(0, audio_clip.duration - config.REELS_DURATION)
-            start_t = random.uniform(0, max_start) if max_start > 0 else 0
-            audio_clip = audio_clip.subclipped(start_t, start_t + config.REELS_DURATION)
-        except Exception as e:
-            logger.warning(f"Error processing audio: {e}")
-            audio_clip = None
+    audio_path, track_info = download_audio(track_index=track_index)
+    if not audio_path or not track_info:
+        raise RuntimeError("Audio generation failed unexpectedly.")
+        
+    try:
+        audio_clip = mpy.AudioFileClip(audio_path)
+        audio_duration = audio_clip.duration
+        start_t = track_info.get("drop_start", 0.0)
+        
+        if start_t + config.REELS_DURATION > audio_duration:
+            start_t = max(0, audio_duration - config.REELS_DURATION)
+            
+        end_t = min(start_t + config.REELS_DURATION, audio_duration)
+        
+        audio_clip = audio_clip.subclipped(start_t, end_t)
+        # Add audio fade out
+        audio_clip = audio_clip.with_effects([afx.AudioFadeOut(1.5)])
+    except Exception as e:
+        logger.error(f"Error processing audio clipping: {e}")
+        raise RuntimeError("Failed to prepare audio clip.") from e
+
             
     # 2. Prepare video
-    # Load image as clip
-    clip = mpy.ImageClip(raw_image_path)
+    base_clip = mpy.ImageClip(raw_image_path).resized(width=config.REELS_WIDTH)
     
-    # Resize to width 1080 (if ratio allows)
-    clip = clip.resized(width=config.REELS_WIDTH)
+    # Clip 1: 0 - 3 seconds (Slow zoom in from 1.0 to 1.05)
+    clip1 = base_clip.resized(lambda t: 1.0 + (0.05 * (t / 3.0))).with_duration(3.0)
     
-    # Apply zoom fx (resize based on time)
-    # 1.0 at t=0 to 1.15 at t=REELS_DURATION
-    clip = clip.resized(lambda t: 1.0 + (0.15 * (t / config.REELS_DURATION)))
-
+    # Clip 2: 3 - 15 seconds (Close up zoom in from 1.5 to 1.7)
+    clip2 = base_clip.resized(lambda t: 1.5 + (0.2 * (t / 12.0))).with_duration(12.0)
+    
+    # Concatenate the clips
+    combined_clip = mpy.concatenate_videoclips([clip1, clip2])
+    
     # Create a black background ColorClip
     bg_clip = mpy.ColorClip(size=(config.REELS_WIDTH, config.REELS_HEIGHT), color=(0, 0, 0), duration=config.REELS_DURATION)
     
     # Overlay the zoomed image on the background
-    clip = mpy.CompositeVideoClip([bg_clip, clip.with_position("center")])
+    final_video = mpy.CompositeVideoClip([bg_clip, combined_clip.with_position("center")])
     
-    clip = clip.with_duration(config.REELS_DURATION)
-    
-    if audio_clip:
-        clip = clip.with_audio(audio_clip)
+    final_video = final_video.with_duration(config.REELS_DURATION)
+    final_video = final_video.with_audio(audio_clip)
 
-    clip.write_videofile(
+    final_video.write_videofile(
         output_path, 
         fps=config.REELS_FPS, 
         codec="libx264", 
@@ -250,10 +303,16 @@ def create_reels_video(raw_image_path: str, output_path: str = config.OUTPUT_VID
         logger=None # Suppress moviepy progress bar in logs
     )
     
-    # Close clips
-    clip.close()
+    base_clip.close()
+    clip1.close()
+    clip2.close()
+    combined_clip.close()
+    bg_clip.close()
+    final_video.close()
     if audio_clip:
         audio_clip.close()
+    else:
+        logger.warning("⚠️ Video has no audio! This will perform poorly on Instagram.")
         
     logger.info(f"Reels video successfully created: {output_path}")
     return output_path
