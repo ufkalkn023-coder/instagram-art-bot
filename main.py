@@ -28,14 +28,21 @@ def main():
     logger.info(f"Alt Text (SEO): {artwork.get('alt_text')}")
     logger.info(f"Caption:\n---\n{artwork['caption']}\n---")
 
-    # 3. Process feed image (1080x1350, Instagram 4:5 portrait)
-    logger.info("Processing feed artwork image with random frame style...")
-    output_image_path = image_processor.process_artwork_image(artwork["image_url"])
-    logger.info(f"Feed image successfully processed: {output_image_path}")
+    # 3. Download and determine orientation
+    raw_image_path, orientation = image_processor.download_raw_image(artwork["image_url"])
+    
+    media_type = "IMAGE"
+    if orientation == "horizontal":
+        logger.info("Horizontal image detected. Preparing REELS video...")
+        output_media_path = image_processor.create_reels_video(raw_image_path)
+        media_type = "REELS"
+    else:
+        logger.info("Vertical/Square image detected. Preparing FEED post...")
+        output_media_path = image_processor.create_feed_post(raw_image_path)
 
     # 4. Post to Instagram or Dry-Run
     if args.dry_run:
-        logger.info("[DRY-RUN MODE] Skipping actual Instagram post upload.")
+        logger.info(f"[DRY-RUN MODE] Skipping actual Instagram {media_type} post upload.")
         history_tracker.save_posted_artwork(artwork, media_id="dry_run_id")
         logger.info("✅ Dry-run completed successfully!")
         return
@@ -43,7 +50,7 @@ def main():
     # Production Mode - Post to Graph API
     account_id = os.environ.get("INSTAGRAM_ACCOUNT_ID")
     access_token = os.environ.get("INSTAGRAM_ACCESS_TOKEN")
-    public_image_url = args.image_url or os.environ.get("PUBLIC_IMAGE_URL")
+    public_media_url = args.image_url or os.environ.get("PUBLIC_IMAGE_URL")
 
     logger.info(f"Checking environment variables: INSTAGRAM_ACCOUNT_ID={'[SET]' if account_id else '[MISSING]'}, INSTAGRAM_ACCESS_TOKEN={'[SET]' if access_token else '[MISSING]'}")
 
@@ -51,17 +58,19 @@ def main():
         logger.error("❌ ERROR: Missing INSTAGRAM_ACCOUNT_ID or INSTAGRAM_ACCESS_TOKEN secrets! Please add them to your GitHub Repository Settings -> Secrets and variables -> Actions.")
         sys.exit(1)
 
-    if not public_image_url:
-        logger.info("PUBLIC_IMAGE_URL not specified. Automatically uploading feed image to temporary public HTTPS host...")
-        public_image_url = image_processor.upload_temp_image(output_image_path)
+    if not public_media_url:
+        logger.info(f"PUBLIC_IMAGE_URL not specified. Automatically uploading {media_type} to temporary public HTTPS host...")
+        upload_type = "video" if media_type == "REELS" else "image"
+        public_media_url = image_processor.upload_temp_media(output_media_path, media_type=upload_type)
 
-    logger.info(f"Posting Feed post to Instagram using public image URL: {public_image_url}")
+    logger.info(f"Posting {media_type} to Instagram using public URL: {public_media_url}")
     media_id = instagram_poster.post_to_instagram_graph_api(
-        image_url=public_image_url,
+        media_url=public_media_url,
         caption=artwork["caption"],
         account_id=account_id,
         access_token=access_token,
-        alt_text=artwork.get("alt_text")
+        alt_text=artwork.get("alt_text"),
+        media_type=media_type
     )
 
     # 5. Record to history
@@ -74,3 +83,18 @@ if __name__ == "__main__":
     except Exception as e:
         logger.error(f"❌ Bot failed with error: {e}")
         sys.exit(1)
+    finally:
+        logger.info("Cleaning up temporary files...")
+        temp_files = [
+            config.OUTPUT_IMAGE_PATH,
+            config.OUTPUT_VIDEO_PATH,
+            config.OUTPUT_RAW_IMAGE_PATH,
+            config.TEMP_AUDIO_PATH
+        ]
+        for f in temp_files:
+            if os.path.exists(f):
+                try:
+                    os.remove(f)
+                    logger.info(f"Deleted {f}")
+                except Exception as e:
+                    logger.warning(f"Could not delete {f}: {e}")
