@@ -27,7 +27,7 @@ def main():
     artwork = art_fetcher.fetch_random_artwork(posted_ids)
     logger.info(f"Selected Artwork: '{artwork['title']}' by {artwork['artist']} ({artwork['museum']})")
     logger.info(f"Alt Text (SEO): {artwork.get('alt_text')}")
-    logger.info(f"Caption:\n---\n{artwork['caption']}\n---")
+    logger.info(f"Quality Score: {artwork.get('quality_score')}")
 
     # 2.5 Reserve artwork (PRE-WRITE) to prevent duplicates
     if not args.dry_run:
@@ -35,7 +35,7 @@ def main():
         history_tracker.reserve_artwork(artwork)
 
     # 3. Download and determine orientation
-    raw_image_path, orientation = image_processor.download_raw_image(artwork["image_url"])
+    raw_image_path, orientation = image_processor.prepare_local_image(artwork["local_image_path"])
     
     # 3.5. ✨ Gemini AI Analysis ✨
     logger.info("Analyzing artwork with Google Gemini AI...")
@@ -44,7 +44,9 @@ def main():
         artwork["title"], 
         artwork["artist"], 
         artwork["date"], 
-        artwork["museum"]
+        artwork["museum"],
+        artwork.get("medium", ""),
+        artwork.get("classification", "")
     )
     
     track_index = None

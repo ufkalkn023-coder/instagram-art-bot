@@ -84,29 +84,24 @@ def _apply_gradient_border(img: Image.Image, border_size: int = 60) -> Image.Ima
     return canvas
 
 
-def download_raw_image(image_url: str, output_path: str = config.OUTPUT_RAW_IMAGE_PATH) -> Tuple[str, str]:
+def prepare_local_image(local_path: str) -> Tuple[str, str]:
     """
-    Downloads raw image, saves it, and determines orientation (horizontal or vertical/square).
+    Takes an already downloaded raw image, normalizes it (EXIF transpose, RGB), and determines orientation.
     Returns (output_path, orientation).
     """
-    logger.info(f"Downloading raw artwork image from: {image_url}")
-    headers = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
-    }
-    res = requests.get(image_url, headers=headers, timeout=30)
-    res.raise_for_status()
-
-    img = Image.open(io.BytesIO(res.content))
+    logger.info(f"Preparing local artwork image: {local_path}")
+    
+    img = Image.open(local_path)
     img = ImageOps.exif_transpose(img)
     if img.mode != "RGB":
         img = img.convert("RGB")
 
-    img.save(output_path, "JPEG", quality=100)
+    img.save(local_path, "JPEG", quality=100)
     
     orientation = "horizontal" if img.width > img.height else "vertical"
-    logger.info(f"Downloaded raw image: {img.width}x{img.height} ({orientation})")
+    logger.info(f"Prepared raw image: {img.width}x{img.height} ({orientation})")
     
-    return output_path, orientation
+    return local_path, orientation
 
 
 def create_feed_post(raw_image_path: str, output_path: str = config.OUTPUT_IMAGE_PATH) -> str:
@@ -175,7 +170,52 @@ def create_feed_post(raw_image_path: str, output_path: str = config.OUTPUT_IMAGE
 
 
 def download_audio(output_path: str = config.TEMP_AUDIO_PATH, track_index: Optional[int] = None) -> Tuple[Optional[str], Optional[dict]]:
-    """Downloads a classical music track from PUBLIC_AUDIO_TRACKS, prioritizing track_index if provided."""
+    """
+    Retrieves audio for Reels. First checks config.AUDIO_DIR for local audio files.
+    If none exist or loading fails, falls back to downloading online classical tracks.
+    """
+    import shutil
+    
+    # 1. Check local audio files in assets/audio/
+    audio_dir = getattr(config, "AUDIO_DIR", os.path.join(config.BASE_DIR, "assets", "audio"))
+    if os.path.isdir(audio_dir):
+        valid_exts = (".mp3", ".ogg", ".wav", ".m4a", ".aac", ".flac")
+        local_files = [
+            os.path.join(audio_dir, f) for f in os.listdir(audio_dir)
+            if f.lower().endswith(valid_exts)
+        ]
+        local_files.sort()  # Sort alphabetically for deterministic index selection
+        
+        if local_files:
+            logger.info(f"Found {len(local_files)} local audio file(s) in {audio_dir}.")
+            # Shuffle or pick by index
+            if track_index is not None and 0 <= track_index < len(local_files):
+                chosen_file = local_files[track_index]
+            else:
+                chosen_file = random.choice(local_files)
+                
+            filename = os.path.basename(chosen_file)
+            logger.info(f"Using local audio file: {filename}")
+            
+            try:
+                # Copy to output path if necessary, or check clip
+                clip = mpy.AudioFileClip(chosen_file)
+                if clip.duration > 0:
+                    clip.close()
+                    shutil.copyfile(chosen_file, output_path)
+                    track_info = {
+                        "title": os.path.splitext(filename)[0],
+                        "artist": "Local Music Library",
+                        "url": chosen_file,
+                        "drop_start": 0.0
+                    }
+                    logger.info("Local audio validation successful.")
+                    return output_path, track_info
+                clip.close()
+            except Exception as e:
+                logger.warning(f"Failed to use local audio {chosen_file}: {e}. Falling back to online sources.")
+
+    # 2. Online download fallback
     tracks = list(config.PUBLIC_AUDIO_TRACKS)
     
     # Put the selected track first if valid
@@ -242,7 +282,7 @@ def download_audio(output_path: str = config.TEMP_AUDIO_PATH, track_index: Optio
                 logger.warning(f"Unexpected error for {url}: {e}")
                 break
                 
-    raise RuntimeError("All audio sources failed. Cannot proceed with silent video.")
+    raise RuntimeError("All audio sources (local and online) failed. Cannot proceed with silent video.")
 
 
 def create_reels_video(raw_image_path: str, output_path: str = config.OUTPUT_VIDEO_PATH, track_index: Optional[int] = None) -> str:
