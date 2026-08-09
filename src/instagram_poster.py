@@ -1,3 +1,4 @@
+from typing import Optional
 import time
 import requests
 import logging
@@ -7,10 +8,11 @@ import config
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-def post_to_instagram_graph_api(image_url: str, caption: str, account_id: str, access_token: str) -> str:
+def post_to_instagram_graph_api(image_url: str, caption: str, account_id: str, access_token: str,
+                                alt_text: Optional[str] = None) -> str:
     """
     Publishes an image post to Instagram using the official Graph API.
-    Step 1: POST /{ig-user-id}/media (Create Container)
+    Step 1: POST /{ig-user-id}/media (Create Container with optional alt_text_custom)
     Step 2: POST /{ig-user-id}/media_publish (Publish Container)
     """
     if not account_id or not access_token:
@@ -22,6 +24,10 @@ def post_to_instagram_graph_api(image_url: str, caption: str, account_id: str, a
         "caption": caption,
         "access_token": access_token
     }
+
+    if alt_text:
+        payload["alt_text_custom"] = alt_text
+        logger.info(f"Setting custom Alt Text for SEO: '{alt_text}'")
 
     logger.info("Creating Instagram media container...")
     res = requests.post(container_url, data=payload, timeout=30)
@@ -55,3 +61,53 @@ def post_to_instagram_graph_api(image_url: str, caption: str, account_id: str, a
     media_id = pub_data["id"]
     logger.info(f"Successfully published post to Instagram! Media ID: {media_id}")
     return media_id
+
+
+def post_story_to_instagram_graph_api(image_url: str, account_id: str, access_token: str) -> str:
+    """
+    Publishes an image Story to Instagram using the official Graph API.
+    Step 1: POST /{ig-user-id}/media with media_type="STORIES"
+    Step 2: POST /{ig-user-id}/media_publish (Publish Container)
+    """
+    if not account_id or not access_token:
+        raise ValueError("INSTAGRAM_ACCOUNT_ID and INSTAGRAM_ACCESS_TOKEN must be provided.")
+
+    container_url = f"{config.GRAPH_API_BASE_URL}/{account_id}/media"
+    payload = {
+        "image_url": image_url,
+        "media_type": "STORIES",
+        "access_token": access_token
+    }
+
+    logger.info("Creating Instagram Story media container...")
+    res = requests.post(container_url, data=payload, timeout=30)
+    res_data = res.json()
+
+    if res.status_code != 200 or "id" not in res_data:
+        error_msg = res_data.get("error", {}).get("message", res.text)
+        raise RuntimeError(f"Failed to create Story container: {error_msg}")
+
+    container_id = res_data["id"]
+    logger.info(f"Story container created successfully. Container ID: {container_id}")
+
+    # Wait for Instagram to finish processing image container
+    time.sleep(10)
+
+    # Publish Container
+    publish_url = f"{config.GRAPH_API_BASE_URL}/{account_id}/media_publish"
+    publish_payload = {
+        "creation_id": container_id,
+        "access_token": access_token
+    }
+
+    logger.info("Publishing Story container to Instagram...")
+    pub_res = requests.post(publish_url, data=publish_payload, timeout=30)
+    pub_data = pub_res.json()
+
+    if pub_res.status_code != 200 or "id" not in pub_data:
+        error_msg = pub_data.get("error", {}).get("message", pub_res.text)
+        raise RuntimeError(f"Failed to publish Story container: {error_msg}")
+
+    story_id = pub_data["id"]
+    logger.info(f"Successfully published Story to Instagram! Story ID: {story_id}")
+    return story_id

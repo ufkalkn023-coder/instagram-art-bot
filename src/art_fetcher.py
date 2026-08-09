@@ -1,4 +1,5 @@
 import random
+import re
 import requests
 import logging
 from typing import Dict, Any, Optional, List
@@ -11,24 +12,151 @@ DEFAULT_HEADERS = {
     "User-Agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
 }
 
-# Multiple search terms for diverse artwork results
+# Search terms specifically targeted at paintings
 MET_SEARCH_TERMS = [
-    "painting", "oil painting", "portrait", "landscape", "impressionism",
-    "renaissance", "baroque", "romanticism", "still life", "mythology",
-    "watercolor", "classical", "neoclassicism", "realism", "symbolism"
+    "painting", "oil painting", "impressionism painting", "renaissance painting",
+    "baroque painting", "portrait painting", "landscape painting", "still life painting",
+    "watercolor painting", "realism painting", "romanticism painting", "symbolism painting"
 ]
 
 CMA_TYPES = [
-    "Painting", "Drawing", "Print", "Photograph"
+    "Painting"
 ]
 
+# Keywords to strictly exclude non-painting items (vases, armors, sculptures, ceramics, fragments, etc.)
+NON_PAINTING_KEYWORDS = {
+    "vase", "sculpture", "armor", "armour", "fragment", "stucco", "ceramic", "porcelain",
+    "coin", "medal", "glass", "furniture", "weapon", "sword", "dagger", "textile", "rug",
+    "costume", "jewelry", "jewellery", "tapestry", "pottery", "bowl", "plate", "cup",
+    "statue", "clock", "reliquary", "breastplate", "helm", "helmet", "jar", "jug", "pitcher"
+}
 
-def format_caption(title: str, artist: str, date: str, museum: str) -> str:
-    """Formats artwork metadata into a clean Instagram caption starting on a fresh new line using Braille blank space."""
+# ──────────────────────────────────────────────────────────────────
+# HASHTAG GENERATION
+# ──────────────────────────────────────────────────────────────────
+
+# Museum name → hashtag mapping
+MUSEUM_HASHTAGS = {
+    "The Metropolitan Museum of Art": ["#MetMuseum", "#TheMetNYC", "#MetropolitanMuseum"],
+    "Cleveland Museum of Art": ["#ClevelandMuseumOfArt", "#CMAart", "#ClevelandArt"],
+    "Rijksmuseum, Amsterdam": ["#Rijksmuseum", "#RijksmuseumAmsterdam", "#DutchArt"],
+}
+
+# Core art hashtags that always appear (a pool to sample from)
+CORE_ART_HASHTAGS = [
+    "#Art", "#FineArt", "#ClassicArt", "#ArtHistory", "#Painting",
+    "#Museum", "#ArtOfTheDay", "#MasterPiece", "#ArtLovers", "#InstaArt",
+    "#ArtGallery", "#TimelessArt", "#ArtAppreciation", "#DailyArt",
+    "#ArtisticLegacy", "#WorldOfArt", "#ArtInspiration",
+]
+
+# Keyword → thematic hashtags (matched against title, date, medium, etc.)
+THEMATIC_HASHTAG_MAP = {
+    "portrait": ["#Portrait", "#PortraitPainting", "#PortraitArt"],
+    "landscape": ["#Landscape", "#LandscapePainting", "#LandscapeArt"],
+    "still life": ["#StillLife", "#StillLifePainting", "#StillLifeArt"],
+    "mythology": ["#Mythology", "#MythologicalArt", "#MythArt"],
+    "impressionism": ["#Impressionism", "#ImpressionistArt"],
+    "renaissance": ["#Renaissance", "#RenaissanceArt"],
+    "baroque": ["#Baroque", "#BaroqueArt"],
+    "romanticism": ["#Romanticism", "#RomanticArt"],
+    "neoclassicism": ["#Neoclassicism", "#NeoclassicalArt"],
+    "realism": ["#Realism", "#RealistArt"],
+    "symbolism": ["#Symbolism", "#SymbolistArt"],
+    "watercolor": ["#Watercolor", "#WatercolorArt", "#WatercolorPainting"],
+    "oil": ["#OilPainting", "#OilOnCanvas"],
+    "drawing": ["#Drawing", "#DrawingArt", "#Sketch"],
+    "print": ["#Printmaking", "#PrintArt"],
+    "photograph": ["#Photography", "#VintagePhotography", "#ArtPhotography"],
+    "religious": ["#ReligiousArt", "#SacredArt"],
+    "sculpture": ["#Sculpture", "#SculptureArt"],
+    "abstract": ["#AbstractArt", "#Abstract"],
+    "nature": ["#NatureInArt", "#NaturePainting"],
+    "flower": ["#FlowerPainting", "#FloralArt", "#BotanicalArt"],
+    "sea": ["#Seascape", "#MarineArt"],
+    "war": ["#WarArt", "#BattlePainting"],
+    "classical": ["#ClassicalArt", "#AncientArt"],
+}
+
+
+def _sanitize_hashtag(text: str) -> str:
+    """Converts a text string into a valid hashtag (letters/digits only, CamelCase)."""
+    # Remove parenthetical info like "(American, 1832-1910)"
+    text = re.sub(r"\(.*?\)", "", text).strip()
+    # Split into words, capitalize each, remove non-alphanumeric
+    words = text.split()
+    cleaned = "".join(re.sub(r"[^A-Za-z0-9]", "", w).capitalize() for w in words)
+    return f"#{cleaned}" if cleaned else ""
+
+
+def generate_hashtags(title: str, artist: str, date: str, museum: str,
+                      medium: str = "", search_term: str = "") -> str:
+    """
+    Generates a block of relevant hashtags for an artwork post.
+    Returns a string of hashtags separated by spaces.
+    """
+    hashtags: list[str] = []
+
+    # 1. Artist hashtag (e.g., #VanGogh, #ClaudeMonet)
+    if artist and artist != "Unknown Artist":
+        artist_tag = _sanitize_hashtag(artist)
+        if artist_tag and len(artist_tag) > 1:
+            hashtags.append(artist_tag)
+
+    # 2. Museum-specific hashtags
+    museum_tags = MUSEUM_HASHTAGS.get(museum, [])
+    if museum_tags:
+        hashtags.append(museum_tags[0])  # Take primary museum tag
+
+    # 3. Thematic hashtags based on title, medium, and search term
+    searchable_text = f"{title} {medium} {search_term} {date}".lower()
+    matched_thematic: list[str] = []
+    for keyword, tags in THEMATIC_HASHTAG_MAP.items():
+        if keyword in searchable_text:
+            matched_thematic.extend(tags)
+    # Deduplicate and limit thematic tags
+    matched_thematic = list(dict.fromkeys(matched_thematic))
+    hashtags.extend(matched_thematic[:2])
+
+    # 4. Core art hashtags — fill up to 7-8 total hashtags
+    target_count = 8
+    remaining_slots = max(0, target_count - len(hashtags))
+    if remaining_slots > 0:
+        core_sample = random.sample(CORE_ART_HASHTAGS, min(remaining_slots, len(CORE_ART_HASHTAGS)))
+        hashtags.extend(core_sample)
+
+    # Deduplicate while preserving order, cap at 8
+    seen: set[str] = set()
+    unique_hashtags: list[str] = []
+    for tag in hashtags:
+        tag_lower = tag.lower()
+        if tag_lower not in seen:
+            seen.add(tag_lower)
+            unique_hashtags.append(tag)
+    unique_hashtags = unique_hashtags[:8]
+
+    return " ".join(unique_hashtags)
+
+
+def format_alt_text(title: str, artist: str, date: str) -> str:
+    """Formats artwork metadata into an accessibility Alt Text for Instagram SEO."""
+    clean_title = title.strip() if title else "Untitled"
+    clean_artist = artist.strip() if artist else "Unknown Artist"
+    clean_date = date.strip() if date else "Unknown Date"
+    return f"{clean_title} by {clean_artist}, {clean_date} fine art"
+
+
+def format_caption(title: str, artist: str, date: str, museum: str,
+                   medium: str = "", search_term: str = "") -> str:
+    """Formats artwork metadata into a clean Instagram caption with hashtags."""
     clean_title = title.strip() if title else "Untitled"
     clean_artist = artist.strip() if artist else "Unknown Artist"
     clean_date = date.strip() if date else "Unknown Date"
     clean_museum = museum.strip() if museum else "Public Collection"
+
+    # Generate relevant hashtags
+    hashtags = generate_hashtags(clean_title, clean_artist, clean_date,
+                                clean_museum, medium, search_term)
 
     # Instagram strips leading raw \n, so we use Braille blank character (⠀\n)
     # to force Instagram to start the artwork title on a fresh new line below the username.
@@ -37,23 +165,39 @@ def format_caption(title: str, artist: str, date: str, museum: str) -> str:
         f"🎨 {clean_title}\n"
         f"👨‍🎨 {clean_artist}\n"
         f"🗓️ {clean_date}\n"
-        f"🏛️ {clean_museum}"
+        f"🏛️ {clean_museum}\n"
+        f"\n"
+        f"This post was automatically fetched and published by a bot.\n"
+        f"\n"
+        f"⠀\n"
+        f"{hashtags}"
     )
     return caption
+
+
+def _is_painting(title: str, object_name: str = "", classification: str = "", medium: str = "") -> bool:
+    """Verifies that an artwork is actually a painting and not a vase, armor, sculpture, or 3D object."""
+    combined_text = f"{title} {object_name} {classification} {medium}".lower()
+
+    for keyword in NON_PAINTING_KEYWORDS:
+        if re.search(rf"\b{keyword}s?\b", combined_text):
+            return False
+
+    return True
 
 
 # ──────────────────────────────────────────────────────────────────
 # 1. THE METROPOLITAN MUSEUM OF ART (New York)
 # ──────────────────────────────────────────────────────────────────
 def fetch_met_artwork(posted_ids: set) -> Optional[Dict[str, Any]]:
-    """Fetches a random public domain artwork from The Metropolitan Museum of Art."""
+    """Fetches a random public domain painting from The Metropolitan Museum of Art."""
     try:
         search_term = random.choice(MET_SEARCH_TERMS)
         search_url = (
             f"{config.MET_API_BASE}/search"
-            f"?hasImages=true&isPublicDomain=true&q={search_term}"
+            f"?hasImages=true&isPublicDomain=true&medium=Paintings&q={search_term}"
         )
-        logger.info(f"[Met Museum] Searching with term: '{search_term}'")
+        logger.info(f"[Met Museum] Searching paintings with term: '{search_term}'")
         res = requests.get(search_url, headers=DEFAULT_HEADERS, timeout=20)
         if res.status_code != 200:
             return None
@@ -80,16 +224,27 @@ def fetch_met_artwork(posted_ids: set) -> Optional[Dict[str, Any]]:
             if not detail.get("isPublicDomain"):
                 continue
 
+            title = detail.get("title") or "Untitled"
+            object_name = detail.get("objectName") or ""
+            classification = detail.get("classification") or ""
+            medium = detail.get("medium") or ""
+
+            # Strict check to ensure it's a painting and not a 3D object / vase / armor
+            if not _is_painting(title, object_name, classification, medium):
+                logger.info(f"[Met Museum] Skipping non-painting item: '{title}' ({object_name}/{classification})")
+                continue
+
             image_url = detail.get("primaryImage") or detail.get("primaryImageSmall")
             if not image_url or not image_url.startswith("http"):
                 continue
 
-            title = detail.get("title") or "Untitled"
             artist = detail.get("artistDisplayName") or "Unknown Artist"
             date = detail.get("objectDate") or "Unknown Date"
-            caption = format_caption(title, artist, date, "The Metropolitan Museum of Art")
+            caption = format_caption(title, artist, date, "The Metropolitan Museum of Art",
+                                    medium=medium, search_term=search_term)
+            alt_text = format_alt_text(title, artist, date)
 
-            logger.info(f"[Met Museum] Selected: '{title}' by {artist}")
+            logger.info(f"[Met Museum] Selected painting: '{title}' by {artist}")
             return {
                 "id": artwork_id,
                 "title": title,
@@ -97,7 +252,8 @@ def fetch_met_artwork(posted_ids: set) -> Optional[Dict[str, Any]]:
                 "date": date,
                 "museum": "The Metropolitan Museum of Art",
                 "image_url": image_url,
-                "caption": caption
+                "caption": caption,
+                "alt_text": alt_text
             }
     except Exception as e:
         logger.error(f"[Met Museum] Error: {e}")
@@ -159,6 +315,11 @@ def fetch_cma_artwork(posted_ids: set) -> Optional[Dict[str, Any]]:
                     continue
 
             title = item.get("title") or "Untitled"
+            medium = item.get("technique") or item.get("type") or ""
+
+            if not _is_painting(title, medium=medium):
+                logger.info(f"[Cleveland Museum] Skipping non-painting item: '{title}' ({medium})")
+                continue
 
             # Extract artist name from creators list
             creators = item.get("creators", [])
@@ -171,9 +332,11 @@ def fetch_cma_artwork(posted_ids: set) -> Optional[Dict[str, Any]]:
                 artist = "Unknown Artist"
 
             date = item.get("creation_date") or "Unknown Date"
-            caption = format_caption(title, artist, date, "Cleveland Museum of Art")
+            caption = format_caption(title, artist, date, "Cleveland Museum of Art",
+                                    medium=medium, search_term=art_type)
+            alt_text = format_alt_text(title, artist, date)
 
-            logger.info(f"[Cleveland Museum] Selected: '{title}' by {artist}")
+            logger.info(f"[Cleveland Museum] Selected painting: '{title}' by {artist}")
             return {
                 "id": artwork_id,
                 "title": title,
@@ -181,7 +344,8 @@ def fetch_cma_artwork(posted_ids: set) -> Optional[Dict[str, Any]]:
                 "date": date,
                 "museum": "Cleveland Museum of Art",
                 "image_url": image_url,
-                "caption": caption
+                "caption": caption,
+                "alt_text": alt_text
             }
     except Exception as e:
         logger.error(f"[Cleveland Museum] Error: {e}")
@@ -232,9 +396,13 @@ def fetch_rijks_artwork(posted_ids: set) -> Optional[Dict[str, Any]]:
                 continue
 
             title = item.get("title") or "Untitled"
+            if not _is_painting(title, medium="painting"):
+                continue
             artist = item.get("principalOrFirstMaker") or "Unknown Artist"
             date = item.get("longTitle", "").split(",")[-1].strip() if item.get("longTitle") else "Unknown Date"
-            caption = format_caption(title, artist, date, "Rijksmuseum, Amsterdam")
+            caption = format_caption(title, artist, date, "Rijksmuseum, Amsterdam",
+                                    medium="painting", search_term="painting")
+            alt_text = format_alt_text(title, artist, date)
 
             logger.info(f"[Rijksmuseum] Selected: '{title}' by {artist}")
             return {
@@ -244,7 +412,8 @@ def fetch_rijks_artwork(posted_ids: set) -> Optional[Dict[str, Any]]:
                 "date": date,
                 "museum": "Rijksmuseum, Amsterdam",
                 "image_url": image_url,
-                "caption": caption
+                "caption": caption,
+                "alt_text": alt_text
             }
     except Exception as e:
         logger.error(f"[Rijksmuseum] Error: {e}")

@@ -1,8 +1,6 @@
 import argparse
 import os
 import sys
-import time
-import random
 import logging
 
 import config
@@ -18,12 +16,6 @@ def main():
     args = parser.parse_args()
 
     logger.info("Starting Instagram Art Automation Bot...")
-
-    # Random delay (1-5 minutes) to avoid posting at exact clock hours
-    if not args.dry_run:
-        delay = random.randint(60, 300)
-        logger.info(f"⏳ Waiting {delay} seconds ({delay // 60}m {delay % 60}s) random delay before posting...")
-        time.sleep(delay)
 
     # 1. Load history
     posted_ids = history_tracker.get_posted_ids()
