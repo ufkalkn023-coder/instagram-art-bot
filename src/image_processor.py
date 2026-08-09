@@ -211,7 +211,6 @@ def create_reels_video(raw_image_path: str, output_path: str = config.OUTPUT_VID
             max_start = max(0, audio_clip.duration - config.REELS_DURATION)
             start_t = random.uniform(0, max_start) if max_start > 0 else 0
             audio_clip = audio_clip.subclipped(start_t, start_t + config.REELS_DURATION)
-            audio_clip = audio_clip.with_effects([afx.FadeOut(1.5)])
         except Exception as e:
             logger.warning(f"Error processing audio: {e}")
             audio_clip = None
@@ -308,7 +307,45 @@ def upload_temp_media(file_path: str, media_type: str = "image") -> str:
         except Exception as e:
             logger.warning(f"freeimage.host upload failed: {e}")
 
-    # Method 3: litterbox.catbox.moe (1 hour retention, accepts up to 1GB)
+    # Method 3: uguu.se
+    try:
+        logger.info("Trying uguu.se...")
+        with open(file_path, "rb") as f:
+            res = requests.post(
+                "https://uguu.se/upload.php",
+                files={"files[]": (filename, f, mime_type)},
+                timeout=120
+            )
+        if res.status_code == 200:
+            data = res.json()
+            if data.get("success") and data.get("files"):
+                url = data["files"][0].get("url")
+                if url:
+                    logger.info(f"uguu.se upload successful: {url}")
+                    return url
+    except Exception as e:
+        logger.warning(f"uguu.se upload failed: {e}")
+
+    # Method 4: pomf.lain.la
+    try:
+        logger.info("Trying pomf.lain.la...")
+        with open(file_path, "rb") as f:
+            res = requests.post(
+                "https://pomf.lain.la/upload.php",
+                files={"files[]": (filename, f, mime_type)},
+                timeout=120
+            )
+        if res.status_code == 200:
+            data = res.json()
+            if data.get("success") and data.get("files"):
+                url = data["files"][0].get("url")
+                if url:
+                    logger.info(f"pomf.lain.la upload successful: {url}")
+                    return url
+    except Exception as e:
+        logger.warning(f"pomf.lain.la upload failed: {e}")
+
+    # Method 5: litterbox.catbox.moe (1 hour retention, accepts up to 1GB)
     try:
         logger.info("Trying litterbox.catbox.moe...")
         with open(file_path, "rb") as f:
