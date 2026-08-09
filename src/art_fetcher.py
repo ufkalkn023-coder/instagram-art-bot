@@ -3,6 +3,7 @@ import re
 import requests
 import logging
 from typing import Dict, Any, Optional, List
+import hashlib
 import config
 
 logging.basicConfig(level=logging.INFO)
@@ -158,6 +159,10 @@ def format_caption(title: str, artist: str, date: str, museum: str,
     hashtags = generate_hashtags(clean_title, clean_artist, clean_date,
                                 clean_museum, medium, search_term)
 
+    # Generate DB index (Catalog Number)
+    ref_num = int(hashlib.md5(f"{clean_title}{clean_artist}".encode('utf-8')).hexdigest()[:8], 16) % 100000
+    catalog_index = f"ARTFOLIO / REF-{ref_num:05d}"
+
     # Instagram strips leading raw \n, so we use Braille blank character (⠀\n)
     # to force Instagram to start the artwork title on a fresh new line below the username.
     caption = (
@@ -166,6 +171,7 @@ def format_caption(title: str, artist: str, date: str, museum: str,
         f"👨‍🎨 {clean_artist}\n"
         f"🗓️ {clean_date}\n"
         f"🏛️ {clean_museum}\n"
+        f"🗃️ {catalog_index}\n"
         f"\n"
         f"This post was automatically fetched and published by a bot.\n"
         f"\n"
