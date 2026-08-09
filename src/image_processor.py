@@ -267,11 +267,11 @@ def upload_temp_media(file_path: str, media_type: str = "image") -> str:
     """
     logger.info(f"Uploading {media_type} to Cloudflare R2...")
     
-    account_id = os.environ.get("CLOUDFLARE_R2_ACCOUNT_ID")
-    access_key = os.environ.get("CLOUDFLARE_R2_ACCESS_KEY_ID")
-    secret_key = os.environ.get("CLOUDFLARE_R2_SECRET_ACCESS_KEY")
-    bucket_name = os.environ.get("CLOUDFLARE_R2_BUCKET_NAME")
-    public_url_base = os.environ.get("CLOUDFLARE_R2_PUBLIC_URL")
+    account_id = os.environ.get("CLOUDFLARE_R2_ACCOUNT_ID", "").strip()
+    access_key = os.environ.get("CLOUDFLARE_R2_ACCESS_KEY_ID", "").strip()
+    secret_key = os.environ.get("CLOUDFLARE_R2_SECRET_ACCESS_KEY", "").strip()
+    bucket_name = os.environ.get("CLOUDFLARE_R2_BUCKET_NAME", "").strip()
+    public_url_base = os.environ.get("CLOUDFLARE_R2_PUBLIC_URL", "").strip()
     
     if not all([account_id, access_key, secret_key, bucket_name, public_url_base]):
         raise ValueError("Missing one or more CLOUDFLARE_R2_* environment variables!")
