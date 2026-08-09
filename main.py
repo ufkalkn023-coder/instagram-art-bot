@@ -4,7 +4,7 @@ import sys
 import logging
 
 import config
-from src import art_fetcher, image_processor, instagram_poster, history_tracker
+from src import art_fetcher, image_processor, instagram_poster, history_tracker, pinterest_poster
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 logger = logging.getLogger(__name__)
@@ -76,6 +76,16 @@ def main():
     # 5. Record to history
     history_tracker.save_posted_artwork(artwork, media_id=media_id)
     logger.info("🎉 Post completed and recorded to history successfully!")
+
+    # 6. Post to Pinterest (Images only)
+    if media_type == "IMAGE":
+        logger.info("Triggering Pinterest cross-post...")
+        # Clean title for Pinterest
+        title = f"{artwork['title']} by {artwork['artist']}"
+        desc = artwork['caption']
+        # Link back to Instagram profile to drive organic traffic
+        profile_link = "https://instagram.com/ufkalkn023.db"
+        pinterest_poster.post_to_pinterest(public_media_url, title, desc, profile_link)
 
 if __name__ == "__main__":
     try:
