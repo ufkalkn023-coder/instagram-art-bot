@@ -14,6 +14,7 @@ REELS_FPS = 24
 # File Paths
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 DATA_DIR = os.path.join(BASE_DIR, "data")
+AUDIO_DIR = os.path.join(BASE_DIR, "assets", "audio")
 HISTORY_FILE = os.path.join(DATA_DIR, "posted_history.json")
 OUTPUT_IMAGE_PATH = os.path.join(DATA_DIR, "output_post.jpg")
 OUTPUT_VIDEO_PATH = os.path.join(DATA_DIR, "output_reels.mp4")
@@ -24,7 +25,7 @@ TEMP_AUDIO_PATH = os.path.join(DATA_DIR, "temp_audio.ogg")
 MET_API_BASE = "https://collectionapi.metmuseum.org/public/collection/v1"
 
 # Gemini AI Settings
-GEMINI_MODEL = "gemini-3.5-flash"
+GEMINI_MODEL = "gemini-2.5-flash"
 GEMINI_ENABLED = True
 
 # Instagram Graph API Version & Endpoints

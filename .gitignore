@@ -4,3 +4,9 @@ __pycache__/
 .env
 test.env
 data/Inter-Regular.ttf
+data/output_*
+data/raw_*
+data/temp_*
+
+# Audio assets
+assets/audio/

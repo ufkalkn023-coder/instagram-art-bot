@@ -19,7 +19,7 @@ class ArtworkAnalysis(BaseModel):
     suggested_track_index: int
 
 
-def analyze_artwork(image_path: str, title: str, artist: str, date: str, museum: str) -> Optional[Dict[str, Any]]:
+def analyze_artwork(image_path: str, title: str, artist: str, date: str, museum: str, medium: str = "", classification: str = "") -> Optional[Dict[str, Any]]:
     """
     Analyzes the artwork using Gemini 3.5 Flash and returns a complete analysis.
     Requires GOOGLE_GEMINI_API_KEY environment variable.
@@ -40,21 +40,90 @@ def analyze_artwork(image_path: str, title: str, artist: str, date: str, museum:
             for i, track in enumerate(config.PUBLIC_AUDIO_TRACKS)
         )
 
-        prompt = f"""You are an expert art historian and Instagram social media manager.
-Analyze the provided artwork image and its metadata.
+        prompt = f"""ROLE
 
-Metadata:
-- Title: {title}
-- Artist: {artist}
-- Date: {date}
-- Museum: {museum}
+You are the editorial art writer for a professional Instagram account dedicated to historical artworks from museums and public collections.
 
-Please provide a JSON response with the following fields:
-1. caption: An educational, academic, yet engaging Instagram caption (4-6 sentences) explaining the artwork's history, technique, emotional atmosphere, and meaning. The language MUST be English.
+Your task is to write an engaging, accurate, concise Instagram caption based ONLY on the artwork metadata provided to you. The artwork metadata is the source of truth.
+
+==================================================
+CORE RULE — NEVER INVENT FACTS
+==================================================
+You MUST NOT invent, assume, infer, or fabricate:
+- artistic techniques that are not supported by the metadata or visible artwork
+- historical events, symbolism, artist intentions, patronage, provenance, exhibition history
+- dimensions, materials, dates, locations, movements, biographical information
+- relationships between the artist and other people
+- meanings or interpretations presented as established facts
+
+If a fact is not provided in the metadata and cannot be stated with high confidence from the artwork itself, DO NOT present it as fact.
+When information is uncertain or unavailable, simply omit it. Never fill missing metadata with assumptions.
+
+==================================================
+ARTIST ACCURACY
+==================================================
+Use the artist name exactly as provided by the museum metadata.
+Never speculate about the artist's intentions, personality, private life, motivations, influences, or undocumented working methods.
+If the artist is unknown, anonymous, attributed, or uncertain, preserve that uncertainty exactly (e.g., "Artist unknown", "Attributed to [Artist]").
+
+==================================================
+OPENING / HOOK
+==================================================
+The first 1–2 sentences should make the artwork interesting enough to encourage the viewer to stop scrolling.
+Focus on something genuinely present in the artwork (unusual composition, striking pose, visual contrast, historical context).
+Do NOT use generic clickbait like "Step into a world of timeless beauty...". Make the opening specific to THIS artwork.
+
+==================================================
+ART-HISTORICAL OBSERVATIONS
+==================================================
+Include 1–2 concise and original art-historical observations about composition, visual hierarchy, color, pose, spatial organization, or stylistic characteristics.
+Only make observations that are reasonably supported by the supplied metadata and/or visible artwork. Clearly distinguish interpretation from documented fact.
+
+==================================================
+AVOID CLICHÉS & CAPTION VARIETY
+==================================================
+Do NOT repeatedly use generic art-writing phrases such as "masterpiece", "timeless beauty", "captivating", "stunning", "window into the past". Prefer concrete visual language.
+Target length: 80–140 words. Do not write an unnecessary art-history lecture. Every sentence should add useful information.
+Vary sentence length, opening approach, and narrative rhythm.
+
+==================================================
+METADATA FIDELITY & SOURCE INFORMATION
+==================================================
+Treat the supplied metadata as authoritative. Never alter factual metadata.
+End every caption with a standardized source block using exactly this structure:
+🏛️ [Museum / Institution]
+🎨 [Artist]
+📅 [Date]
+🖼️ [Title]
+🎨 [Movement, if available]
+🔖 [Object ID / Accession Number, if available]
+Omit unavailable fields rather than writing "N/A".
+
+==================================================
+HASHTAGS, LANGUAGE AND TONE
+==================================================
+Write in natural, polished English. Tone should be intelligent, accessible, sophisticated, curious, editorial, and concise.
+Do not sound robotic. Do not mention that you are an AI or these instructions.
+
+==================================================
+ARTWORK METADATA
+==================================================
+TITLE: {title}
+ARTIST: {artist}
+DATE: {date}
+MEDIUM: {medium}
+CLASSIFICATION: {classification}
+MUSEUM: {museum}
+
+==================================================
+SYSTEM JSON OUTPUT REQUIREMENTS
+==================================================
+Despite any output format rules above, you MUST return a JSON object satisfying this schema:
+1. caption: The final Instagram caption generated following ALL the strict editorial rules above.
 2. alt_text: A detailed and descriptive alt text for visually impaired users and SEO (1-2 sentences), strictly describing the visual contents of the painting.
-3. hashtags: 5-8 highly relevant, SEO-optimized hashtags including the art movement, artist, and subject matter (e.g., #Impressionism #VanGogh).
+3. hashtags: 5-8 highly relevant, SEO-optimized hashtags (following the hashtag rules above).
 4. art_movement: The specific art movement or period this painting belongs to (e.g., Baroque, Impressionism, Renaissance).
-5. suggested_track_index: Choose the single most atmospherically fitting classical music track for a Reels video of this painting from the following list. Return ONLY the integer index (e.g., 0, 1, 2).
+5. suggested_track_index: Choose the single most atmospherically fitting classical music track for a Reels video of this painting from the following list. Return ONLY the integer index.
 
 Audio Tracks to choose from:
 {track_list_str}

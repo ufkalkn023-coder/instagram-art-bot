@@ -39,7 +39,13 @@ def post_to_instagram_graph_api(media_url: str, caption: str, account_id: str, a
     res_data = res.json()
 
     if res.status_code != 200 or "id" not in res_data:
-        error_msg = res_data.get("error", {}).get("message", res.text)
+        error_info = res_data.get("error", {})
+        error_msg = error_info.get("message", res.text)
+        error_code = error_info.get("code")
+        
+        if error_code == 190:
+            raise RuntimeError(f"❌ Instagram Access Token is expired or invalid (Code 190). Please run get_long_lived_token.py to generate a new permanent token. Detail: {error_msg}")
+            
         raise RuntimeError(f"Failed to create media container: {error_msg}")
 
     container_id = res_data["id"]
