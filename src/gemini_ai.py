@@ -90,17 +90,10 @@ Target length: 80–140 words. Do not write an unnecessary art-history lecture. 
 Vary sentence length, opening approach, and narrative rhythm.
 
 ==================================================
-METADATA FIDELITY & SOURCE INFORMATION
+METADATA FIDELITY
 ==================================================
 Treat the supplied metadata as authoritative. Never alter factual metadata.
-End every caption with a standardized source block using exactly this structure:
-🏛️ [Museum / Institution]
-🎨 [Artist]
-📅 [Date]
-🖼️ [Title]
-🎨 [Movement, if available]
-🔖 [Object ID / Accession Number, if available]
-Omit unavailable fields rather than writing "N/A".
+DO NOT append any metadata, source block, or emojis at the end of the caption. The system will automatically inject the title, artist, date, and museum information before your caption. Just write the story/analysis.
 
 ==================================================
 HASHTAGS, LANGUAGE AND TONE
