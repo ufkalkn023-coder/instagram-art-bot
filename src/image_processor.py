@@ -8,7 +8,7 @@ import uuid
 import boto3
 from datetime import datetime
 from botocore.exceptions import ClientError
-from typing import Tuple, Optional
+from typing import Tuple, Optional, List, Dict, Any
 from PIL import Image, ImageOps, ImageDraw, ImageFilter
 import moviepy as mpy
 import moviepy.video.fx as vfx
@@ -169,120 +169,150 @@ def create_feed_post(raw_image_path: str, output_path: str = config.OUTPUT_IMAGE
     return output_path
 
 
-def download_audio(output_path: str = config.TEMP_AUDIO_PATH, track_index: Optional[int] = None) -> Tuple[Optional[str], Optional[dict]]:
+def get_audio_tracks() -> List[Dict[str, Any]]:
     """
-    Retrieves audio for Reels. First checks config.AUDIO_DIR for local audio files.
-    If none exist or loading fails, falls back to downloading online classical tracks.
+    Fetches the list of available audio tracks dynamically from R2.
+    Falls back to local assets/audio/ if R2 is unavailable.
+    Returns a list of dicts: {"title": "track_name", "key": "s3_key_or_local_path", "source": "r2|local"}
     """
-    import shutil
+    tracks = []
+    valid_exts = (".mp3", ".ogg", ".wav", ".m4a", ".aac", ".flac")
     
-    # 1. Check local audio files in assets/audio/
+    # 1. Try R2 First
+    account_id = os.environ.get("CLOUDFLARE_R2_ACCOUNT_ID")
+    access_key = os.environ.get("CLOUDFLARE_R2_ACCESS_KEY_ID")
+    secret_key = os.environ.get("CLOUDFLARE_R2_SECRET_ACCESS_KEY")
+    bucket = os.environ.get("CLOUDFLARE_R2_BUCKET_NAME")
+    
+    if account_id and access_key and secret_key and bucket:
+        try:
+            import boto3
+            client = boto3.client(
+                "s3",
+                endpoint_url=f"https://{account_id}.r2.cloudflarestorage.com",
+                aws_access_key_id=access_key,
+                aws_secret_access_key=secret_key,
+                region_name="auto"
+            )
+            
+            paginator = client.get_paginator('list_objects_v2')
+            pages = paginator.paginate(Bucket=bucket, Prefix="audio/")
+            
+            for page in pages:
+                if 'Contents' in page:
+                    for obj in page['Contents']:
+                        key = obj['Key']
+                        if key.lower().endswith(valid_exts) and obj['Size'] > 0:
+                            # Use filename as title without extension
+                            title = os.path.splitext(os.path.basename(key))[0]
+                            tracks.append({"title": title, "key": key, "source": "r2"})
+            
+            if tracks:
+                logger.info(f"Retrieved {len(tracks)} audio tracks from R2 bucket '{bucket}'.")
+                # Sort alphabetically for determinism
+                tracks.sort(key=lambda x: x["title"])
+                return tracks
+        except Exception as e:
+            logger.warning(f"Failed to list R2 audio tracks: {e}. Falling back to local.")
+            
+    # 2. Local Fallback
     audio_dir = getattr(config, "AUDIO_DIR", os.path.join(config.BASE_DIR, "assets", "audio"))
     if os.path.isdir(audio_dir):
-        valid_exts = (".mp3", ".ogg", ".wav", ".m4a", ".aac", ".flac")
         local_files = [
-            os.path.join(audio_dir, f) for f in os.listdir(audio_dir)
+            f for f in os.listdir(audio_dir)
             if f.lower().endswith(valid_exts)
         ]
-        local_files.sort()  # Sort alphabetically for deterministic index selection
-        
         if local_files:
-            logger.info(f"Found {len(local_files)} local audio file(s) in {audio_dir}.")
-            # Shuffle or pick by index
-            if track_index is not None and 0 <= track_index < len(local_files):
-                chosen_file = local_files[track_index]
-            else:
-                chosen_file = random.choice(local_files)
-                
-            filename = os.path.basename(chosen_file)
-            logger.info(f"Using local audio file: {filename}")
+            logger.info(f"Found {len(local_files)} local audio file(s) as fallback.")
+            for f in sorted(local_files):
+                title = os.path.splitext(f)[0]
+                tracks.append({"title": title, "key": os.path.join(audio_dir, f), "source": "local"})
+            return tracks
             
-            try:
-                # Copy to output path if necessary, or check clip
-                clip = mpy.AudioFileClip(chosen_file)
-                if clip.duration > 0:
-                    clip.close()
-                    shutil.copyfile(chosen_file, output_path)
-                    track_info = {
-                        "title": os.path.splitext(filename)[0],
-                        "artist": "Local Music Library",
-                        "url": chosen_file,
-                        "drop_start": 0.0
-                    }
-                    logger.info("Local audio validation successful.")
-                    return output_path, track_info
-                clip.close()
-            except Exception as e:
-                logger.warning(f"Failed to use local audio {chosen_file}: {e}. Falling back to online sources.")
+    logger.warning("No audio tracks found in R2 or local fallback.")
+    return []
 
-    # 2. Online download fallback
-    tracks = list(config.PUBLIC_AUDIO_TRACKS)
+
+def download_audio(output_path: str = config.TEMP_AUDIO_PATH, track_index: Optional[int] = None) -> Tuple[Optional[str], Optional[dict]]:
+    """
+    Downloads or copies the selected audio track based on the provided index.
+    Raises RuntimeError if all available tracks fail to process.
+    """
+    import shutil
+    import moviepy as mpy
     
-    # Put the selected track first if valid
-    if track_index is not None and 0 <= track_index < len(tracks):
-        selected_track = tracks.pop(track_index)
-        random.shuffle(tracks)
-        tracks.insert(0, selected_track)
-    else:
-        random.shuffle(tracks)
-    
-    import time
-    for track in tracks:
-        url = track["url"]
-        logger.info(f"Attempting to download audio from: {url} ({track.get('title', 'Unknown')})")
+    tracks = get_audio_tracks()
+    if not tracks:
+        raise RuntimeError("All audio sources failed: No audio tracks available.")
         
-        max_retries = 3
-        for attempt in range(max_retries):
-            try:
-                headers = {
-                    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
-                }
-                res = requests.get(url, headers=headers, timeout=15)
-                
-                if res.status_code == 429:
-                    retry_after = res.headers.get("Retry-After")
-                    sleep_time = int(retry_after) if retry_after else (2 ** attempt)
-                    logger.warning(f"HTTP 429 Too Many Requests for audio. Retrying in {sleep_time}s (Attempt {attempt+1}/{max_retries})...")
-                    time.sleep(sleep_time)
+    # Reorder tracks to put the chosen one first, but keep others as fallbacks
+    ordered_tracks = list(tracks)
+    if track_index is not None and 0 <= track_index < len(tracks):
+        chosen = ordered_tracks.pop(track_index)
+        ordered_tracks.insert(0, chosen)
+        
+    account_id = os.environ.get("CLOUDFLARE_R2_ACCOUNT_ID")
+    access_key = os.environ.get("CLOUDFLARE_R2_ACCESS_KEY_ID")
+    secret_key = os.environ.get("CLOUDFLARE_R2_SECRET_ACCESS_KEY")
+    bucket = os.environ.get("CLOUDFLARE_R2_BUCKET_NAME")
+    s3_client = None
+    
+    if account_id and access_key and secret_key and bucket:
+        import boto3
+        s3_client = boto3.client(
+            "s3",
+            endpoint_url=f"https://{account_id}.r2.cloudflarestorage.com",
+            aws_access_key_id=access_key,
+            aws_secret_access_key=secret_key,
+            region_name="auto"
+        )
+        
+    for track in ordered_tracks:
+        logger.info(f"Attempting to process audio track: {track['title']} (Source: {track['source']})")
+        
+        try:
+            if track["source"] == "r2":
+                if not s3_client:
+                    logger.warning("R2 source selected but credentials missing.")
                     continue
                     
-                res.raise_for_status()
+                s3_client.download_file(bucket, track["key"], output_path)
+                logger.info(f"Successfully downloaded {track['key']} from R2.")
                 
-                content_type = res.headers.get("Content-Type", "")
-                if "audio" not in content_type and "ogg" not in content_type and "mpeg" not in content_type:
-                    logger.warning(f"Invalid Content-Type {content_type} for audio track: {url}")
-                    break # Skip to next track
-                    
-                if len(res.content) == 0:
-                    logger.warning(f"Downloaded audio file is empty: {url}")
-                    break
-                    
-                with open(output_path, "wb") as f:
-                    f.write(res.content)
+            elif track["source"] == "local":
+                shutil.copyfile(track["key"], output_path)
+                logger.info(f"Successfully copied local file {track['key']}.")
                 
-                # Validate with MoviePy
+            # Validate with MoviePy
+            if not os.path.exists(output_path) or os.path.getsize(output_path) == 0:
+                raise ValueError("Audio file is empty or missing.")
+                
+            clip = mpy.AudioFileClip(output_path)
+            if clip.duration <= 0:
+                clip.close()
+                raise ValueError("Audio file duration is zero or invalid.")
+                
+            clip.close()
+            logger.info("Audio validation successful.")
+            
+            track_info = {
+                "title": track["title"],
+                "artist": "Classical Music Library",
+                "url": track["key"],
+                "drop_start": 0.0
+            }
+            return output_path, track_info
+            
+        except Exception as e:
+            logger.warning(f"Failed to process track {track['title']}: {e}")
+            if os.path.exists(output_path):
                 try:
-                    clip = mpy.AudioFileClip(output_path)
-                    if clip.duration <= 0:
-                        raise ValueError("Audio duration is <= 0")
-                    clip.close()
-                except Exception as e:
-                    logger.warning(f"MoviePy failed to read downloaded audio {url}: {e}")
-                    break # Skip to next track
-                
-                logger.info("Audio download and validation successful.")
-                return output_path, track
-                
-            except requests.exceptions.RequestException as e:
-                logger.warning(f"Network error downloading audio from {url}: {e}")
-                if attempt == max_retries - 1:
-                    break
-                time.sleep(2 ** attempt)
-            except Exception as e:
-                logger.warning(f"Unexpected error for {url}: {e}")
-                break
-                
-    raise RuntimeError("All audio sources (local and online) failed. Cannot proceed with silent video.")
+                    os.remove(output_path)
+                except Exception:
+                    pass
+            continue
+            
+    raise RuntimeError("All audio sources failed to process successfully.")
 
 
 def create_reels_video(raw_image_path: str, output_path: str = config.OUTPUT_VIDEO_PATH, track_index: Optional[int] = None) -> str:

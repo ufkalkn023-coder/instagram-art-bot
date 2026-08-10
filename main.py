@@ -39,6 +39,9 @@ def main():
     
     # 3.5. ✨ Gemini AI Analysis ✨
     logger.info("Analyzing artwork with Google Gemini AI...")
+    
+    available_tracks = image_processor.get_audio_tracks()
+    
     ai_analysis = gemini_ai.analyze_artwork(
         raw_image_path, 
         artwork["title"], 
@@ -46,7 +49,8 @@ def main():
         artwork["date"], 
         artwork["museum"],
         artwork.get("medium", ""),
-        artwork.get("classification", "")
+        artwork.get("classification", ""),
+        available_tracks
     )
     
     track_index = None

@@ -19,7 +19,7 @@ class ArtworkAnalysis(BaseModel):
     suggested_track_index: int
 
 
-def analyze_artwork(image_path: str, title: str, artist: str, date: str, museum: str, medium: str = "", classification: str = "") -> Optional[Dict[str, Any]]:
+def analyze_artwork(image_path: str, title: str, artist: str, date: str, museum: str, medium: str = "", classification: str = "", audio_tracks: list = None) -> Optional[Dict[str, Any]]:
     """
     Analyzes the artwork using Gemini 3.5 Flash and returns a complete analysis.
     Requires GOOGLE_GEMINI_API_KEY environment variable.
@@ -35,9 +35,12 @@ def analyze_artwork(image_path: str, title: str, artist: str, date: str, museum:
 
     try:
         # Generate the track list for the prompt
+        if not audio_tracks:
+            audio_tracks = []
+            
         track_list_str = "\n".join(
-            f"Index {i}: {track['title']} by {track['artist']}" 
-            for i, track in enumerate(config.PUBLIC_AUDIO_TRACKS)
+            f"Index {i}: {track['title']}" 
+            for i, track in enumerate(audio_tracks)
         )
 
         prompt = f"""ROLE
