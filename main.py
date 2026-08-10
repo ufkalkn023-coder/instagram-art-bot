@@ -5,7 +5,7 @@ import logging
 import hashlib
 
 import config
-from src import art_fetcher, image_processor, instagram_poster, history_tracker, pinterest_poster, gemini_ai
+from src import art_fetcher, image_processor, instagram_poster, history_tracker, pinterest_poster, gemini_ai, content_diversity
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 logger = logging.getLogger(__name__)
@@ -37,10 +37,13 @@ def main():
     # 3. Download and determine orientation
     raw_image_path, orientation = image_processor.prepare_local_image(artwork["local_image_path"])
     
-    # 3.5. ✨ Gemini AI Analysis ✨
-    logger.info("Analyzing artwork with Google Gemini AI...")
+    # 3.1 Content Type Selection
+    recent_history = history_tracker.get_recent_history()
+    content_type = content_diversity.select_content_type(recent_history)
+    artwork["content_type"] = content_type
     
-    available_tracks = image_processor.get_audio_tracks()
+    # 3.5. ✨ Gemini AI Analysis ✨
+    logger.info(f"Analyzing artwork with Google Gemini AI (Content Type: {content_type})...")
     
     ai_analysis = gemini_ai.analyze_artwork(
         raw_image_path, 
@@ -50,10 +53,9 @@ def main():
         artwork["museum"],
         artwork.get("medium", ""),
         artwork.get("classification", ""),
-        available_tracks
+        content_type=content_type
     )
     
-    track_index = None
     if ai_analysis:
         logger.info("Gemini analysis successful! Updating metadata...")
         # Keep the catalog number logic
@@ -77,18 +79,12 @@ def main():
             f"{ai_analysis.get('hashtags', '')}"
         )
         artwork["alt_text"] = ai_analysis.get("alt_text", artwork.get("alt_text", ""))
-        track_index = ai_analysis.get("suggested_track_index")
     else:
         logger.info("Gemini analysis skipped or failed. Using fallback templates.")
     
     media_type = "IMAGE"
-    if orientation == "horizontal":
-        logger.info("Horizontal image detected. Preparing REELS video...")
-        output_media_path = image_processor.create_reels_video(raw_image_path, track_index=track_index)
-        media_type = "REELS"
-    else:
-        logger.info("Vertical/Square image detected. Preparing FEED post...")
-        output_media_path = image_processor.create_feed_post(raw_image_path)
+    logger.info("Preparing FEED post...")
+    output_media_path = image_processor.create_feed_post(raw_image_path)
 
     # 4. Post to Instagram or Dry-Run
     if args.dry_run:
@@ -108,9 +104,8 @@ def main():
         sys.exit(1)
 
     if not public_media_url:
-        logger.info(f"PUBLIC_IMAGE_URL not specified. Automatically uploading {media_type} to temporary public HTTPS host...")
-        upload_type = "video" if media_type == "REELS" else "image"
-        public_media_url = image_processor.upload_temp_media(output_media_path, media_type=upload_type)
+        logger.info(f"PUBLIC_IMAGE_URL not specified. Automatically uploading image to temporary public HTTPS host...")
+        public_media_url = image_processor.upload_temp_media(output_media_path)
 
     logger.info(f"Posting {media_type} to Instagram using public URL: {public_media_url}")
     media_id = instagram_poster.post_to_instagram_graph_api(
@@ -151,9 +146,7 @@ if __name__ == "__main__":
         logger.info("Cleaning up temporary files...")
         temp_files = [
             config.OUTPUT_IMAGE_PATH,
-            config.OUTPUT_VIDEO_PATH,
-            config.OUTPUT_RAW_IMAGE_PATH,
-            config.TEMP_AUDIO_PATH
+            config.OUTPUT_RAW_IMAGE_PATH
         ]
         for f in temp_files:
             if os.path.exists(f):

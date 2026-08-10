@@ -113,6 +113,11 @@ def get_posted_ids() -> Set[str]:
     # We consider both PUBLISHED and PENDING as "posted" so we don't pick them again
     return {item["id"] for item in posted_list if "id" in item}
 
+def get_recent_history() -> list:
+    """Returns the list of recently posted artworks."""
+    history, _ = load_history_with_etag()
+    return history.get("posted_artworks", [])
+
 def reserve_artwork(artwork_data: Dict[str, Any]):
     """
     PRE-WRITE: Adds artwork to history with PENDING status and uploads to R2.
@@ -131,7 +136,12 @@ def reserve_artwork(artwork_data: Dict[str, Any]):
         "id": artwork_data["id"],
         "title": artwork_data.get("title"),
         "artist": artwork_data.get("artist"),
-        "museum": artwork_data.get("museum"),
+        "museum_name": artwork_data.get("museum"), # mapped to museum_name for consistency
+        "artist_name": artwork_data.get("artist"), # mapped to artist_name for consistency
+        "visual_category": artwork_data.get("visual_category", "other"),
+        "medium": artwork_data.get("medium", "other"),
+        "period": artwork_data.get("period", "unknown"),
+        "content_type": artwork_data.get("content_type", "SINGLE_ARTWORK"),
         "status": "PENDING",
         "media_id": None,
         "reservation_id": str(uuid.uuid4()),

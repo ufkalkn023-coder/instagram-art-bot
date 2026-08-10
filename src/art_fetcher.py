@@ -2,6 +2,8 @@ import logging
 from typing import Dict, Any, List
 from src.museums import AICAdapter, ClevelandAdapter, MetAdapter, RijksmuseumAdapter
 from src.quality_filter import calculate_quality_score, validate_and_download_image
+from src import history_tracker
+from src import content_diversity
 import config
 
 logger = logging.getLogger(__name__)
@@ -52,18 +54,23 @@ def fetch_random_artwork(posted_ids: set) -> Dict[str, Any]:
         raise RuntimeError("No new public domain artworks found across any museum!")
         
     # 3. Score candidates with Diversity Penalty
-    # Determine recent sources to apply diversity penalty
-    recent_sources = []
-    if posted_ids:
-        # Convert posted_ids set to a sorted list to roughly get recent ones, 
-        # or just penalize all sources that have been posted recently if we can't sort chronologically.
-        # Since it's a set, we'll just penalize any source that is heavily represented.
-        pass # Better: penalize based on what's in the set if we want, but since history is large, let's just use it as a light penalty if the source is very common.
+    recent_history = history_tracker.get_recent_history()
         
     scored_candidates = []
     for c in new_candidates:
-        c.quality_score = calculate_quality_score(c, museum_weights)
-        if c.quality_score >= min_score:
+        base_score = calculate_quality_score(c, museum_weights)
+        
+        # Calculate diversity penalties/bonuses
+        museum_penalty = content_diversity.analyze_museum_diversity(c.museum_name, recent_history)
+        features = content_diversity.get_candidate_metadata_features(c)
+        visual_bonus = content_diversity.analyze_visual_diversity(features, recent_history)
+        
+        c.quality_score = base_score + museum_penalty + visual_bonus
+        
+        # Attach features for later use
+        c._diversity_features = features
+        
+        if base_score >= min_score: # Apply min_score threshold to BASE score, so diversity doesn't rescue a bad image
             scored_candidates.append(c)
             
     # Sort by score descending
@@ -82,6 +89,7 @@ def fetch_random_artwork(posted_ids: set) -> Dict[str, Any]:
             logger.info(f"✅ Image downloaded and validated successfully for {best_candidate.canonical_id}")
             
             # 5. Return dict format expected by history_tracker and Gemini
+            features = getattr(best_candidate, "_diversity_features", {})
             return {
                 "id": best_candidate.canonical_id, # Canonical ID for duplicate prevention
                 "title": best_candidate.title,
@@ -94,7 +102,10 @@ def fetch_random_artwork(posted_ids: set) -> Dict[str, Any]:
                 # Passed down for prompt/metadata context
                 "medium": best_candidate.medium,
                 "classification": best_candidate.classification,
-                "quality_score": best_candidate.quality_score
+                "quality_score": best_candidate.quality_score,
+                # Passed down to reserve_artwork
+                "visual_category": features.get("visual_category", "other"),
+                "period": features.get("period", "unknown"),
             }
         else:
             logger.warning(f"❌ Image validation failed for {best_candidate.canonical_id}. Trying next best candidate...")

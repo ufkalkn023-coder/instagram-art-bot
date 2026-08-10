@@ -16,12 +16,11 @@ class ArtworkAnalysis(BaseModel):
     alt_text: str
     hashtags: str
     art_movement: str
-    suggested_track_index: int
 
 
-def analyze_artwork(image_path: str, title: str, artist: str, date: str, museum: str, medium: str = "", classification: str = "", audio_tracks: list = None) -> Optional[Dict[str, Any]]:
+def analyze_artwork(image_path: str, title: str, artist: str, date: str, museum: str, medium: str = "", classification: str = "", content_type: str = "SINGLE_ARTWORK") -> Optional[Dict[str, Any]]:
     """
-    Analyzes the artwork using Gemini 3.5 Flash and returns a complete analysis.
+    Analyzes the artwork using Gemini 2.5 Flash and returns a complete analysis.
     Requires GOOGLE_GEMINI_API_KEY environment variable.
     """
     if not config.GEMINI_ENABLED:
@@ -35,14 +34,6 @@ def analyze_artwork(image_path: str, title: str, artist: str, date: str, museum:
 
     try:
         # Generate the track list for the prompt
-        if not audio_tracks:
-            audio_tracks = []
-            
-        track_list_str = "\n".join(
-            f"Index {i}: {track['title']}" 
-            for i, track in enumerate(audio_tracks)
-        )
-
         prompt = f"""ROLE
 
 You are the editorial art writer for a professional Instagram account dedicated to historical artworks from museums and public collections.
@@ -70,11 +61,16 @@ Never speculate about the artist's intentions, personality, private life, motiva
 If the artist is unknown, anonymous, attributed, or uncertain, preserve that uncertainty exactly (e.g., "Artist unknown", "Attributed to [Artist]").
 
 ==================================================
+CONTENT TYPE & FORMAT
+==================================================
+You must write the caption following this specific editorial format: {content_type}
+Tailor your narrative and focus according to this format (e.g., if ARTIST_FOCUS, talk more about the artist's style; if HISTORICAL_CONTEXT, focus on the era).
+
+==================================================
 OPENING / HOOK
 ==================================================
 The first 1–2 sentences should make the artwork interesting enough to encourage the viewer to stop scrolling.
 Focus on something genuinely present in the artwork (unusual composition, striking pose, visual contrast, historical context).
-Do NOT use generic clickbait like "Step into a world of timeless beauty...". Make the opening specific to THIS artwork.
 
 ==================================================
 ART-HISTORICAL OBSERVATIONS
@@ -85,15 +81,14 @@ Only make observations that are reasonably supported by the supplied metadata an
 ==================================================
 AVOID CLICHÉS & CAPTION VARIETY
 ==================================================
-Do NOT repeatedly use generic art-writing phrases such as "masterpiece", "timeless beauty", "captivating", "stunning", "window into the past". Prefer concrete visual language.
+Do NOT use generic art-writing phrases such as "masterpiece", "timeless beauty", "captivating", "stunning", "window into the past", "journey through". Prefer concrete visual language.
 Target length: 80–140 words. Do not write an unnecessary art-history lecture. Every sentence should add useful information.
-Vary sentence length, opening approach, and narrative rhythm.
 
 ==================================================
-METADATA FIDELITY
+METADATA FIDELITY & FOOTER
 ==================================================
 Treat the supplied metadata as authoritative. Never alter factual metadata.
-DO NOT append any metadata, source block, or emojis at the end of the caption. The system will automatically inject the title, artist, date, and museum information before your caption. Just write the story/analysis.
+DO NOT append any metadata or emojis at the end of the caption. The system will automatically inject the title, artist, date, and museum information before your caption. Just write the story/analysis.
 
 ==================================================
 HASHTAGS, LANGUAGE AND TONE
@@ -119,10 +114,6 @@ Despite any output format rules above, you MUST return a JSON object satisfying 
 2. alt_text: A detailed and descriptive alt text for visually impaired users and SEO (1-2 sentences), strictly describing the visual contents of the painting.
 3. hashtags: 5-8 highly relevant, SEO-optimized hashtags (following the hashtag rules above).
 4. art_movement: The specific art movement or period this painting belongs to (e.g., Baroque, Impressionism, Renaissance).
-5. suggested_track_index: Choose the single most atmospherically fitting classical music track for a Reels video of this painting from the following list. Return ONLY the integer index.
-
-Audio Tracks to choose from:
-{track_list_str}
 """
 
         client = genai.Client(api_key=api_key)
