@@ -37,9 +37,8 @@ jobs:
 
       - name: Jittering Delay (Rastgele Gecikme)
         run: |
-          # 5 ile 20 dakika arası rastgele bekleme (300 ile 1200 saniye)
-          # GitHub Actions süresi harcayacağı için maksimum süreyi çok abartmamak iyidir.
-          DELAY=$(( ( RANDOM % 901 ) + 300 ))
+          # 1 ile 2 dakika arası rastgele bekleme (60 ile 120 saniye)
+          DELAY=$(( ( RANDOM % 61 ) + 60 ))
           echo "Bot tespitini önlemek için $DELAY saniye bekleniyor..."
           sleep $DELAY
 
