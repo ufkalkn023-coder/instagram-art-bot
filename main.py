@@ -66,6 +66,7 @@ def main():
         artwork["catalog_index"] = catalog_index  # Store internally, don't display
         
         artwork["caption"] = (
+            f"⠀\n"
             f"{clean_title}\n"
             f"\n"
             f"{clean_artist} - {artwork.get('date', 'Unknown')}\n"
