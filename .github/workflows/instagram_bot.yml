@@ -3,7 +3,7 @@ name: Instagram Art Bot Scheduler
 on:
   schedule:
     # Runs 8 times a day (every 3 hours: 00:00, 03:00, 06:00, 09:00, 12:00, 15:00, 18:00 & 21:00 TR Time)
-    - cron: '0 0,3,6,9,12,15,18,21 * * *'
+    - cron: "0 0,3,6,9,12,15,18,21 * * *"
   workflow_dispatch: # Allows manual trigger from GitHub Actions tab
 
 permissions:
@@ -27,8 +27,8 @@ jobs:
       - name: Set up Python 3.10
         uses: actions/setup-python@v5
         with:
-          python-version: '3.10'
-          cache: 'pip'
+          python-version: "3.10"
+          cache: "pip"
 
       - name: Install dependencies
         run: |
