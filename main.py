@@ -66,10 +66,10 @@ def main():
         artwork["catalog_index"] = catalog_index  # Store internally, don't display
         
         artwork["caption"] = (
-            f"@artfolio.db\n"
             f"{clean_title}\n"
-            f"{clean_artist}\n"
-            f"{artwork.get('date', 'Unknown')}\n"
+            f"\n"
+            f"{clean_artist} - {artwork.get('date', 'Unknown')}\n"
+            f"\n"
             f"{artwork.get('museum', 'Unknown')}\n"
             f"\n"
             f"{ai_analysis.get('caption', '')}\n"
