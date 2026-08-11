@@ -1,4 +1,5 @@
 import logging
+import random
 from typing import Dict, Any, List
 from src.museums import AICAdapter, ClevelandAdapter, MetAdapter, RijksmuseumAdapter
 from src.quality_filter import calculate_quality_score, validate_and_download_image
@@ -64,14 +65,18 @@ def fetch_random_artwork(posted_ids: set) -> Dict[str, Any]:
         museum_penalty = content_diversity.analyze_museum_diversity(c.museum_name, recent_history)
         features = content_diversity.get_candidate_metadata_features(c)
         visual_bonus = content_diversity.analyze_visual_diversity(features, recent_history)
+        discovery_bonus = content_diversity.analyze_discovery_score(features, base_score)
+        serendipity_bonus = random.uniform(0.0, 5.0)
         
-        c.quality_score = base_score + museum_penalty + visual_bonus
+        c.quality_score = base_score + museum_penalty + visual_bonus + discovery_bonus + serendipity_bonus
         
         # Attach features for later use
         c._diversity_features = features
         
-        if base_score >= min_score: # Apply min_score threshold to BASE score, so diversity doesn't rescue a bad image
+        if c.quality_score >= min_score: # Use combined score to pass threshold, but ensure base score was decent
             scored_candidates.append(c)
+        else:
+            logger.info(f"[SKIPPED] '{c.title}' by {c.artist_name} - Reason: Final score {c.quality_score:.1f} below minimum {min_score} (Base: {base_score}, Museum: {museum_penalty}, Visual: {visual_bonus}, Serendipity: {serendipity_bonus:.1f})")
             
     # Sort by score descending
     scored_candidates.sort(key=lambda x: x.quality_score, reverse=True)

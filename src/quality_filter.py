@@ -45,6 +45,11 @@ def validate_and_download_image(url: str, output_path: str) -> bool:
                 logger.warning(f"Image validation failed: Image too small ({img.width}x{img.height})")
                 return False
                 
+            # Additional check: reject horizontal images
+            if img.width > img.height:
+                logger.warning(f"Image validation failed: Image is horizontal ({img.width}x{img.height})")
+                return False
+                
             return True
         except Exception as e:
             logger.warning(f"Image validation failed: Pillow could not verify image: {e}")
@@ -91,13 +96,14 @@ def calculate_quality_score(artwork: NormalizedArtwork, museum_weights: dict) ->
     
     # 4. Instagram Suitability / Aspect Ratio (Max 20)
     if artwork.image_width and artwork.image_height:
+        if artwork.image_width > artwork.image_height:
+            return 0 # Hard reject horizontal images based on metadata
+            
         ratio = artwork.image_width / artwork.image_height
         if 0.5 <= ratio <= 1.0:
-            score += 20 # Perfect for vertical Reels / Square
-        elif 1.0 < ratio <= 1.5:
-            score += 15 # Standard landscape, very good
+            score += 20 # Perfect for vertical / Square
         else:
-            score += 10 # Extreme landscape or very tall, soft penalty
+            score += 10 # Very tall, soft penalty
     else:
         score += 15 # Neutral fallback
         

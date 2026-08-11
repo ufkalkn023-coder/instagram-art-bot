@@ -58,27 +58,26 @@ def main():
     
     if ai_analysis:
         logger.info("Gemini analysis successful! Updating metadata...")
-        # Keep the catalog number logic
+        # Keep the catalog number logic for internal logging
         clean_title = artwork['title'].strip() if artwork.get('title') else "Untitled"
         clean_artist = artwork['artist'].strip() if artwork.get('artist') else "Unknown Artist"
         ref_num = int(hashlib.md5(f"{clean_title}{clean_artist}".encode('utf-8')).hexdigest()[:8], 16) % 100000
         catalog_index = f"ARTFOLIO / REF-{ref_num:05d}"
+        artwork["catalog_index"] = catalog_index  # Store internally, don't display
         
         artwork["caption"] = (
-            f"⠀\n"
-            f"🎨 {clean_title}\n"
-            f"👨‍🎨 {clean_artist}\n"
-            f"🗓️ {artwork.get('date', 'Unknown')}\n"
-            f"🏛️ {artwork.get('museum', 'Unknown')}\n"
-            f"🌊 Movement: {ai_analysis.get('art_movement', 'Unknown')}\n"
-            f"🗃️ {catalog_index}\n"
+            f"{clean_title}\n"
+            f"{clean_artist}, {artwork.get('date', 'Unknown')}\n"
+            f"\n"
+            f"{artwork.get('museum', 'Unknown')}\n"
             f"\n"
             f"{ai_analysis.get('caption', '')}\n"
             f"\n"
-            f"⠀\n"
             f"{ai_analysis.get('hashtags', '')}"
         )
         artwork["alt_text"] = ai_analysis.get("alt_text", artwork.get("alt_text", ""))
+        if artwork["alt_text"]:
+            logger.info(f"✨ SEO Alt-Text Generated: '{artwork['alt_text']}'")
     else:
         logger.info("Gemini analysis skipped or failed. Using fallback templates.")
     
@@ -128,6 +127,9 @@ def main():
         # Clean title for Pinterest
         title = f"{artwork['title']} by {artwork['artist']}"
         desc = artwork['caption']
+        if artwork.get("alt_text"):
+            desc += f"\n\n(Alt: {artwork['alt_text']})"
+            
         # Fetch direct permalink to the Instagram post
         permalink = instagram_poster.get_instagram_permalink(media_id, access_token)
         # Fallback to profile link if permalink fetch fails

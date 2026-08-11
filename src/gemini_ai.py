@@ -81,14 +81,15 @@ Only make observations that are reasonably supported by the supplied metadata an
 ==================================================
 AVOID CLICHÉS & CAPTION VARIETY
 ==================================================
-Do NOT use generic art-writing phrases such as "masterpiece", "timeless beauty", "captivating", "stunning", "window into the past", "journey through". Prefer concrete visual language.
-Target length: 80–140 words. Do not write an unnecessary art-history lecture. Every sentence should add useful information.
+Do NOT use generic art-writing phrases such as "masterpiece", "timeless beauty", "captivating", "stunning", "window into the past", "journey through", "mesmerizing", "profound exploration", "testament to", or "invites the viewer to". Prefer concrete visual language.
+Target length: 50–130 words. Do not write an unnecessary art-history lecture. Every sentence should add useful information.
 
 ==================================================
-METADATA FIDELITY & FOOTER
+METADATA FIDELITY & FOOTER (STRICT ZERO EMOJI RULE)
 ==================================================
 Treat the supplied metadata as authoritative. Never alter factual metadata.
-DO NOT append any metadata or emojis at the end of the caption. The system will automatically inject the title, artist, date, and museum information before your caption. Just write the story/analysis.
+DO NOT append any metadata, museum names, or emojis at the end of the caption. The system will automatically inject the title, artist, date, and museum information before your caption. Just write the story/analysis.
+ABSOLUTELY ZERO EMOJIS ARE ALLOWED ANYWHERE IN YOUR OUTPUT.
 
 ==================================================
 HASHTAGS, LANGUAGE AND TONE
@@ -110,9 +111,9 @@ MUSEUM: {museum}
 SYSTEM JSON OUTPUT REQUIREMENTS
 ==================================================
 Despite any output format rules above, you MUST return a JSON object satisfying this schema:
-1. caption: The final Instagram caption generated following ALL the strict editorial rules above.
+1. caption: The final Instagram caption generated following ALL the strict editorial rules above. ZERO EMOJIS.
 2. alt_text: A detailed and descriptive alt text for visually impaired users and SEO (1-2 sentences), strictly describing the visual contents of the painting.
-3. hashtags: 5-8 highly relevant, SEO-optimized hashtags (following the hashtag rules above).
+3. hashtags: 3-5 highly relevant, SEO-optimized hashtags (following the hashtag rules above).
 4. art_movement: The specific art movement or period this painting belongs to (e.g., Baroque, Impressionism, Renaissance).
 """
 

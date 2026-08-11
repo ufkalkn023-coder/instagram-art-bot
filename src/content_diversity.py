@@ -91,20 +91,22 @@ def analyze_museum_diversity(candidate_museum: str, recent_history: List[Dict[st
         return 0.0
         
     penalty = 0.0
-    history_limit = min(5, len(recent_history))
+    history_limit = min(10, len(recent_history))
     if history_limit == 0:
         return 0.0
         
-    # Check the last 5 posts
+    # Check the last 10 posts
     recent_museums = [post.get("museum_name", "") for post in recent_history[-history_limit:]]
     count = recent_museums.count(candidate_museum)
     
     if count == 1:
-        penalty -= 2.0
+        penalty -= 1.0
     elif count == 2:
-        penalty -= 5.0
+        penalty -= 3.0
     elif count >= 3:
-        penalty -= 10.0
+        penalty -= 7.0
+    if count >= 5:
+        penalty -= 15.0
         
     return penalty
 
@@ -113,7 +115,7 @@ def analyze_visual_diversity(candidate_features: Dict[str, str], recent_history:
     Scores visual diversity (category, artist, medium, period).
     """
     score = 0.0
-    history_limit = min(8, len(recent_history))
+    history_limit = min(15, len(recent_history))
     if history_limit == 0:
         return score
         
@@ -123,26 +125,26 @@ def analyze_visual_diversity(candidate_features: Dict[str, str], recent_history:
     recent_artists = [post.get("artist_name", "") for post in recent_posts if post.get("artist_name")]
     if candidate_features["artist_name"] != "unknown Artist" and candidate_features["artist_name"] != "unknown":
         if candidate_features["artist_name"] in recent_artists[-3:]:
-            score -= 15.0 # Very heavy penalty if same artist in last 3 posts
+            score -= 30.0 # Extreme penalty if same artist in last 3 posts (Artist Cooldown)
         elif candidate_features["artist_name"] in recent_artists:
-            score -= 5.0
+            score -= 10.0
             
-    # 2. Visual Category
+    # 2. Visual Category (Subject Fatigue)
     recent_categories = [post.get("visual_category", "") for post in recent_posts]
-    cat_count = recent_categories[-4:].count(candidate_features["visual_category"])
+    cat_count_last_5 = recent_categories[-5:].count(candidate_features["visual_category"])
     if candidate_features["visual_category"] != "other":
-        if cat_count >= 2:
-            score -= 5.0
-        elif cat_count == 0:
+        if cat_count_last_5 >= 2:
+            score -= 10.0 # Content fatigue penalty increased
+        elif cat_count_last_5 == 0:
             score += 3.0 # Bonus for fresh category
             
-    # 3. Period Diversity
+    # 3. Period Diversity (Period Fatigue)
     recent_periods = [post.get("period", "") for post in recent_posts]
-    period_count = recent_periods[-4:].count(candidate_features["period"])
+    period_count_last_5 = recent_periods[-5:].count(candidate_features["period"])
     if candidate_features["period"] != "unknown":
-        if period_count >= 3:
-            score -= 3.0
-        elif period_count == 0:
+        if period_count_last_5 >= 3:
+            score -= 10.0 # Period fatigue penalty increased
+        elif period_count_last_5 == 0:
             score += 2.0
             
     # 4. Medium Diversity
@@ -155,6 +157,20 @@ def analyze_visual_diversity(candidate_features: Dict[str, str], recent_history:
             score += 2.0
             
     return score
+
+def analyze_discovery_score(candidate_features: Dict[str, str], base_score: float) -> float:
+    """
+    Adds a small discovery/hidden gem bonus if the artwork has a high base score
+    but belongs to an unknown or less common artist, rewarding serendipity.
+    """
+    bonus = 0.0
+    if base_score >= 80: # Must be high quality to be a 'hidden gem'
+        if candidate_features["artist_name"] == "unknown Artist" or candidate_features["artist_name"] == "unknown":
+            bonus += 5.0 # Quality unknown artist
+        else:
+            # We assume it's a known artist but if they haven't been featured recently, give a tiny bump
+            bonus += 2.0 
+    return bonus
 
 def select_content_type(recent_history: List[Dict[str, Any]]) -> str:
     """

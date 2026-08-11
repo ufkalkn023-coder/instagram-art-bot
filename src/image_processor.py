@@ -111,55 +111,71 @@ def create_feed_post(raw_image_path: str, output_path: str = config.OUTPUT_IMAGE
     canvas_w = config.TARGET_WIDTH   # 1080
     canvas_h = config.TARGET_HEIGHT  # 1350
 
-    bg = img.copy()
-    bg_aspect = bg.width / bg.height
+    img_aspect = img.width / img.height
     target_aspect = canvas_w / canvas_h
 
-    if bg_aspect > target_aspect:
-        new_h = canvas_h
-        new_w = int(canvas_h * bg_aspect)
+    # Image Framing Intelligence: If image is very close to 4:5, use immersive crop
+    if abs(img_aspect - target_aspect) <= 0.05:
+        logger.info(f"Framing decision: Aspect ratio {img_aspect:.3f} is close to ideal {target_aspect:.3f}. Applying immersive full-screen crop.")
+        if img_aspect > target_aspect:
+            new_h = canvas_h
+            new_w = int(canvas_h * img_aspect)
+        else:
+            new_w = canvas_w
+            new_h = int(canvas_w / img_aspect)
+            
+        canvas = img.resize((new_w, new_h), Image.Resampling.LANCZOS)
+        crop_left = (new_w - canvas_w) // 2
+        crop_top = (new_h - canvas_h) // 2
+        canvas = canvas.crop((crop_left, crop_top, crop_left + canvas_w, crop_top + canvas_h))
     else:
-        new_w = canvas_w
-        new_h = int(canvas_w / bg_aspect)
+        logger.info(f"Framing decision: Aspect ratio {img_aspect:.3f} requires padding. Applying background and frame.")
+        bg = img.copy()
+        
+        if img_aspect > target_aspect:
+            new_h = canvas_h
+            new_w = int(canvas_h * img_aspect)
+        else:
+            new_w = canvas_w
+            new_h = int(canvas_w / img_aspect)
 
-    bg = bg.resize((new_w, new_h), Image.Resampling.LANCZOS)
-    crop_left = (new_w - canvas_w) // 2
-    crop_top = (new_h - canvas_h) // 2
-    bg = bg.crop((crop_left, crop_top, crop_left + canvas_w, crop_top + canvas_h))
-    bg = bg.filter(ImageFilter.GaussianBlur(radius=config.BLUR_RADIUS))
+        bg = bg.resize((new_w, new_h), Image.Resampling.LANCZOS)
+        crop_left = (new_w - canvas_w) // 2
+        crop_top = (new_h - canvas_h) // 2
+        bg = bg.crop((crop_left, crop_top, crop_left + canvas_w, crop_top + canvas_h))
+        bg = bg.filter(ImageFilter.GaussianBlur(radius=config.BLUR_RADIUS))
 
-    dark_overlay = Image.new("RGB", (canvas_w, canvas_h), (0, 0, 0))
-    canvas = Image.blend(bg, dark_overlay, alpha=0.25)
+        dark_overlay = Image.new("RGB", (canvas_w, canvas_h), (0, 0, 0))
+        canvas = Image.blend(bg, dark_overlay, alpha=0.25)
 
-    style = random.choice(FRAME_STYLES)
-    logger.info(f"Applying frame style: '{style}'")
+        style = random.choice(FRAME_STYLES)
+        logger.info(f"Applying frame style: '{style}'")
 
-    border_size = random.randint(10, 20) if style in ("palette_border", "gradient_border") else 0
+        border_size = random.randint(10, 20) if style in ("palette_border", "gradient_border") else 0
 
-    padding = 50
-    max_w = canvas_w - (padding + border_size) * 2
-    max_h = canvas_h - (padding + border_size) * 2
+        padding = 50
+        max_w = canvas_w - (padding + border_size) * 2
+        max_h = canvas_h - (padding + border_size) * 2
 
-    paint_ratio = img.width / img.height
-    if paint_ratio > max_w / max_h:
-        paint_w = max_w
-        paint_h = int(paint_w / paint_ratio)
-    else:
-        paint_h = max_h
-        paint_w = int(paint_h * paint_ratio)
+        if img_aspect > max_w / max_h:
+            paint_w = max_w
+            paint_h = int(paint_w / img_aspect)
+        else:
+            paint_h = max_h
+            paint_w = int(paint_h * img_aspect)
 
-    painting = img.resize((paint_w, paint_h), Image.Resampling.LANCZOS)
+        painting = img.resize((paint_w, paint_h), Image.Resampling.LANCZOS)
 
-    if style == "palette_border":
-        painting = _apply_palette_border(painting, border_size=border_size)
-    elif style == "gradient_border":
-        painting = _apply_gradient_border(painting, border_size=border_size)
-    elif style == "clean":
-        painting = ImageOps.expand(painting, border=6, fill=(255, 255, 255))
+        if style == "palette_border":
+            painting = _apply_palette_border(painting, border_size=border_size)
+        elif style == "gradient_border":
+            painting = _apply_gradient_border(painting, border_size=border_size)
+        elif style == "clean":
+            painting = ImageOps.expand(painting, border=6, fill=(255, 255, 255))
 
-    paste_x = (canvas_w - painting.width) // 2
-    paste_y = (canvas_h - painting.height) // 2
-    canvas.paste(painting, (paste_x, paste_y))
+        paste_x = (canvas_w - painting.width) // 2
+        paste_y = (canvas_h - painting.height) // 2
+        canvas.paste(painting, (paste_x, paste_y))
 
     canvas.save(output_path, "JPEG", quality=95)
     logger.info(f"Feed post image processed and saved to: {output_path}")
