@@ -52,11 +52,8 @@ def post_to_instagram_graph_api(media_url: str, caption: str, account_id: str, a
     logger.info(f"Media container created successfully. Container ID: {container_id}")
 
     # Wait for Instagram to finish processing media container
-    # Reels usually take longer than images to process
-    wait_time = 30 if media_type == "REELS" else 10
-    logger.info(f"Waiting {wait_time} seconds for Instagram to process the {media_type} container...")
-    time.sleep(wait_time)
-
+    # Removed delay as requested
+    
     # Publish Container
     publish_url = f"{config.GRAPH_API_BASE_URL}/{account_id}/media_publish"
     publish_payload = {
@@ -105,7 +102,7 @@ def post_story_to_instagram_graph_api(image_url: str, account_id: str, access_to
     logger.info(f"Story container created successfully. Container ID: {container_id}")
 
     # Wait for Instagram to finish processing image container
-    time.sleep(10)
+    # Removed delay as requested
 
     # Publish Container
     publish_url = f"{config.GRAPH_API_BASE_URL}/{account_id}/media_publish"

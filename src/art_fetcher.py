@@ -108,6 +108,7 @@ def fetch_random_artwork(posted_ids: set) -> Dict[str, Any]:
                 "medium": best_candidate.medium,
                 "classification": best_candidate.classification,
                 "quality_score": best_candidate.quality_score,
+                "description": best_candidate.description,
                 # Passed down to reserve_artwork
                 "visual_category": features.get("visual_category", "other"),
                 "period": features.get("period", "unknown"),
