@@ -101,84 +101,64 @@ def prepare_local_image(local_path: str) -> Tuple[str, str]:
     return local_path, orientation
 
 
-def create_feed_post(raw_image_path: str, artist_name: str, artwork_title: str, output_path: str = config.OUTPUT_IMAGE_PATH, base_font_size: int = 46) -> str:
+def create_feed_post(raw_image_path: str, artist_name: str = "", artwork_title: str = "", output_path: str = config.OUTPUT_IMAGE_PATH, base_font_size: int = 46) -> str:
     """
-    Processes a raw image into a 1080x1350 Feed post with a Museum Gallery layout.
+    Processes a raw image into a 1080x1350 Feed post with a blurred background.
     """
-    logger.info("Processing feed artwork image with Museum Layout...")
+    logger.info("Processing feed artwork image with Blurred Background Layout...")
+    from PIL import ImageFilter
+    
     img = Image.open(raw_image_path)
     
     canvas_w = config.TARGET_WIDTH   # 1080
     canvas_h = config.TARGET_HEIGHT  # 1350
     
-    # 1. Background
-    bg_color = (244, 241, 234) # #F4F1EA Museum Cream
-    canvas = Image.new("RGB", (canvas_w, canvas_h), bg_color)
-    draw = ImageDraw.Draw(canvas)
-    
-    # 2. Fonts (Using Cinzel)
-    font_path = os.path.join(config.BASE_DIR, "assets", "fonts", "Cinzel.ttf")
-    
-    text_color = (44, 44, 44) # #2C2C2C Antrasit
-    
-    try:
-        font_artist = ImageFont.truetype(font_path, base_font_size + 6)
-        font_title = ImageFont.truetype(font_path, base_font_size)
-        font_logo = ImageFont.truetype(font_path, base_font_size - 4)
-    except IOError:
-        logger.warning("Cinzel font not found. Falling back to default.")
-        font_artist = ImageFont.load_default()
-        font_title = ImageFont.load_default()
-        font_logo = ImageFont.load_default()
-        
-    # 3. Draw Text
-    margin_x = 80
-    margin_top = 100
-    
-    # Convert artist to uppercase
-    artist_upper = artist_name.upper() if artist_name else "UNKNOWN ARTIST"
-    title_text = artwork_title if artwork_title else "Untitled"
-    
-    # Handle long titles (truncate with ellipsis)
-    if len(title_text) > 45:
-        title_text = title_text[:42] + "..."
-        
-    draw.text((margin_x, margin_top), artist_upper, font=font_artist, fill=text_color)
-    draw.text((margin_x, margin_top + 55), title_text, font=font_title, fill=text_color)
-    
-    # Bottom logo
-    logo_text = "artfolio"
-    logo_bbox = draw.textbbox((0, 0), logo_text, font=font_logo)
-    logo_w = logo_bbox[2] - logo_bbox[0]
-    draw.text(((canvas_w - logo_w) // 2, canvas_h - 100), logo_text, font=font_logo, fill=text_color)
-    
-    # 4. Artwork Area
-    img_area_y_start = 220
-    img_area_y_end = 1180
-    max_w = canvas_w - (margin_x * 2) # 920
-    max_h = img_area_y_end - img_area_y_start # 960
-    
-    img_aspect = img.width / img.height
-    
-    if img_aspect > max_w / max_h:
-        paint_w = max_w
-        paint_h = int(paint_w / img_aspect)
+    # --- Create blurred background filling the canvas ---
+    bg = img.copy()
+    bg_aspect = bg.width / bg.height
+    target_aspect = canvas_w / canvas_h
+
+    if bg_aspect > target_aspect:
+        new_height = canvas_h
+        new_width = int(new_height * bg_aspect)
     else:
-        paint_h = max_h
-        paint_w = int(paint_h * img_aspect)
-        
-    painting = img.resize((paint_w, paint_h), Image.Resampling.LANCZOS)
+        new_width = canvas_w
+        new_height = int(new_width / bg_aspect)
+
+    bg = bg.resize((new_width, new_height), Image.Resampling.LANCZOS)
+    crop_left = (new_width - canvas_w) // 2
+    crop_top = (new_height - canvas_h) // 2
+    bg = bg.crop((crop_left, crop_top, crop_left + canvas_w, crop_top + canvas_h))
     
-    # Subtle elegant border to separate from background
-    painting = ImageOps.expand(painting, border=2, fill=(210, 205, 195))
-    
-    # Center the painting in the available area
-    paste_x = (canvas_w - painting.width) // 2
-    paste_y = img_area_y_start + (max_h - painting.height) // 2
-    canvas.paste(painting, (paste_x, paste_y))
+    blur_radius = getattr(config, "BLUR_RADIUS", 35)
+    bg = bg.filter(ImageFilter.GaussianBlur(radius=blur_radius))
+
+    # Darken background slightly for contrast
+    dark_overlay = Image.new("RGB", (canvas_w, canvas_h), (0, 0, 0))
+    canvas = Image.blend(bg, dark_overlay, alpha=0.25)
+
+    # --- Resize and paste the actual artwork to fit inside the canvas ---
+    if img.width > img.height:
+        # Horizontal
+        art_w = canvas_w
+        art_h = int(art_w / (img.width / img.height))
+    else:
+        # Vertical or Square
+        art_h = canvas_h
+        art_w = int(art_h * (img.width / img.height))
+
+        # Check if art width exceeds canvas width
+        if art_w > canvas_w:
+            art_w = canvas_w
+            art_h = int(art_w / (img.width / img.height))
+
+    art_resized = img.resize((art_w, art_h), Image.Resampling.LANCZOS)
+    paste_x = (canvas_w - art_w) // 2
+    paste_y = (canvas_h - art_h) // 2
+    canvas.paste(art_resized, (paste_x, paste_y))
 
     canvas.save(output_path, "JPEG", quality=95)
-    logger.info(f"Feed post image processed (Museum Layout) and saved to: {output_path}")
+    logger.info(f"Feed post image processed (Blurred Layout) and saved to: {output_path}")
     return output_path
 
 

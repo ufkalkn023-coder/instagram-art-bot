@@ -45,10 +45,7 @@ def validate_and_download_image(url: str, output_path: str) -> bool:
                 logger.warning(f"Image validation failed: Image too small ({img.width}x{img.height})")
                 return False
                 
-            # Additional check: reject horizontal images
-            if img.width > img.height:
-                logger.warning(f"Image validation failed: Image is horizontal ({img.width}x{img.height})")
-                return False
+            # Horizontal images are now accepted, they will be letterboxed with a blurred background.
                 
             return True
         except Exception as e:
@@ -97,7 +94,7 @@ def calculate_quality_score(artwork: NormalizedArtwork, museum_weights: dict) ->
     # 4. Instagram Suitability / Aspect Ratio (Max 20)
     if artwork.image_width and artwork.image_height:
         if artwork.image_width > artwork.image_height:
-            return 0 # Hard reject horizontal images based on metadata
+            score += 15 # Horizontal images are now accepted (blurred background fills the vertical space)
             
         ratio = artwork.image_width / artwork.image_height
         if 0.5 <= ratio <= 1.0:
