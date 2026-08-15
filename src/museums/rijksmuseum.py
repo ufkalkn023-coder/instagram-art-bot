@@ -14,7 +14,7 @@ class RijksmuseumAdapter(MuseumAdapter):
     def source_id(self) -> str:
         return "rijksmuseum"
 
-    def fetch_candidates(self, limit: int = 50) -> List[NormalizedArtwork]:
+    def fetch_candidates(self, limit: int = 50, query: str = None) -> List[NormalizedArtwork]:
         candidates = []
         api_key = os.environ.get("RIJKSMUSEUM_API_KEY", getattr(config, "RIJKSMUSEUM_API_KEY", ""))
         if not api_key:
@@ -27,6 +27,8 @@ class RijksmuseumAdapter(MuseumAdapter):
                 f"https://www.rijksmuseum.nl/api/en/collection"
                 f"?key={api_key}&hasImage=true&type=painting&ps={limit}&p={page}&imgonly=true"
             )
+            if query:
+                url += f"&q={query}"
             
             headers = {"User-Agent": "InstagramArtBot/1.0"}
             res = requests.get(url, headers=headers, timeout=20)

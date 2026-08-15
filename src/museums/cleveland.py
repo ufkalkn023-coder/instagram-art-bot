@@ -27,7 +27,7 @@ class ClevelandAdapter(MuseumAdapter):
     def source_id(self) -> str:
         return "cleveland"
 
-    def fetch_candidates(self, limit: int = 50) -> List[NormalizedArtwork]:
+    def fetch_candidates(self, limit: int = 50, query: str = None) -> List[NormalizedArtwork]:
         candidates = []
         try:
             skip = random.randint(0, 500)
@@ -35,6 +35,8 @@ class ClevelandAdapter(MuseumAdapter):
                 f"https://openaccess-api.clevelandart.org/api/artworks/"
                 f"?has_image=1&limit={limit}&skip={skip}&type=Painting"
             )
+            if query:
+                url += f"&q={query}"
             
             headers = {"User-Agent": "InstagramArtBot/1.0"}
             res = requests.get(url, headers=headers, timeout=15)

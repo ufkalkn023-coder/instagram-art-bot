@@ -16,6 +16,13 @@ class ArtworkAnalysis(BaseModel):
     alt_text: str
     hashtags: str
     art_movement: str
+    recommended_font_size: int
+
+class CarouselAnalysis(BaseModel):
+    caption: str
+    hashtags: str
+    recommended_font_size: int
+    theme_title: str
 
 
 def analyze_artwork(image_path: str, title: str, artist: str, date: str, museum: str, medium: str = "", classification: str = "", content_type: str = "SINGLE_ARTWORK") -> Optional[Dict[str, Any]]:
@@ -115,6 +122,7 @@ Despite any output format rules above, you MUST return a JSON object satisfying 
 2. alt_text: A detailed and descriptive alt text for visually impaired users and SEO (1-2 sentences), strictly describing the visual contents of the painting.
 3. hashtags: 3-5 highly relevant, SEO-optimized hashtags (following the hashtag rules above).
 4. art_movement: The specific art movement or period this painting belongs to (e.g., Baroque, Impressionism, Renaissance).
+5. recommended_font_size: An integer between 35 and 65 for the base font size to be overlaid on the image. Pick a smaller size if the title/artist is very long or the painting is visually cluttered. Pick a larger size (e.g., 55+) if the title is short and the painting has empty space.
 """
 
         client = genai.Client(api_key=api_key)
@@ -152,4 +160,82 @@ Despite any output format rules above, you MUST return a JSON object satisfying 
 
     except Exception as e:
         logger.error(f"[Gemini] Error analyzing artwork: {e}")
+        return None
+
+def analyze_carousel(theme: str, artworks_metadata: list) -> Optional[Dict[str, Any]]:
+    """
+    Analyzes a collection of artworks for a thematic carousel post using Gemini.
+    """
+    if not config.GEMINI_ENABLED:
+        logger.info("[Gemini] Disabled in config.")
+        return None
+
+    api_key = os.environ.get("GOOGLE_GEMINI_API_KEY")
+    if not api_key:
+        logger.warning("[Gemini] Missing API Key. Fallback to templates.")
+        return None
+
+    try:
+        metadata_text = ""
+        for i, art in enumerate(artworks_metadata, 1):
+            metadata_text += f"\nArtwork {i}:\nTITLE: {art.get('title')}\nARTIST: {art.get('artist')}\nMUSEUM: {art.get('museum')}\n"
+
+        prompt = f"""ROLE
+
+You are the editorial art writer for a professional Instagram account.
+Your task is to write an engaging, concise Instagram caption for a CAROUSEL (multiple images in one post) curated around a specific theme.
+
+==================================================
+CAROUSEL THEME: {theme}
+==================================================
+The carousel contains the following artworks:
+{metadata_text}
+
+==================================================
+CAPTION GUIDELINES
+==================================================
+- Write a compelling caption introducing this curated theme (50-120 words).
+- Do not list all the artworks individually; just talk about the theme and the vibe.
+- NO EMOJIS allowed anywhere in the output.
+- Tone should be editorial, sophisticated, and engaging.
+- Provide a catchy 'theme_title' for the carousel (e.g., "The Feline Mystique", "Winter's Embrace").
+- Provide an overall 'recommended_font_size' (between 35 and 65) for text overlaid on these images.
+
+==================================================
+SYSTEM JSON OUTPUT REQUIREMENTS
+==================================================
+Return a JSON object satisfying this schema:
+1. caption: The final Instagram caption for the whole carousel. ZERO EMOJIS.
+2. hashtags: 3-5 highly relevant hashtags.
+3. recommended_font_size: An integer between 35 and 65 for the base font size.
+4. theme_title: A short, catchy title for this curation.
+"""
+
+        client = genai.Client(api_key=api_key)
+        
+        logger.info(f"[Gemini] Requesting carousel analysis for theme '{theme}'...")
+        response = client.models.generate_content(
+            model=config.GEMINI_MODEL,
+            contents=[prompt],
+            config=types.GenerateContentConfig(
+                response_mime_type="application/json",
+                response_schema=CarouselAnalysis,
+                temperature=0.7,
+            )
+        )
+        
+        raw_text = response.text.strip()
+        if raw_text.startswith("```json"):
+            raw_text = raw_text[7:]
+        if raw_text.startswith("```"):
+            raw_text = raw_text[3:]
+        if raw_text.endswith("```"):
+            raw_text = raw_text[:-3]
+            
+        result = json.loads(raw_text.strip())
+        logger.info("[Gemini] Successfully generated carousel analysis!")
+        return result
+
+    except Exception as e:
+        logger.error(f"[Gemini] Error analyzing carousel: {e}")
         return None

@@ -117,3 +117,87 @@ def fetch_random_artwork(posted_ids: set) -> Dict[str, Any]:
             logger.warning(f"❌ Image validation failed for {best_candidate.canonical_id}. Trying next best candidate...")
             
     raise RuntimeError("All top candidates failed image validation (Hard Reject)!")
+
+def fetch_themed_artworks(posted_ids: set, theme: str, count: int, color_tone: str) -> List[Dict[str, Any]]:
+    """
+    Fetches a collection of artworks based on a theme and color tone for a carousel post.
+    """
+    adapters = [
+        AICAdapter(),
+        ClevelandAdapter(),
+        MetAdapter(),
+        RijksmuseumAdapter()
+    ]
+    
+    museum_weights = getattr(config, "MUSEUM_SOURCE_WEIGHTS", DEFAULT_WEIGHTS)
+    min_score = getattr(config, "MIN_QUALITY_SCORE", 50)
+    
+    all_candidates = []
+    
+    # Pass theme and color tone as query
+    query = f"{color_tone} {theme}"
+    
+    for adapter in adapters:
+        logger.info(f"Fetching '{query}' candidates from {adapter.source_id}...")
+        candidates = adapter.fetch_candidates(limit=25, query=query)
+        all_candidates.extend(candidates)
+        
+    logger.info(f"Total raw candidates fetched for theme: {len(all_candidates)}")
+    
+    new_candidates = [c for c in all_candidates if c.canonical_id not in posted_ids]
+    
+    if not new_candidates:
+        logger.warning(f"No new artworks found for theme '{theme}'. Relaxing color tone restriction.")
+        # Try without color tone
+        all_candidates = []
+        for adapter in adapters:
+            candidates = adapter.fetch_candidates(limit=25, query=theme)
+            all_candidates.extend(candidates)
+        new_candidates = [c for c in all_candidates if c.canonical_id not in posted_ids]
+        
+    if not new_candidates:
+        raise RuntimeError(f"No new public domain artworks found for theme '{theme}'!")
+        
+    scored_candidates = []
+    for c in new_candidates:
+        base_score = calculate_quality_score(c, museum_weights)
+        c.quality_score = base_score
+        if c.quality_score >= min_score:
+            scored_candidates.append(c)
+            
+    scored_candidates.sort(key=lambda x: x.quality_score, reverse=True)
+    
+    final_artworks = []
+    import os
+    
+    for i, best_candidate in enumerate(scored_candidates):
+        if len(final_artworks) >= count:
+            break
+            
+        logger.info(f"Testing candidate for carousel: {best_candidate.canonical_id}")
+        
+        # Unique local path for each carousel item
+        local_path = os.path.join(config.DATA_DIR, f"output_raw_{i}.jpg")
+        
+        is_valid = validate_and_download_image(best_candidate.image_url, local_path)
+        if is_valid:
+            logger.info(f"✅ Image downloaded and validated successfully for {best_candidate.canonical_id}")
+            final_artworks.append({
+                "id": best_candidate.canonical_id,
+                "title": best_candidate.title,
+                "artist": best_candidate.artist_name,
+                "date": best_candidate.creation_date,
+                "museum": best_candidate.museum_name,
+                "image_url": best_candidate.image_url,
+                "local_image_path": local_path,
+                "alt_text": f"{best_candidate.title} by {best_candidate.artist_name}, {best_candidate.creation_date}",
+                "medium": best_candidate.medium,
+                "classification": best_candidate.classification,
+                "quality_score": best_candidate.quality_score,
+                "description": best_candidate.description,
+            })
+            
+    if not final_artworks:
+        raise RuntimeError(f"All top candidates failed image validation for theme '{theme}'!")
+        
+    return final_artworks

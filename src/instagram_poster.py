@@ -175,3 +175,95 @@ def get_instagram_permalink(media_id: str, access_token: str) -> str:
     except Exception as e:
         logger.error(f"Exception while fetching permalink: {e}")
         return None
+
+def post_carousel_to_instagram_graph_api(media_urls: list, caption: str, account_id: str, access_token: str) -> str:
+    """
+    Publishes a carousel (multiple images) to Instagram using Graph API.
+    """
+    if not account_id or not access_token:
+        raise ValueError("INSTAGRAM_ACCOUNT_ID and INSTAGRAM_ACCESS_TOKEN must be provided.")
+        
+    import time
+    
+    # 1. Create Item Containers
+    item_container_ids = []
+    for i, url in enumerate(media_urls):
+        container_url = f"{config.GRAPH_API_BASE_URL}/{account_id}/media"
+        payload = {
+            "image_url": url,
+            "is_carousel_item": "true",
+            "access_token": access_token
+        }
+        logger.info(f"Creating carousel item {i+1}/{len(media_urls)}...")
+        res = requests.post(container_url, data=payload, timeout=30)
+        res_data = res.json()
+        
+        if res.status_code != 200 or "id" not in res_data:
+            error_msg = res_data.get("error", {}).get("message", res.text)
+            raise RuntimeError(f"Failed to create carousel item {i+1}: {error_msg}")
+            
+        item_id = res_data["id"]
+        item_container_ids.append(item_id)
+        
+    # Wait for all item containers to be finished
+    logger.info("Waiting for all carousel items to be processed...")
+    for item_id in item_container_ids:
+        status_url = f"{config.GRAPH_API_BASE_URL}/{item_id}?fields=status_code&access_token={access_token}"
+        for _ in range(12):
+            try:
+                status_res = requests.get(status_url, timeout=10)
+                if status_res.status_code == 200:
+                    status = status_res.json().get("status_code", "")
+                    if status == "FINISHED":
+                        break
+            except Exception:
+                pass
+            time.sleep(5)
+            
+    # 2. Create Carousel Container
+    carousel_url = f"{config.GRAPH_API_BASE_URL}/{account_id}/media"
+    carousel_payload = {
+        "media_type": "CAROUSEL",
+        "children": ",".join(item_container_ids),
+        "caption": caption,
+        "access_token": access_token
+    }
+    
+    logger.info("Creating Carousel Container...")
+    c_res = requests.post(carousel_url, data=carousel_payload, timeout=30)
+    c_res_data = c_res.json()
+    
+    if c_res.status_code != 200 or "id" not in c_res_data:
+        error_msg = c_res_data.get("error", {}).get("message", c_res.text)
+        raise RuntimeError(f"Failed to create carousel container: {error_msg}")
+        
+    carousel_id = c_res_data["id"]
+    
+    # Wait for Carousel Container
+    status_url = f"{config.GRAPH_API_BASE_URL}/{carousel_id}?fields=status_code&access_token={access_token}"
+    for _ in range(12):
+        time.sleep(5)
+        try:
+            status_res = requests.get(status_url, timeout=10)
+            if status_res.status_code == 200:
+                if status_res.json().get("status_code", "") == "FINISHED":
+                    break
+        except Exception:
+            pass
+            
+    # 3. Publish Carousel Container
+    publish_url = f"{config.GRAPH_API_BASE_URL}/{account_id}/media_publish"
+    publish_payload = {
+        "creation_id": carousel_id,
+        "access_token": access_token
+    }
+    logger.info("Publishing Carousel to Instagram...")
+    pub_res = requests.post(publish_url, data=publish_payload, timeout=30)
+    pub_data = pub_res.json()
+    
+    if pub_res.status_code != 200 or "id" not in pub_data:
+        error_msg = pub_data.get("error", {}).get("message", pub_res.text)
+        raise RuntimeError(f"Failed to publish carousel: {error_msg}")
+        
+    logger.info(f"Successfully published Carousel! Media ID: {pub_data['id']}")
+    return pub_data["id"]

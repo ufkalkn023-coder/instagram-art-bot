@@ -172,3 +172,28 @@ def confirm_artwork(artwork_id: str, media_id: str):
         logger.info(f"Confirmed artwork {artwork_id} in R2 history (PUBLISHED).")
     else:
         logger.warning(f"Could not find artwork {artwork_id} in history to confirm!")
+
+def get_grid_color_tone() -> str:
+    """
+    Determines the color tone for the current post to ensure Instagram grid harmony (3 items per row).
+    If starting a new row (posts % 3 == 0), picks a new color. Otherwise, uses the active color.
+    """
+    history, etag = load_history_with_etag()
+    posted_count = len(history.get("posted_artworks", []))
+    
+    predefined_tones = ["red", "blue", "green", "yellow", "purple", "brown", "monochrome", "warm", "cool"]
+    
+    current_tone = history.get("active_color_tone", "warm")
+    
+    if posted_count % 3 == 0 or not history.get("active_color_tone"):
+        import random
+        # Pick a new tone that is different from the current one
+        available_tones = [t for t in predefined_tones if t != current_tone]
+        new_tone = random.choice(available_tones)
+        history["active_color_tone"] = new_tone
+        _upload_history(history, etag)
+        logger.info(f"Started new Grid Row. Selected new color tone: {new_tone}")
+        return new_tone
+        
+    logger.info(f"Continuing Grid Row. Using active color tone: {current_tone}")
+    return current_tone

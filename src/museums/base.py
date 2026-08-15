@@ -16,7 +16,7 @@ class MuseumAdapter(ABC):
         pass
         
     @abstractmethod
-    def fetch_candidates(self, limit: int = 20) -> List[NormalizedArtwork]:
+    def fetch_candidates(self, limit: int = 20, query: str = None) -> List[NormalizedArtwork]:
         """
         Fetches candidates from the museum API.
         Does NOT apply quality filtering or duplicate filtering; 

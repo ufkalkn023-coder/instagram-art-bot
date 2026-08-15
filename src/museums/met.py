@@ -32,10 +32,10 @@ class MetAdapter(MuseumAdapter):
     def source_id(self) -> str:
         return "met"
 
-    def fetch_candidates(self, limit: int = 20) -> List[NormalizedArtwork]:
+    def fetch_candidates(self, limit: int = 20, query: str = None) -> List[NormalizedArtwork]:
         candidates = []
         try:
-            search_term = random.choice(MET_SEARCH_TERMS)
+            search_term = query if query else random.choice(MET_SEARCH_TERMS)
             search_url = (
                 f"{config.MET_API_BASE}/search"
                 f"?hasImages=true&isPublicDomain=true&medium=Paintings&q={search_term}"

@@ -101,7 +101,7 @@ def prepare_local_image(local_path: str) -> Tuple[str, str]:
     return local_path, orientation
 
 
-def create_feed_post(raw_image_path: str, artist_name: str, artwork_title: str, output_path: str = config.OUTPUT_IMAGE_PATH) -> str:
+def create_feed_post(raw_image_path: str, artist_name: str, artwork_title: str, output_path: str = config.OUTPUT_IMAGE_PATH, base_font_size: int = 46) -> str:
     """
     Processes a raw image into a 1080x1350 Feed post with a Museum Gallery layout.
     """
@@ -116,18 +116,17 @@ def create_feed_post(raw_image_path: str, artist_name: str, artwork_title: str, 
     canvas = Image.new("RGB", (canvas_w, canvas_h), bg_color)
     draw = ImageDraw.Draw(canvas)
     
-    # 2. Fonts
-    font_bold_path = os.path.join(config.BASE_DIR, "assets", "fonts", "Inter-Bold.ttf")
-    font_regular_path = os.path.join(config.BASE_DIR, "assets", "fonts", "Inter-Regular.ttf")
+    # 2. Fonts (Using Cinzel)
+    font_path = os.path.join(config.BASE_DIR, "assets", "fonts", "Cinzel.ttf")
     
     text_color = (44, 44, 44) # #2C2C2C Antrasit
     
     try:
-        font_artist = ImageFont.truetype(font_bold_path, 52)
-        font_title = ImageFont.truetype(font_regular_path, 46)
-        font_logo = ImageFont.truetype(font_bold_path, 42)
+        font_artist = ImageFont.truetype(font_path, base_font_size + 6)
+        font_title = ImageFont.truetype(font_path, base_font_size)
+        font_logo = ImageFont.truetype(font_path, base_font_size - 4)
     except IOError:
-        logger.warning("Custom fonts not found. Falling back to default.")
+        logger.warning("Cinzel font not found. Falling back to default.")
         font_artist = ImageFont.load_default()
         font_title = ImageFont.load_default()
         font_logo = ImageFont.load_default()

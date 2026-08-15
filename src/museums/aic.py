@@ -12,13 +12,14 @@ class AICAdapter(MuseumAdapter):
     def source_id(self) -> str:
         return "aic"
 
-    def fetch_candidates(self, limit: int = 20) -> List[NormalizedArtwork]:
+    def fetch_candidates(self, limit: int = 20, query: str = None) -> List[NormalizedArtwork]:
         candidates = []
         try:
             page = random.randint(1, 20)
+            search_query = f"painting {query}" if query else "painting"
             url = (
                 f"https://api.artic.edu/api/v1/artworks/search"
-                f"?q=painting&query[term][is_public_domain]=true"
+                f"?q={search_query}&query[term][is_public_domain]=true"
                 f"&fields=id,title,artist_title,date_display,medium_display,image_id,classification_title"
                 f"&limit={limit}&page={page}"
             )
