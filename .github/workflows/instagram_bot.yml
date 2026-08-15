@@ -5,6 +5,12 @@ on:
     # Runs 8 times a day (every 3 hours: 00:00, 03:00, 06:00, 09:00, 12:00, 15:00, 18:00 & 21:00 TR Time)
     - cron: "0 0,3,6,9,12,15,18,21 * * *"
   workflow_dispatch: # Allows manual trigger from GitHub Actions tab
+    inputs:
+      force_carousel:
+        description: 'Force a Carousel post (Ignore schedule)'
+        required: false
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -51,4 +57,8 @@ jobs:
           PINTEREST_REFRESH_TOKEN: ${{ secrets.PINTEREST_REFRESH_TOKEN }}
           PINTEREST_BOARD_ID: ${{ secrets.PINTEREST_BOARD_ID }}
         run: |
-          python main.py
+          if [ "${{ github.event.inputs.force_carousel }}" = "true" ]; then
+            python main.py --force-carousel
+          else
+            python main.py
+          fi
