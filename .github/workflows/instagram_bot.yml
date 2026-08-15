@@ -35,13 +35,6 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements.txt
 
-      - name: Jittering Delay (Rastgele Gecikme)
-        run: |
-          # 1 ile 2 dakika arası rastgele bekleme (60 ile 120 saniye)
-          DELAY=$(( ( RANDOM % 61 ) + 60 ))
-          echo "Bot tespitini önlemek için $DELAY saniye bekleniyor..."
-          sleep $DELAY
-
       - name: Fetch artwork, process image, and post to Instagram
         env:
           INSTAGRAM_ACCOUNT_ID: ${{ secrets.INSTAGRAM_ACCOUNT_ID }}
