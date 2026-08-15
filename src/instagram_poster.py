@@ -52,8 +52,22 @@ def post_to_instagram_graph_api(media_url: str, caption: str, account_id: str, a
     logger.info(f"Media container created successfully. Container ID: {container_id}")
 
     # Wait for Instagram to finish processing media container
-    # Removed delay as requested
-    
+    status_url = f"{config.GRAPH_API_BASE_URL}/{container_id}?fields=status_code&access_token={access_token}"
+    import time
+    for _ in range(12): # Poll for up to 60 seconds
+        time.sleep(5)
+        try:
+            status_res = requests.get(status_url, timeout=10)
+            if status_res.status_code == 200:
+                status = status_res.json().get("status_code", "")
+                if status == "FINISHED":
+                    break
+                elif status == "ERROR":
+                    logger.error("Instagram processing failed for container.")
+                    break
+        except Exception as e:
+            logger.warning(f"Error checking container status: {e}")
+            pass
     # Publish Container
     publish_url = f"{config.GRAPH_API_BASE_URL}/{account_id}/media_publish"
     publish_payload = {
@@ -102,7 +116,20 @@ def post_story_to_instagram_graph_api(image_url: str, account_id: str, access_to
     logger.info(f"Story container created successfully. Container ID: {container_id}")
 
     # Wait for Instagram to finish processing image container
-    # Removed delay as requested
+    status_url = f"{config.GRAPH_API_BASE_URL}/{container_id}?fields=status_code&access_token={access_token}"
+    import time
+    for _ in range(6): # Poll for up to 30 seconds for stories
+        time.sleep(5)
+        try:
+            status_res = requests.get(status_url, timeout=10)
+            if status_res.status_code == 200:
+                status = status_res.json().get("status_code", "")
+                if status == "FINISHED":
+                    break
+                elif status == "ERROR":
+                    break
+        except Exception:
+            pass
 
     # Publish Container
     publish_url = f"{config.GRAPH_API_BASE_URL}/{account_id}/media_publish"

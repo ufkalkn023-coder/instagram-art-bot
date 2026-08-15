@@ -123,9 +123,9 @@ def create_feed_post(raw_image_path: str, artist_name: str, artwork_title: str, 
     text_color = (44, 44, 44) # #2C2C2C Antrasit
     
     try:
-        font_artist = ImageFont.truetype(font_bold_path, 42)
-        font_title = ImageFont.truetype(font_regular_path, 36)
-        font_logo = ImageFont.truetype(font_bold_path, 32)
+        font_artist = ImageFont.truetype(font_bold_path, 52)
+        font_title = ImageFont.truetype(font_regular_path, 46)
+        font_logo = ImageFont.truetype(font_bold_path, 42)
     except IOError:
         logger.warning("Custom fonts not found. Falling back to default.")
         font_artist = ImageFont.load_default()
