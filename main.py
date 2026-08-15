@@ -141,7 +141,15 @@ def run_carousel_post(args):
     hashtags = ai_analysis.get("hashtags", f"#Art #{theme} #ClassicArt") if ai_analysis else f"#{theme}"
     theme_title = ai_analysis.get("theme_title", theme.title()) if ai_analysis else theme.title()
     
-    final_caption = f"⠀\n{theme_title}\n\n{caption}\n\n{hashtags}"
+    # Sırasıyla eser listesini oluştur
+    artwork_list_text = ""
+    for i, art in enumerate(artworks, 1):
+        clean_title = art.get('title', 'Untitled').strip()
+        clean_artist = art.get('artist', 'Unknown Artist').strip()
+        date = art.get('date', 'Unknown')
+        artwork_list_text += f"{i}. {clean_title} - {clean_artist} ({date})\n"
+    
+    final_caption = f"⠀\n{theme_title}\n\n{caption}\n\n🎨 Eserler (Kaydırma Sırasıyla):\n{artwork_list_text}\n{hashtags}"
     
     public_urls = []
     
