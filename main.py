@@ -149,7 +149,7 @@ def run_carousel_post(args):
         date = art.get('date', 'Unknown')
         artwork_list_text += f"{i}. {clean_title} - {clean_artist} ({date})\n"
     
-    final_caption = f"⠀\n{theme_title}\n\n{caption}\n\n🎨 Featured Artworks (In Order):\n{artwork_list_text}\n{hashtags}"
+    final_caption = f"⠀\n{theme_title}\n\n{caption}\n\nFeatured Artworks (In Order):\n{artwork_list_text}\n{hashtags}"
     
     public_urls = []
     
