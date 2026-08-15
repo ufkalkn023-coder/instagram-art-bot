@@ -42,38 +42,72 @@ def main():
     content_type = content_diversity.select_content_type(recent_history)
     artwork["content_type"] = content_type
     
-    # 3.5. Construct Caption (No AI, direct from Museum)
-    logger.info("Constructing caption from raw museum data (AI disabled)...")
+    # 3.5. ✨ Gemini AI Analysis ✨
+    logger.info(f"Analyzing artwork with Google Gemini AI (Content Type: {content_type})...")
+    
+    ai_analysis = gemini_ai.analyze_artwork(
+        raw_image_path, 
+        artwork["title"], 
+        artwork["artist"], 
+        artwork["date"], 
+        artwork["museum"],
+        artwork.get("medium", ""),
+        artwork.get("classification", ""),
+        content_type=content_type
+    )
     
     clean_title = artwork['title'].strip() if artwork.get('title') else "Untitled"
     clean_artist = artwork['artist'].strip() if artwork.get('artist') else "Unknown Artist"
-    ref_num = int(hashlib.md5(f"{clean_title}{clean_artist}".encode('utf-8')).hexdigest()[:8], 16) % 100000
-    catalog_index = f"ARTFOLIO / REF-{ref_num:05d}"
-    artwork["catalog_index"] = catalog_index  # Store internally
     
-    raw_desc = artwork.get('description', '')
-    if not raw_desc:
-        raw_desc = f"A classic piece titled '{clean_title}' by {clean_artist}, created in {artwork.get('date', 'unknown date')}."
+    if ai_analysis:
+        logger.info("Gemini analysis successful! Updating metadata...")
+        # Keep the catalog number logic for internal logging
+        ref_num = int(hashlib.md5(f"{clean_title}{clean_artist}".encode('utf-8')).hexdigest()[:8], 16) % 100000
+        catalog_index = f"ARTFOLIO / REF-{ref_num:05d}"
+        artwork["catalog_index"] = catalog_index  # Store internally, don't display
         
-    # Generate basic hashtags since we aren't using AI
-    artist_hashtag = clean_artist.replace(" ", "").replace("-", "")
-    hashtags = f"#Art #{artist_hashtag} #{artwork.get('museum', '').replace(' ', '')} #ClassicArt #ArtHistory"
+        artwork["caption"] = (
+            f"⠀\n"
+            f"{clean_title}\n"
+            f"\n"
+            f"{clean_artist} - {artwork.get('date', 'Unknown')}\n"
+            f"\n"
+            f"{artwork.get('museum', 'Unknown')}\n"
+            f"\n"
+            f"{ai_analysis.get('caption', '')}\n"
+            f"\n"
+            f"{ai_analysis.get('hashtags', '')}"
+        )
+        artwork["alt_text"] = ai_analysis.get("alt_text", artwork.get("alt_text", ""))
+        if artwork["alt_text"]:
+            logger.info(f"✨ SEO Alt-Text Generated: '{artwork['alt_text']}'")
+    else:
+        logger.info("Gemini analysis skipped or failed. Using fallback templates.")
+        ref_num = int(hashlib.md5(f"{clean_title}{clean_artist}".encode('utf-8')).hexdigest()[:8], 16) % 100000
+        catalog_index = f"ARTFOLIO / REF-{ref_num:05d}"
+        artwork["catalog_index"] = catalog_index
+        
+        raw_desc = artwork.get('description', '')
+        if not raw_desc:
+            raw_desc = f"A classic piece titled '{clean_title}' by {clean_artist}, created in {artwork.get('date', 'unknown date')}."
+            
+        artist_hashtag = clean_artist.replace(" ", "").replace("-", "")
+        hashtags = f"#Art #{artist_hashtag} #{artwork.get('museum', '').replace(' ', '')} #ClassicArt #ArtHistory"
 
-    artwork["caption"] = (
-        f"⠀\n"
-        f"{clean_title}\n"
-        f"\n"
-        f"{clean_artist} - {artwork.get('date', 'Unknown')}\n"
-        f"\n"
-        f"{artwork.get('museum', 'Unknown')}\n"
-        f"\n"
-        f"{raw_desc}\n"
-        f"\n"
-        f"{hashtags}"
-    )
-    # Basic fallback alt text
-    if not artwork.get("alt_text"):
-        artwork["alt_text"] = f"Artwork: {clean_title} by {clean_artist}"
+        artwork["caption"] = (
+            f"⠀\n"
+            f"{clean_title}\n"
+            f"\n"
+            f"{clean_artist} - {artwork.get('date', 'Unknown')}\n"
+            f"\n"
+            f"{artwork.get('museum', 'Unknown')}\n"
+            f"\n"
+            f"{raw_desc}\n"
+            f"\n"
+            f"{hashtags}"
+        )
+        if not artwork.get("alt_text"):
+            artwork["alt_text"] = f"Artwork: {clean_title} by {clean_artist}"
     
     media_type = "IMAGE"
     logger.info("Preparing FEED post...")
