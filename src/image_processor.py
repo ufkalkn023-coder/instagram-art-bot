@@ -9,7 +9,7 @@ import boto3
 from datetime import datetime
 from botocore.exceptions import ClientError
 from typing import Tuple, Optional, List, Dict, Any
-from PIL import Image, ImageOps, ImageDraw, ImageFilter
+from PIL import Image, ImageOps, ImageDraw, ImageFilter, ImageFont
 
 import config
 
@@ -101,84 +101,85 @@ def prepare_local_image(local_path: str) -> Tuple[str, str]:
     return local_path, orientation
 
 
-def create_feed_post(raw_image_path: str, output_path: str = config.OUTPUT_IMAGE_PATH) -> str:
+def create_feed_post(raw_image_path: str, artist_name: str, artwork_title: str, output_path: str = config.OUTPUT_IMAGE_PATH) -> str:
     """
-    Processes a vertical/square image into a 1080x1350 Feed post.
+    Processes a raw image into a 1080x1350 Feed post with a Museum Gallery layout.
     """
-    logger.info("Processing feed artwork image...")
+    logger.info("Processing feed artwork image with Museum Layout...")
     img = Image.open(raw_image_path)
     
     canvas_w = config.TARGET_WIDTH   # 1080
     canvas_h = config.TARGET_HEIGHT  # 1350
-
-    img_aspect = img.width / img.height
-    target_aspect = canvas_w / canvas_h
-
-    # Image Framing Intelligence: If image is very close to 4:5, use immersive crop
-    if abs(img_aspect - target_aspect) <= 0.05:
-        logger.info(f"Framing decision: Aspect ratio {img_aspect:.3f} is close to ideal {target_aspect:.3f}. Applying immersive full-screen crop.")
-        if img_aspect > target_aspect:
-            new_h = canvas_h
-            new_w = int(canvas_h * img_aspect)
-        else:
-            new_w = canvas_w
-            new_h = int(canvas_w / img_aspect)
-            
-        canvas = img.resize((new_w, new_h), Image.Resampling.LANCZOS)
-        crop_left = (new_w - canvas_w) // 2
-        crop_top = (new_h - canvas_h) // 2
-        canvas = canvas.crop((crop_left, crop_top, crop_left + canvas_w, crop_top + canvas_h))
-    else:
-        logger.info(f"Framing decision: Aspect ratio {img_aspect:.3f} requires padding. Applying background and frame.")
-        bg = img.copy()
+    
+    # 1. Background
+    bg_color = (244, 241, 234) # #F4F1EA Museum Cream
+    canvas = Image.new("RGB", (canvas_w, canvas_h), bg_color)
+    draw = ImageDraw.Draw(canvas)
+    
+    # 2. Fonts
+    font_bold_path = os.path.join(config.BASE_DIR, "assets", "fonts", "Inter-Bold.ttf")
+    font_regular_path = os.path.join(config.BASE_DIR, "assets", "fonts", "Inter-Regular.ttf")
+    
+    text_color = (44, 44, 44) # #2C2C2C Antrasit
+    
+    try:
+        font_artist = ImageFont.truetype(font_bold_path, 42)
+        font_title = ImageFont.truetype(font_regular_path, 36)
+        font_logo = ImageFont.truetype(font_bold_path, 32)
+    except IOError:
+        logger.warning("Custom fonts not found. Falling back to default.")
+        font_artist = ImageFont.load_default()
+        font_title = ImageFont.load_default()
+        font_logo = ImageFont.load_default()
         
-        if img_aspect > target_aspect:
-            new_h = canvas_h
-            new_w = int(canvas_h * img_aspect)
-        else:
-            new_w = canvas_w
-            new_h = int(canvas_w / img_aspect)
-
-        bg = bg.resize((new_w, new_h), Image.Resampling.LANCZOS)
-        crop_left = (new_w - canvas_w) // 2
-        crop_top = (new_h - canvas_h) // 2
-        bg = bg.crop((crop_left, crop_top, crop_left + canvas_w, crop_top + canvas_h))
-        bg = bg.filter(ImageFilter.GaussianBlur(radius=config.BLUR_RADIUS))
-
-        dark_overlay = Image.new("RGB", (canvas_w, canvas_h), (0, 0, 0))
-        canvas = Image.blend(bg, dark_overlay, alpha=0.25)
-
-        style = random.choice(FRAME_STYLES)
-        logger.info(f"Applying frame style: '{style}'")
-
-        border_size = random.randint(10, 20) if style in ("palette_border", "gradient_border") else 0
-
-        padding = 50
-        max_w = canvas_w - (padding + border_size) * 2
-        max_h = canvas_h - (padding + border_size) * 2
-
-        if img_aspect > max_w / max_h:
-            paint_w = max_w
-            paint_h = int(paint_w / img_aspect)
-        else:
-            paint_h = max_h
-            paint_w = int(paint_h * img_aspect)
-
-        painting = img.resize((paint_w, paint_h), Image.Resampling.LANCZOS)
-
-        if style == "palette_border":
-            painting = _apply_palette_border(painting, border_size=border_size)
-        elif style == "gradient_border":
-            painting = _apply_gradient_border(painting, border_size=border_size)
-        elif style == "clean":
-            painting = ImageOps.expand(painting, border=6, fill=(255, 255, 255))
-
-        paste_x = (canvas_w - painting.width) // 2
-        paste_y = (canvas_h - painting.height) // 2
-        canvas.paste(painting, (paste_x, paste_y))
+    # 3. Draw Text
+    margin_x = 80
+    margin_top = 100
+    
+    # Convert artist to uppercase
+    artist_upper = artist_name.upper() if artist_name else "UNKNOWN ARTIST"
+    title_text = artwork_title if artwork_title else "Untitled"
+    
+    # Handle long titles (truncate with ellipsis)
+    if len(title_text) > 45:
+        title_text = title_text[:42] + "..."
+        
+    draw.text((margin_x, margin_top), artist_upper, font=font_artist, fill=text_color)
+    draw.text((margin_x, margin_top + 55), title_text, font=font_title, fill=text_color)
+    
+    # Bottom logo
+    logo_text = "artfolio"
+    logo_bbox = draw.textbbox((0, 0), logo_text, font=font_logo)
+    logo_w = logo_bbox[2] - logo_bbox[0]
+    draw.text(((canvas_w - logo_w) // 2, canvas_h - 100), logo_text, font=font_logo, fill=text_color)
+    
+    # 4. Artwork Area
+    img_area_y_start = 220
+    img_area_y_end = 1180
+    max_w = canvas_w - (margin_x * 2) # 920
+    max_h = img_area_y_end - img_area_y_start # 960
+    
+    img_aspect = img.width / img.height
+    
+    if img_aspect > max_w / max_h:
+        paint_w = max_w
+        paint_h = int(paint_w / img_aspect)
+    else:
+        paint_h = max_h
+        paint_w = int(paint_h * img_aspect)
+        
+    painting = img.resize((paint_w, paint_h), Image.Resampling.LANCZOS)
+    
+    # Subtle elegant border to separate from background
+    painting = ImageOps.expand(painting, border=2, fill=(210, 205, 195))
+    
+    # Center the painting in the available area
+    paste_x = (canvas_w - painting.width) // 2
+    paste_y = img_area_y_start + (max_h - painting.height) // 2
+    canvas.paste(painting, (paste_x, paste_y))
 
     canvas.save(output_path, "JPEG", quality=95)
-    logger.info(f"Feed post image processed and saved to: {output_path}")
+    logger.info(f"Feed post image processed (Museum Layout) and saved to: {output_path}")
     return output_path
 
 
