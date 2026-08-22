@@ -2,7 +2,15 @@ import pytest
 from datetime import datetime, timedelta, timezone
 from src.models import NormalizedArtwork, normalize_artwork_id
 from src import history_tracker
-from src.museums import AICAdapter, MetAdapter, ClevelandAdapter, RijksmuseumAdapter
+from src.museums import (
+    AICAdapter,
+    ClevelandAdapter,
+    EuropeanaAdapter,
+    GettyAdapter,
+    MetAdapter,
+    RijksmuseumAdapter,
+    SmithsonianAdapter,
+)
 from src.quality_filter import calculate_quality_score, validate_and_download_image
 import os
 
@@ -193,7 +201,15 @@ def test_image_validator_invalid_url():
         os.remove("test.jpg")
 
 def test_adapters_instantiation():
-    adapters = [AICAdapter(), MetAdapter(), ClevelandAdapter(), RijksmuseumAdapter()]
-    assert len(adapters) == 4
+    adapters = [
+        AICAdapter(),
+        MetAdapter(),
+        ClevelandAdapter(),
+        RijksmuseumAdapter(),
+        SmithsonianAdapter(),
+        GettyAdapter(),
+        EuropeanaAdapter(),
+    ]
+    assert len(adapters) == 7
     for a in adapters:
         assert isinstance(a.source_id, str)

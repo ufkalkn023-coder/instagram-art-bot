@@ -4,7 +4,7 @@ Bu proje, doğrulanmış kamu malı/açık erişimli müze eserlerini seçer, g�
 
 ## Ne yapar?
 
-- Art Institute of Chicago, Metropolitan Museum of Art, Cleveland Museum of Art ve Rijksmuseum kaynaklarından eser adayları toplar.
+- Art Institute of Chicago, Metropolitan Museum of Art, Cleveland Museum of Art, Rijksmuseum, Smithsonian Institution, J. Paul Getty Museum ve Europeana kaynaklarından eser adayları toplar.
 - Yalnız doğrulanmış public-domain veya open-access hak bilgisi olan adayları kabul eder. Chicago kaynağında doğrulanmış public-domain eserler için yüksek çözünürlüklü 1686px IIIF türevi kullanılır.
 - Duplicate, hak, kalite ve çeşitlilik filtrelerinden geçen görselleri güvenli biçimde indirir; HTTPS-only erişim, private-network/SSRF koruması, redirect yeniden doğrulaması, sınırlı indirme ve Pillow doğrulaması uygular.
 - Gerçek indirilen görselin boyutlarını tekrar ölçer ve bulanık arka planlı 1080×1350 feed görseli oluşturur.
@@ -113,6 +113,8 @@ Dry-run strict offline değildir: `GOOGLE_GEMINI_API_KEY` varsa Gemini’ye dı�
 | `CLOUDFLARE_R2_PUBLIC_URL` | R2 media upload kullanılıyorsa gerekli | Instagram’ın erişeceği R2 public URL tabanı |
 | `GOOGLE_GEMINI_API_KEY` | Opsiyonel | Gemini caption/alt-text üretimi; yoksa fallback kullanılır |
 | `RIJKSMUSEUM_API_KEY` | Opsiyonel | Rijksmuseum adapter’ını etkinleştirir; yoksa bu kaynak atlanır |
+| `SMITHSONIAN_API_KEY` | Opsiyonel | Smithsonian Institution Open Access API’sini etkinleştirir; yoksa bu kaynak atlanır |
+| `EUROPEANA_API_KEY` | Opsiyonel | Europeana API’sini etkinleştirir; yoksa bu kaynak atlanır |
 | `PINTEREST_APP_ID` | Opsiyonel | Pinterest OAuth app ID; dört Pinterest değeri birlikte gerekir |
 | `PINTEREST_APP_SECRET` | Opsiyonel | Pinterest OAuth app secret |
 | `PINTEREST_REFRESH_TOKEN` | Opsiyonel | Pinterest refresh token |

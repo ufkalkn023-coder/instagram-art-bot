@@ -7,7 +7,15 @@ import secrets
 from collections import Counter
 from dataclasses import dataclass, field, replace
 from typing import Dict, Any, List
-from src.museums import AICAdapter, ClevelandAdapter, MetAdapter, RijksmuseumAdapter
+from src.museums import (
+    AICAdapter,
+    ClevelandAdapter,
+    EuropeanaAdapter,
+    GettyAdapter,
+    MetAdapter,
+    RijksmuseumAdapter,
+    SmithsonianAdapter,
+)
 from src.quality_filter import (
     ImageValidationResult,
     calculate_measurement_coverage,
@@ -25,13 +33,29 @@ DEFAULT_WEIGHTS = {
     "aic": 15,
     "rijksmuseum": 15,
     "met": 15,
-    "cleveland": 15
+    "cleveland": 15,
+    "smithsonian": 15,
+    "getty": 15,
+    "europeana": 15,
 }
 
 MIN_CAROUSEL_ITEMS = 2
 MAX_CAROUSEL_ITEMS = 10
 MIN_SELECTION_ITEMS = 1
 SELECTION_SEED_ENV = "ARTFOLIO_SELECTION_SEED"
+
+
+def _museum_adapters():
+    """Build the complete, fault-isolated source registry for one selection run."""
+    return [
+        AICAdapter(),
+        ClevelandAdapter(),
+        MetAdapter(),
+        RijksmuseumAdapter(),
+        SmithsonianAdapter(),
+        GettyAdapter(),
+        EuropeanaAdapter(),
+    ]
 
 
 class CarouselSelectionError(RuntimeError):
@@ -262,12 +286,7 @@ def fetch_random_artwork(posted_ids: set) -> Dict[str, Any]:
     5. Validates the top candidate's image.
     6. Returns the best valid artwork as a dictionary compatible with the rest of the pipeline.
     """
-    adapters = [
-        AICAdapter(),
-        ClevelandAdapter(),
-        MetAdapter(),
-        RijksmuseumAdapter()
-    ]
+    adapters = _museum_adapters()
     
     museum_weights = getattr(config, "MUSEUM_SOURCE_WEIGHTS", DEFAULT_WEIGHTS)
     min_score = getattr(config, "MIN_QUALITY_SCORE", 50)
@@ -290,10 +309,14 @@ def fetch_random_artwork(posted_ids: set) -> Dict[str, Any]:
             selection_run_seed.source,
             selection_run_seed.fingerprint,
         )
-        candidates = adapter.fetch_candidates(
-            limit=15,
-            rng=_museum_adapter_rng(selection_run_seed, adapter.source_id, "single_post", None),
-        )
+        try:
+            candidates = adapter.fetch_candidates(
+                limit=15,
+                rng=_museum_adapter_rng(selection_run_seed, adapter.source_id, "single_post", None),
+            )
+        except Exception:
+            logger.exception("Museum source %s failed; continuing with remaining sources.", adapter.source_id)
+            continue
         all_candidates.extend(candidates)
         
     logger.info(f"Total raw candidates fetched: {len(all_candidates)}")
@@ -509,7 +532,7 @@ def fetch_themed_artworks(posted_ids: set, theme: str, count: int, color_tone: s
     def add_candidates(query: str, limit: int, stage_name: str) -> None:
         fallback_stages.append(stage_name)
         logger.info("Carousel selection stage %s: query=%r, limit=%s", stage_name, query, limit)
-        adapters = [AICAdapter(), ClevelandAdapter(), MetAdapter(), RijksmuseumAdapter()]
+        adapters = _museum_adapters()
         for adapter in adapters:
             logger.debug(
                 "museum_fetch source=%s stage=%s seed_source=%s seed_fingerprint=%s",
@@ -518,11 +541,16 @@ def fetch_themed_artworks(posted_ids: set, theme: str, count: int, color_tone: s
                 selection_run_seed.source,
                 selection_run_seed.fingerprint,
             )
-            for candidate in adapter.fetch_candidates(
-                limit=limit,
-                query=query,
-                rng=_museum_adapter_rng(selection_run_seed, adapter.source_id, stage_name, query),
-            ):
+            try:
+                candidates = adapter.fetch_candidates(
+                    limit=limit,
+                    query=query,
+                    rng=_museum_adapter_rng(selection_run_seed, adapter.source_id, stage_name, query),
+                )
+            except Exception:
+                logger.exception("Museum source %s failed during %s; continuing.", adapter.source_id, stage_name)
+                continue
+            for candidate in candidates:
                 observability.raw_candidates += 1
                 if candidate.canonical_id in posted_ids:
                     observability.reject("history_duplicate")
