@@ -158,19 +158,32 @@ def analyze_visual_diversity(candidate_features: Dict[str, str], recent_history:
             
     return score
 
-def analyze_discovery_score(candidate_features: Dict[str, str], base_score: float) -> float:
-    """
-    Adds a small discovery/hidden gem bonus if the artwork has a high base score
-    but belongs to an unknown or less common artist, rewarding serendipity.
-    """
-    bonus = 0.0
-    if base_score >= 80: # Must be high quality to be a 'hidden gem'
-        if candidate_features["artist_name"] == "unknown Artist" or candidate_features["artist_name"] == "unknown":
-            bonus += 5.0 # Quality unknown artist
-        else:
-            # We assume it's a known artist but if they haven't been featured recently, give a tiny bump
-            bonus += 2.0 
-    return bonus
+def _normalized_artist_key(value: object) -> str | None:
+    if not isinstance(value, str):
+        return None
+    normalized = " ".join(value.split()).casefold()
+    if normalized in {"", "unknown", "unknown artist"}:
+        return None
+    return normalized
+
+
+def analyze_discovery_score(
+    candidate_features: Dict[str, str], base_score: float, recent_history: List[Dict[str, Any]]
+) -> float:
+    """Reward high-quality artists not featured in recent published history."""
+    if base_score < 80:
+        return 0.0
+
+    artist_key = _normalized_artist_key(candidate_features.get("artist_name"))
+    if artist_key is None:
+        return 0.0
+
+    recent_artist_keys = {
+        history_artist_key
+        for post in recent_history[-15:]
+        if (history_artist_key := _normalized_artist_key(post.get("artist_name"))) is not None
+    }
+    return 0.0 if artist_key in recent_artist_keys else 2.0
 
 def select_content_type(recent_history: List[Dict[str, Any]]) -> str:
     """

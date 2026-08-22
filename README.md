@@ -1,92 +1,174 @@
-# 🎨 Instagram Sanat Müzesi Paylaşım Otomasyonu
+# Instagram Sanat Müzesi Paylaşım Otomasyonu
 
-X (Twitter) üzerindeki sanat müzesi hesaplarından esinlenerek hazırlanan; dünya müzelerinden (Chicago Art Institute, Met Museum vb.) kamu malı yüksek çözünürlüklü tabloları otomatik çeken, **bulanık arka plan (Blur Passe-partout)** çerçeve ile işleyen ve **Resmi Meta Instagram Graph API** kullanarak GitHub Actions üzerinde otomatik paylaşan otomasyon sistemi.
+Bu proje, doğrulanmış kamu malı/açık erişimli müze eserlerini seçer, güvenli biçimde indirip 1080×1350 Instagram görseline dönüştürür ve resmi Meta Instagram Graph API üzerinden paylaşır. GitHub Actions zamanlaması, aynı checkout üzerinde önce compile ve test doğrulamasını tamamlar; yalnız ardından production bot çalışır.
 
----
+## Ne yapar?
 
-## 🌟 Öne Çıkan Özellikler
+- Art Institute of Chicago, Metropolitan Museum of Art, Cleveland Museum of Art ve Rijksmuseum kaynaklarından eser adayları toplar.
+- Yalnız doğrulanmış public-domain veya open-access hak bilgisi olan adayları kabul eder. Chicago kaynağında doğrulanmış public-domain eserler için yüksek çözünürlüklü 1686px IIIF türevi kullanılır.
+- Duplicate, hak, kalite ve çeşitlilik filtrelerinden geçen görselleri güvenli biçimde indirir; HTTPS-only erişim, private-network/SSRF koruması, redirect yeniden doğrulaması, sınırlı indirme ve Pillow doğrulaması uygular.
+- Gerçek indirilen görselin boyutlarını tekrar ölçer ve bulanık arka planlı 1080×1350 feed görseli oluşturur.
+- Gemini kullanılabiliyorsa caption, alt metin ve görsel metin önerisi üretir; anahtar yoksa veya istek başarısız olursa yerel fallback caption kullanır.
+- History bilgisini Cloudflare R2 üzerinde tutar; Instagram publish öncesinde durable kilit kullanarak olası duplicate paylaşımları engeller.
 
-- **%100 Resmi Meta API**: `instagrapi` veya şifre ile giriş kullanılmaz. Meta Graph API sayesinde hesabınız engellenmez veya doğrulamaya takılmaz.
-- **Estetik Bulanık Arka Plan (Blur Passe-partout)**: Görseller dikey Instagram formatına (1080x1350 / 4:5) getirilirken, tablonun kendisi arka planda hafifçe büyütülüp bulanıklaştırılır.
-- **Yalın Sergi Kartı Formatı**: Ekstra yapay zeka metinleri veya `#hashtag` kalabalığı içermez. Sade sergi kartı görünümündedir:
-  ```text
-  🎨 [Eser Adı]
-  👨‍🎨 [Sanatçı Adı]
-  🗓️ [Yapım Yılı]
-  🏛️ [Müze Arşivi]
-  ```
-- **Otomatik Geçmiş Takibi & Git Commit**: Daha önce paylaşılan eserler `data/posted_history.json` dosyasına kaydedilir ve her GitHub Actions çalışması sonunda otomatik repo'ya `git commit & push` yapılır.
+## Çalışma modları
 
----
+Normal koşuda bot UTC saate göre çalışır:
 
-## 🚀 Kurulum Rehberi
+- UTC 12:00 ve 21:00: sekiz eserlik, rastgele temalı carousel.
+- Diğer zamanlar: tek eser paylaşımı.
+- `--force-carousel`: zamanı dikkate almadan sekiz eserlik carousel çalıştırır.
 
-### 1. Gereksinimleri Yükleme ve Yerel Test (`--dry-run`)
+Carousel teması kod içindeki tema listesinden rastgele seçilir. Carousel için tamamlanmış sekiz aday gerekir; eksik carousel publish edilmez.
 
-Bilgisayarınızda test etmek için terminal açın ve proje dizininde şu komutları çalıştırın:
+Pinterest desteği opsiyoneldir ve yalnız tek-eser akışında `--pinterest` flag’iyle çağrılır. Scheduled workflow bu flag’i vermediği için scheduled production koşuları Pinterest’e otomatik paylaşım yapmaz.
+
+## Zamanlama ve GitHub Actions
+
+Workflow cron değeri değişmeden şudur:
+
+```text
+0 0,3,6,9,12,15,18,21 * * *
+```
+
+GitHub Actions cron ifadeleri UTC’dir. Türkiye saati UTC+3 kabul edildiğinde koşular 03:00, 06:00, 09:00, 12:00, 15:00, 18:00, 21:00 ve ertesi gün 00:00 TSİ’ye karşılık gelir.
+
+Workflow manuel olarak da **Actions → Instagram Art Bot Scheduler → Run workflow** üzerinden başlatılabilir. `force_carousel` girdisi `--force-carousel` olarak iletilir. `instagram-bot` concurrency grubu ve `cancel-in-progress: false` ayarı, aktif bir koşu varken yeni koşuların publish yarışına girmemesini sağlar.
+
+Her workflow invocation şu sırayla ilerler:
+
+```text
+dependency install
+→ compile validation
+→ pytest
+→ production bot
+```
+
+Install, compile veya test adımı başarısız olursa production adımı çalışmaz. Production secret’ları yalnız publish adımına verilir; compile ve test adımları secret almaz.
+
+## History ve duplicate koruması
+
+History, Git commit/push ile değil Cloudflare R2’de saklanır. Kayıtların kısa lifecycle’ı şöyledir:
+
+```text
+PENDING → PUBLISHING → PUBLISHED
+            ↘ PENDING (kesin publish hatası)
+                    ↘ AMBIGUOUS
+PENDING → EXPIRED
+```
+
+`PENDING` rezervasyonları güvenle stale olduğu kanıtlanırsa expire edilebilir. Instagram publish sınırından hemen önce R2’ye yazılan `PUBLISHING` state’i otomatik expire edilmez; publish sonucu belirsizse `AMBIGUOUS` da kalıcı duplicate kilididir. Bu yaklaşım, yeniden paylaşma riskini availability’ye tercih eder.
+
+## Kurulum ve yerel kullanım
+
+Fresh checkout için:
 
 ```bash
-# Bağımlılıkları yükleyin
-pip install -r requirements.txt
+python -m pip install --upgrade pip
+python -m pip install -r requirements.txt
+python -m pip install pytest
+```
 
-# Instagram'a istek atmadan yerel test gerçekleştirin
+Önemli CLI seçenekleri:
+
+```bash
+# Yerel çıktı üretir, publish mutasyonlarını yapmaz
 python main.py --dry-run
+
+# Sekiz eserlik carousel çalıştırır
+python main.py --force-carousel
+
+# Tek-eser paylaşımından sonra Pinterest cross-post ister
+python main.py --pinterest
+
+# Tek-eser Instagram media URL'sini verilen public URL ile override eder
+python main.py --image-url https://example.com/artwork.jpg
 ```
 
-Bu işlem sonucunda `data/output_post.jpg` dosyası oluşacak ve estetik bulanık arka planlı görseli inceleyebileceksiniz.
+`--image-url` müze seçimini, indirmeyi veya yerel görsel işlemesini bypass etmez; tek-eser publish aşamasında R2 upload yerine kullanılacak public Instagram media URL’sini override eder. Carousel akışı kendi görsellerini R2’ye yükler.
 
----
+### Dry-run sözleşmesi
 
-### 2. Meta Access Token'ınızı 60 Günlük Token'a Çevirme
+`--dry-run` history okuyabilir; müze ve görsel GET istekleri yapabilir; güvenli görsel doğrulaması, Gemini/fallback caption üretimi ve yerel görüntü oluşturmayı çalıştırabilir.
 
-Meta Graph API Explorer'dan aldığınız varsayılan Access Token'lar 1-2 saatliktir. Bunu 60 günlük süresiz yenilenebilir token'a çevirmek için projedeki yardımcı betiği çalıştırın:
+Dry-run şunları yapmaz:
+
+- R2 history mutate/reserve/confirm etmez veya stale recovery yazısı yapmaz.
+- Production media’yı R2’ye yüklemez.
+- Instagram container oluşturmaz ya da publish etmez.
+- Pinterest’e publish etmez.
+
+Dry-run strict offline değildir: `GOOGLE_GEMINI_API_KEY` varsa Gemini’ye dış inference isteği yapabilir.
+
+## Ortam değişkenleri
+
+| Variable | Gerekli mi? | Amaç |
+| --- | --- | --- |
+| `INSTAGRAM_ACCOUNT_ID` | Production publish için gerekli | Instagram Business/Creator account ID |
+| `INSTAGRAM_ACCESS_TOKEN` | Production publish için gerekli | Meta Graph API erişim token’ı |
+| `CLOUDFLARE_R2_ACCOUNT_ID` | Production history ve R2 media için gerekli | R2 account ID |
+| `CLOUDFLARE_R2_ACCESS_KEY_ID` | Production history ve R2 media için gerekli | R2 access key |
+| `CLOUDFLARE_R2_SECRET_ACCESS_KEY` | Production history ve R2 media için gerekli | R2 secret key |
+| `CLOUDFLARE_R2_BUCKET_NAME` | Production history ve R2 media için gerekli | History ve media bucket’ı |
+| `CLOUDFLARE_R2_PUBLIC_URL` | R2 media upload kullanılıyorsa gerekli | Instagram’ın erişeceği R2 public URL tabanı |
+| `GOOGLE_GEMINI_API_KEY` | Opsiyonel | Gemini caption/alt-text üretimi; yoksa fallback kullanılır |
+| `RIJKSMUSEUM_API_KEY` | Opsiyonel | Rijksmuseum adapter’ını etkinleştirir; yoksa bu kaynak atlanır |
+| `PINTEREST_APP_ID` | Opsiyonel | Pinterest OAuth app ID; dört Pinterest değeri birlikte gerekir |
+| `PINTEREST_APP_SECRET` | Opsiyonel | Pinterest OAuth app secret |
+| `PINTEREST_REFRESH_TOKEN` | Opsiyonel | Pinterest refresh token |
+| `PINTEREST_BOARD_ID` | Opsiyonel | Hedef Pinterest board ID |
+| `PUBLIC_IMAGE_URL` | Opsiyonel, yalnız tek-eser | R2 upload yerine kullanılacak varsayılan public media URL |
+| `ARTFOLIO_SELECTION_SEED` | Opsiyonel | Seçim RNG’si için açık seed |
+| `GITHUB_RUN_ID` | GitHub tarafından otomatik | Açık seed yoksa GitHub koşusunun seçim seed’i |
+
+Instagram publish ile R2-backed history zorunludur. `CLOUDFLARE_R2_PUBLIC_URL`, carousel ve normal R2 media upload akışında gerekir; tek-eser akışında `--image-url` veya `PUBLIC_IMAGE_URL` verilirse upload yerine bu URL kullanılır. Pinterest flag’i kullanılmadığında Pinterest credentials gerekli değildir.
+
+## Selection reproducibility
+
+Seçim seed önceliği şöyledir:
+
+```text
+ARTFOLIO_SELECTION_SEED
+→ GITHUB_RUN_ID
+→ local invocation entropy
+```
+
+Örneğin `ARTFOLIO_SELECTION_SEED=test-123`, aynı history, config ve API response/dataset altında müze candidate-pool rastgeleliğini ve tek-eser serendipity seçimini tekrar üretmeye yardımcı olur. Bu tüm botu deterministic yapmaz: carousel teması, content type, grid tone ve image border bu seed kapsamının dışındadır.
+
+## Geliştirici doğrulaması
 
 ```bash
-python get_long_lived_token.py
+pytest -q
+python3 -m compileall -q main.py src tests
 ```
 
-Sizden Meta App ID, Meta App Secret ve Kısa ömürlü Token'ınızı isteyecek ve çıktı olarak **60 Günlük Long-Lived Token** verecektir.
+`pytest.ini` repo kökünü import path’e eklediği için `PYTHONPATH=.` ayarlamak gerekmez.
 
----
+## Mimari özeti
 
-### 3. GitHub Secrets Tanımlama
+```text
+GitHub Actions
+→ selection
+→ rights / duplicate / quality filters
+→ secure image validation
+→ Gemini or fallback caption
+→ image processing
+→ R2 reservation / media upload
+→ Instagram publishing
+→ history confirmation
+→ optional Pinterest (single post only)
+```
 
-Projeyi GitHub reponuza yükledikten sonra, GitHub sayfanızda:
-
-1. **Settings** -> **Secrets and variables** -> **Actions** sekmesine gidin.
-2. **New repository secret** butonuna tıklayın ve şu 2 gizli değişkeni ekleyin:
-
-- `INSTAGRAM_ACCOUNT_ID`: Instagram İşletme / İçerik Üretici Hesap ID'niz (Meta Graph API'den alınan numerik ID).
-- `INSTAGRAM_ACCESS_TOKEN`: 2. adımda oluşturduğunuz 60 Günlük Long-Lived Access Token.
-
----
-
-### 4. GitHub Actions Zamanlayıcısı (Cron Schedule)
-
-Otomasyon `.github/workflows/instagram_bot.yml` dosyası sayesinde varsayılan olarak **her gün saat 12:00 ve 21:00 (TSİ)** olmak üzere günde 2 kez çalışır.
-
-İstediğiniz zaman GitHub reponuzun **Actions** sekmesinden **Instagram Art Bot Scheduler** -> **Run workflow** butonuna basarak manuel olarak da tetikleyebilirsiniz.
-
----
-
-## 📁 Proje Dosya Yapısı
+## Dosya yapısı
 
 ```text
 .
-├── .github/
-│   └── workflows/
-│       └── instagram_bot.yml    # GitHub Actions Otomasyon Akışı
-├── data/
-│   ├── output_post.jpg          # İşlenen son dikey görsel
-│   └── posted_history.json      # Paylaşılan eserlerin tarihçesi
-├── src/
-│   ├── art_fetcher.py           # Müze API'lerinden kamu malı eser çekici
-│   ├── image_processor.py       # Bulanık arka plan (Blur Passe-partout) modülü
-│   ├── instagram_poster.py      # Resmi Instagram Graph API modülü
-│   └── history_tracker.py       # JSON geçmiş yöneticisi
-├── config.py                    # Boyut ve sabit konfigürasyonlar
-├── get_long_lived_token.py      # 60 Günlük Token dönüştürücü betik
-├── main.py                      # Ana orkestrasyon dosyası
-├── requirements.txt             # Python bağımlılıkları (requests, Pillow)
-└── README.md                    # Kurulum ve kullanım rehberi
+├── .github/workflows/instagram_bot.yml  # Schedule, validation gate, production run
+├── src/                                 # Selection, history, processing and API adapters
+├── tests/                               # Networkless unit/regression suite
+├── config.py                            # Runtime constants
+├── main.py                              # CLI orchestration
+├── requirements.txt                     # Runtime dependencies
+├── pytest.ini                           # Pytest import-path configuration
+└── README.md
 ```

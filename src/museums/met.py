@@ -32,10 +32,16 @@ class MetAdapter(MuseumAdapter):
     def source_id(self) -> str:
         return "met"
 
-    def fetch_candidates(self, limit: int = 20, query: str = None) -> List[NormalizedArtwork]:
+    def fetch_candidates(
+        self,
+        limit: int = 20,
+        query: str = None,
+        rng: random.Random | None = None,
+    ) -> List[NormalizedArtwork]:
         candidates = []
         try:
-            search_term = query if query else random.choice(MET_SEARCH_TERMS)
+            random_source = rng or random
+            search_term = query if query else random_source.choice(MET_SEARCH_TERMS)
             search_url = (
                 f"{config.MET_API_BASE}/search"
                 f"?hasImages=true&isPublicDomain=true&medium=Paintings&q={search_term}"
@@ -51,7 +57,8 @@ class MetAdapter(MuseumAdapter):
             if not object_ids:
                 return candidates
 
-            sample_ids = random.sample(object_ids, min(limit, len(object_ids)))
+            sample_ids = random_source.sample(object_ids, min(limit, len(object_ids)))
+            logger.debug("[Met] Candidate pool sample_size=%s seeded=%s", len(sample_ids), rng is not None)
 
             for obj_id in sample_ids:
                 detail_url = f"{config.MET_API_BASE}/objects/{obj_id}"
@@ -60,7 +67,8 @@ class MetAdapter(MuseumAdapter):
                     continue
 
                 detail = d_res.json()
-                if not detail.get("isPublicDomain"):
+                if detail.get("isPublicDomain") is not True:
+                    logger.info(f"[Met] Rejected {obj_id}: rights not confirmed.")
                     continue
 
                 title = detail.get("title") or "Untitled"
@@ -86,7 +94,9 @@ class MetAdapter(MuseumAdapter):
                     classification=classification,
                     museum_name="The Metropolitan Museum of Art",
                     image_url=image_url,
-                    is_public_domain=True
+                    license="The Met Open Access",
+                    is_public_domain=True,
+                    rights_status="CONFIRMED_PUBLIC_DOMAIN",
                 )
                 candidates.append(artwork)
 

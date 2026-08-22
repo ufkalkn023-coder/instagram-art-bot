@@ -12,10 +12,35 @@ from src import art_fetcher, image_processor, instagram_poster, history_tracker,
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 logger = logging.getLogger(__name__)
 
+
+def _get_grid_color_tone_for_run(dry_run: bool) -> str:
+    """Read grid state without allowing dry-run to create a new row."""
+    if dry_run:
+        return history_tracker.get_grid_color_tone(read_only=True)
+    return history_tracker.get_grid_color_tone()
+
+
+def _log_dry_run_success(mode: str, artworks: list[dict], artifact_paths: list[str]) -> None:
+    """Report the local artifacts produced without invoking publish mutations."""
+    selected_ids = ",".join(artwork["id"] for artwork in artworks)
+    quality_summary = ",".join(
+        f"{artwork['id']}:quality={artwork.get('quality_score')} selection={artwork.get('selection_score')}"
+        for artwork in artworks
+    )
+    logger.info(
+        "DRY RUN SUCCESS mode=%s selected_ids=%s local_artifacts=%s scores=%s "
+        "history_mutation=skipped media_upload=skipped instagram_publish=skipped pinterest_publish=skipped",
+        mode,
+        selected_ids,
+        ",".join(artifact_paths),
+        quality_summary,
+    )
+
+
 def run_single_post(args):
     logger.info("Running single post logic...")
     posted_ids = history_tracker.get_posted_ids()
-    color_tone = history_tracker.get_grid_color_tone()
+    color_tone = _get_grid_color_tone_for_run(args.dry_run)
     
     try:
         artworks = art_fetcher.fetch_themed_artworks(posted_ids, "", 1, color_tone)
@@ -24,8 +49,11 @@ def run_single_post(args):
         logger.error(f"Failed to fetch themed artwork: {e}. Falling back to random...")
         artwork = art_fetcher.fetch_random_artwork(posted_ids)
 
-    logger.info("Reserving artwork in history (PRE-WRITE)...")
-    history_tracker.reserve_artwork(artwork)
+    if args.dry_run:
+        logger.info("[DRY-RUN MODE] Skipping history reservation.")
+    else:
+        logger.info("Reserving artwork in history (PRE-WRITE)...")
+        history_tracker.reserve_artwork(artwork)
     
     raw_image_path = image_processor.prepare_local_image(artwork["local_image_path"])[0]
     
@@ -88,7 +116,7 @@ def run_single_post(args):
     )
 
     if args.dry_run:
-        logger.info("[DRY-RUN MODE] Skipping actual Instagram post upload.")
+        _log_dry_run_success("single", [artwork], [output_media_path])
         return
 
     account_id = os.environ.get("INSTAGRAM_ACCOUNT_ID")
@@ -98,14 +126,34 @@ def run_single_post(args):
     if not public_media_url:
         public_media_url = image_processor.upload_temp_media(output_media_path)
 
-    media_id = instagram_poster.post_to_instagram_graph_api(
-        media_url=public_media_url,
-        caption=artwork["caption"],
-        account_id=account_id,
-        access_token=access_token,
-        alt_text=artwork.get("alt_text"),
-        media_type="IMAGE"
-    )
+    try:
+        # Durable non-expiring lock: if this R2 write fails, do not cross the
+        # Instagram publish boundary.
+        history_tracker.mark_artworks_publishing([artwork["id"]])
+        media_id = instagram_poster.post_to_instagram_graph_api(
+            media_url=public_media_url,
+            caption=artwork["caption"],
+            account_id=account_id,
+            access_token=access_token,
+            alt_text=artwork.get("alt_text"),
+            media_type="IMAGE"
+        )
+    except instagram_poster.InstagramPublishAmbiguousError:
+        logger.error("Instagram publish result is ambiguous; preserving the duplicate lock.")
+        try:
+            history_tracker.mark_artwork_ambiguous(artwork["id"])
+        except Exception:
+            logger.exception("Failed to preserve the ambiguous single-post reservation.")
+            raise
+        raise
+    except Exception:
+        # Definite failures remain retryable when the durable rollback works.
+        # If it does not, PUBLISHING remains the safe source-of-truth fallback.
+        try:
+            history_tracker.mark_artworks_pending([artwork["id"]])
+        except Exception:
+            logger.exception("Failed to roll back single-post publish lock; preserving PUBLISHING state.")
+        raise
 
     history_tracker.confirm_artwork(artwork["id"], media_id)
     
@@ -123,7 +171,7 @@ def run_single_post(args):
 def run_carousel_post(args):
     logger.info("Running carousel post logic...")
     posted_ids = history_tracker.get_posted_ids()
-    color_tone = history_tracker.get_grid_color_tone()
+    color_tone = _get_grid_color_tone_for_run(args.dry_run)
     
     themes = ["cat", "landscape", "portrait", "flower", "dog", "sea", "mountain", "horse", "angel", "battle", "winter", "ship", "bridge"]
     theme = random.choice(themes)
@@ -132,8 +180,11 @@ def run_carousel_post(args):
     artworks = art_fetcher.fetch_themed_artworks(posted_ids, theme, count=8, color_tone=color_tone)
     logger.info(f"Fetched {len(artworks)} artworks for the carousel.")
     
-    for art in artworks:
-        history_tracker.reserve_artwork(art)
+    if args.dry_run:
+        logger.info("[DRY-RUN MODE] Skipping history reservations.")
+    else:
+        for art in artworks:
+            history_tracker.reserve_artwork(art)
         
     ai_analysis = gemini_ai.analyze_carousel(theme, artworks)
     base_font_size = ai_analysis.get("recommended_font_size", 46) if ai_analysis else 46
@@ -152,6 +203,7 @@ def run_carousel_post(args):
     final_caption = f"⠀\n{theme_title}\n\n{caption}\n\nFeatured Artworks (In Order):\n{artwork_list_text}\n{hashtags}"
     
     public_urls = []
+    output_media_paths = []
     
     for art in artworks:
         raw_image_path = image_processor.prepare_local_image(art["local_image_path"])[0]
@@ -164,24 +216,43 @@ def run_carousel_post(args):
             artwork_title=clean_title,
             base_font_size=base_font_size
         )
+        output_media_paths.append(output_media_path)
         
         if not args.dry_run:
             url = image_processor.upload_temp_media(output_media_path)
             public_urls.append(url)
             
     if args.dry_run:
-        logger.info("[DRY-RUN MODE] Skipping actual Instagram carousel upload.")
+        _log_dry_run_success("carousel", artworks, output_media_paths)
         return
         
     account_id = os.environ.get("INSTAGRAM_ACCOUNT_ID")
     access_token = os.environ.get("INSTAGRAM_ACCESS_TOKEN")
     
-    carousel_id = instagram_poster.post_carousel_to_instagram_graph_api(
-        media_urls=public_urls,
-        caption=final_caption,
-        account_id=account_id,
-        access_token=access_token
-    )
+    try:
+        # Protect every carousel child in one conditional R2 update before the
+        # parent media_publish request is allowed to run.
+        history_tracker.mark_artworks_publishing(art["id"] for art in artworks)
+        carousel_id = instagram_poster.post_carousel_to_instagram_graph_api(
+            media_urls=public_urls,
+            caption=final_caption,
+            account_id=account_id,
+            access_token=access_token
+        )
+    except instagram_poster.InstagramPublishAmbiguousError:
+        logger.error("Instagram carousel publish result is ambiguous; preserving duplicate locks.")
+        try:
+            history_tracker.mark_artworks_ambiguous(art["id"] for art in artworks)
+        except Exception:
+            logger.exception("Failed to preserve ambiguous carousel reservations.")
+            raise
+        raise
+    except Exception:
+        try:
+            history_tracker.mark_artworks_pending(art["id"] for art in artworks)
+        except Exception:
+            logger.exception("Failed to roll back carousel publish locks; preserving PUBLISHING state.")
+        raise
     
     for art in artworks:
         history_tracker.confirm_artwork(art["id"], carousel_id)
@@ -201,6 +272,10 @@ def main():
     is_carousel_time = current_hour in [12, 21]
     
     try:
+        if args.dry_run:
+            logger.info("[DRY-RUN MODE] Skipping stale reservation recovery.")
+        else:
+            history_tracker.recover_stale_reservations()
         if args.force_carousel or is_carousel_time:
             run_carousel_post(args)
         else:

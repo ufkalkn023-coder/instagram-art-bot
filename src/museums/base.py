@@ -1,5 +1,6 @@
 from abc import ABC, abstractmethod
-from typing import Optional, List, Set
+import random
+from typing import List
 from src.models import NormalizedArtwork
 
 class MuseumAdapter(ABC):
@@ -16,10 +17,16 @@ class MuseumAdapter(ABC):
         pass
         
     @abstractmethod
-    def fetch_candidates(self, limit: int = 20, query: str = None) -> List[NormalizedArtwork]:
+    def fetch_candidates(
+        self,
+        limit: int = 20,
+        query: str = None,
+        rng: random.Random | None = None,
+    ) -> List[NormalizedArtwork]:
         """
         Fetches candidates from the museum API.
         Does NOT apply quality filtering or duplicate filtering; 
-        only normalizes the raw responses into NormalizedArtwork.
+        only normalizes the raw responses into NormalizedArtwork. ``rng`` is
+        optional so direct adapter use retains normal random exploration.
         """
         pass

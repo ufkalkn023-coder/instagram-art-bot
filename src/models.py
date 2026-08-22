@@ -1,6 +1,46 @@
 from typing import Optional
 from pydantic import BaseModel, Field
 
+
+LEGACY_ARTWORK_ID_PREFIXES = {
+    "artic_": "aic_",
+    "cma_": "cleveland_",
+}
+CONFIRMED_RIGHTS_STATUSES = {
+    "CONFIRMED_PUBLIC_DOMAIN",
+    "CONFIRMED_OPEN_ACCESS",
+}
+MAX_IMAGE_DIMENSION = 100_000
+
+
+def normalize_artwork_id(artwork_id: str) -> str:
+    """Return the canonical ID while preserving unknown ID formats."""
+    for legacy_prefix, canonical_prefix in LEGACY_ARTWORK_ID_PREFIXES.items():
+        if artwork_id.startswith(legacy_prefix):
+            return canonical_prefix + artwork_id[len(legacy_prefix):]
+    return artwork_id
+
+
+def normalize_image_dimensions(width: object, height: object) -> tuple[int | None, int | None]:
+    """Return a trustworthy positive pixel-dimension pair, or no dimensions."""
+    def parse_dimension(value: object) -> int | None:
+        if isinstance(value, bool):
+            return None
+        if isinstance(value, int):
+            parsed = value
+        elif isinstance(value, str) and value.isdigit():
+            parsed = int(value)
+        else:
+            return None
+        return parsed if 0 < parsed <= MAX_IMAGE_DIMENSION else None
+
+    normalized_width = parse_dimension(width)
+    normalized_height = parse_dimension(height)
+    if normalized_width is None or normalized_height is None:
+        return None, None
+    return normalized_width, normalized_height
+
+
 class NormalizedArtwork(BaseModel):
     """
     Centralized internal model representing a normalized artwork from any museum.
@@ -39,6 +79,8 @@ class NormalizedArtwork(BaseModel):
     credit_line: Optional[str] = None
     license: Optional[str] = None
     is_public_domain: bool = Field(default=False)
+    rights_status: Optional[str] = None
+    rights_text: Optional[str] = None
     
     # Media
     image_url: Optional[str] = Field(None, description="Direct URL to the high-res image")
@@ -46,9 +88,25 @@ class NormalizedArtwork(BaseModel):
     image_height: Optional[int] = None
     
     # Internal Pipeline Metadata
-    quality_score: Optional[int] = Field(default=None, description="0-100 visual/metadata quality score")
+    quality_score: Optional[float] = Field(
+        default=None,
+        description="Deterministic 0-100 metadata/source/image quality score",
+    )
+    measurement_coverage: Optional[float] = Field(
+        default=None,
+        description="Fraction of deterministic quality signals backed by measurements (0-1)",
+    )
+    selection_score: Optional[float] = Field(
+        default=None,
+        description="Post-gate ranking score including diversity/discovery/serendipity adjustments",
+    )
     
     @property
     def canonical_id(self) -> str:
         """Globally unique identifier for duplicate detection."""
-        return f"{self.source}_{self.source_id}"
+        return normalize_artwork_id(f"{self.source}_{self.source_id}")
+
+    @property
+    def has_confirmed_rights(self) -> bool:
+        """Whether the adapter supplied explicit, publishable rights metadata."""
+        return self.is_public_domain and self.rights_status in CONFIRMED_RIGHTS_STATUSES
