@@ -103,7 +103,7 @@ def test_carousel_dry_run_prepares_every_image_without_external_mutations(monkey
     monkeypatch.setattr(main.random, "choice", lambda values: "portrait")
     monkeypatch.setattr(
         main.art_fetcher,
-        "fetch_themed_artworks",
+        "fetch_carousel_artworks",
         lambda *args, **kwargs: calls.append(("selection", args[1], kwargs["count"])) or artworks,
     )
     monkeypatch.setattr(main.gemini_ai, "analyze_carousel", lambda *args: calls.append("gemini") or None)
@@ -148,6 +148,16 @@ def test_dry_run_processing_failure_happens_before_every_mutation(monkeypatch):
         main.run_single_post(SimpleNamespace(dry_run=True, image_url=None, pinterest=False))
 
     assert "gemini" in calls
+
+
+def test_single_dry_run_does_not_require_instagram_credentials(monkeypatch):
+    calls = []
+    _install_single_read_and_local_pipeline(monkeypatch, _artwork(), calls)
+    _forbid_mutations(monkeypatch)
+    monkeypatch.setenv("INSTAGRAM_ACCOUNT_ID", "account\ninvalid")
+    monkeypatch.setenv("INSTAGRAM_ACCESS_TOKEN", "secret-token\ninvalid")
+
+    main.run_single_post(SimpleNamespace(dry_run=True, image_url=None, pinterest=False))
 
 
 def test_repeated_dry_runs_do_not_change_history_input_or_selection_state(monkeypatch):

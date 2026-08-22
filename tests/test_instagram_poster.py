@@ -33,17 +33,41 @@ def no_wait(monkeypatch):
     monkeypatch.setattr(instagram_poster.time, "sleep", lambda _seconds: None)
 
 
-def test_single_publish_requires_finished_and_uses_bearer_auth(monkeypatch):
+def test_single_publish_requires_finished_and_uses_trimmed_bearer_auth(monkeypatch):
     post = response_sequence(FakeResponse(200, {"id": "container-1"}), FakeResponse(200, {"id": "media-1"}))
     get = response_sequence(FakeResponse(200, {"status_code": "FINISHED"}))
-    monkeypatch.setattr(instagram_poster.requests, "post", post)
+    post_calls = []
+
+    def capture_post(*args, **kwargs):
+        post_calls.append((args, kwargs))
+        return post(*args, **kwargs)
+
+    monkeypatch.setattr(instagram_poster.requests, "post", capture_post)
     monkeypatch.setattr(instagram_poster.requests, "get", get)
 
     media_id = instagram_poster.post_to_instagram_graph_api(
-        "https://images.example/art.jpg", "caption", "account", "secret-token", alt_text="alt"
+        "https://images.example/art.jpg", "caption", " account ", " secret-token ", alt_text="alt"
     )
 
     assert media_id == "media-1"
+    assert post_calls[0][1]["headers"] == {"Authorization": "Bearer secret-token"}
+
+
+def test_credential_validation_rejects_empty_control_characters_and_never_exposes_token(caplog):
+    secret = "very-secret-token"
+
+    assert instagram_poster.validate_instagram_credentials(" account ", " token ") == ("account", "token")
+
+    with pytest.raises(instagram_poster.InstagramCredentialFormatError) as empty:
+        instagram_poster.validate_instagram_credentials(" ", " ")
+    assert secret not in str(empty.value)
+
+    for account_id, token in [("account", f"{secret}\ninvalid"), ("account\rinvalid", secret)]:
+        with pytest.raises(instagram_poster.InstagramCredentialFormatError) as raised:
+            instagram_poster.validate_instagram_credentials(account_id, token)
+        assert secret not in str(raised.value)
+
+    assert secret not in caplog.text
 
 
 @pytest.mark.parametrize("status", ["ERROR", "EXPIRED", "UNEXPECTED"])

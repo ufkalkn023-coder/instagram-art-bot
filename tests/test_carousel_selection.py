@@ -61,7 +61,7 @@ def _set_scores(monkeypatch, candidates, scores=None):
     monkeypatch.setattr(art_fetcher, "calculate_quality_score", lambda candidate, weights: scores[candidate.canonical_id])
 
 
-@pytest.mark.parametrize("count", [2, 10])
+@pytest.mark.parametrize("count", [1, 2, 10])
 def test_supported_counts_return_exactly_requested_artworks(monkeypatch, tmp_path, count):
     candidates = [_candidate(index) for index in range(10)]
     _install_candidates(monkeypatch, candidates)
@@ -73,12 +73,65 @@ def test_supported_counts_return_exactly_requested_artworks(monkeypatch, tmp_pat
     assert len(artworks) == count
 
 
-@pytest.mark.parametrize("count", [1, 11])
-def test_invalid_carousel_counts_fail_before_fetching(monkeypatch, count):
+@pytest.mark.parametrize("count", [0, 11])
+def test_invalid_selection_counts_fail_before_fetching(monkeypatch, count):
     monkeypatch.setattr(art_fetcher, "AICAdapter", lambda: pytest.fail("fetch must not run"))
 
-    with pytest.raises(ValueError, match="Carousel count"):
+    with pytest.raises(ValueError, match="Artwork selection count"):
         art_fetcher.fetch_themed_artworks(set(), "portrait", count=count, color_tone="warm")
+
+
+def test_carousel_wrapper_rejects_a_single_item_before_fetching(monkeypatch):
+    monkeypatch.setattr(art_fetcher, "fetch_themed_artworks", lambda *args, **kwargs: pytest.fail("fetch must not run"))
+
+    with pytest.raises(ValueError, match="Carousel count"):
+        art_fetcher.fetch_carousel_artworks(set(), "portrait", count=1, color_tone="warm")
+
+
+def test_single_selection_replaces_an_invalid_candidate(monkeypatch, tmp_path):
+    candidates = [_candidate(index) for index in range(2)]
+    _install_candidates(monkeypatch, candidates)
+    attempted = _install_downloads(monkeypatch, tmp_path, invalid_ids={"0"})
+    _set_scores(monkeypatch, candidates)
+
+    artworks = art_fetcher.fetch_themed_artworks(set(), "portrait", count=1, color_tone="warm")
+
+    assert [artwork["id"] for artwork in artworks] == ["aic_1"]
+    assert attempted[:2] == ["0", "1"]
+
+
+def test_single_selection_with_one_valid_candidate_returns_exactly_one(monkeypatch, tmp_path):
+    candidates = [_candidate(1)]
+    _install_candidates(monkeypatch, candidates)
+    _install_downloads(monkeypatch, tmp_path)
+    _set_scores(monkeypatch, candidates)
+
+    artworks = art_fetcher.fetch_themed_artworks(set(), "portrait", count=1, color_tone="warm")
+
+    assert [artwork["id"] for artwork in artworks] == ["aic_1"]
+
+
+def test_single_selection_without_valid_candidates_fails_explicitly(monkeypatch, tmp_path):
+    candidates = [_candidate(0)]
+    _install_candidates(monkeypatch, candidates)
+    _install_downloads(monkeypatch, tmp_path, invalid_ids={"0"})
+    _set_scores(monkeypatch, candidates)
+
+    with pytest.raises(art_fetcher.CarouselSelectionError, match=r"requested=1.*selected=0"):
+        art_fetcher.fetch_themed_artworks(set(), "portrait", count=1, color_tone="warm")
+
+
+@pytest.mark.parametrize("count", [2, 8, 10])
+def test_carousel_wrapper_accepts_supported_counts(monkeypatch, count):
+    calls = []
+    monkeypatch.setattr(
+        art_fetcher,
+        "fetch_themed_artworks",
+        lambda *args: calls.append(args) or [object()] * count,
+    )
+
+    assert len(art_fetcher.fetch_carousel_artworks(set(), "portrait", count=count, color_tone="warm")) == count
+    assert calls[0][2] == count
 
 
 def test_exact_count_uses_only_eight_when_more_candidates_are_available(monkeypatch, tmp_path):
@@ -209,7 +262,7 @@ def test_selection_failure_stops_before_reservation_gemini_and_instagram(monkeyp
     monkeypatch.setattr(main.history_tracker, "get_grid_color_tone", lambda: "warm")
     monkeypatch.setattr(
         main.art_fetcher,
-        "fetch_themed_artworks",
+        "fetch_carousel_artworks",
         lambda *args, **kwargs: (_ for _ in ()).throw(art_fetcher.CarouselSelectionError("insufficient")),
     )
     monkeypatch.setattr(main.history_tracker, "reserve_artwork", lambda artwork: calls.append("reserve"))

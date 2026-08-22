@@ -121,6 +121,7 @@ def run_single_post(args):
 
     account_id = os.environ.get("INSTAGRAM_ACCOUNT_ID")
     access_token = os.environ.get("INSTAGRAM_ACCESS_TOKEN")
+    account_id, access_token = instagram_poster.validate_instagram_credentials(account_id, access_token)
     public_media_url = args.image_url or os.environ.get("PUBLIC_IMAGE_URL")
 
     if not public_media_url:
@@ -177,7 +178,7 @@ def run_carousel_post(args):
     theme = random.choice(themes)
     logger.info(f"Selected Carousel Theme: {theme}")
     
-    artworks = art_fetcher.fetch_themed_artworks(posted_ids, theme, count=8, color_tone=color_tone)
+    artworks = art_fetcher.fetch_carousel_artworks(posted_ids, theme, count=8, color_tone=color_tone)
     logger.info(f"Fetched {len(artworks)} artworks for the carousel.")
     
     if args.dry_run:
@@ -204,6 +205,12 @@ def run_carousel_post(args):
     
     public_urls = []
     output_media_paths = []
+
+    if not args.dry_run:
+        account_id, access_token = instagram_poster.validate_instagram_credentials(
+            os.environ.get("INSTAGRAM_ACCOUNT_ID"),
+            os.environ.get("INSTAGRAM_ACCESS_TOKEN"),
+        )
     
     for art in artworks:
         raw_image_path = image_processor.prepare_local_image(art["local_image_path"])[0]
@@ -226,9 +233,6 @@ def run_carousel_post(args):
         _log_dry_run_success("carousel", artworks, output_media_paths)
         return
         
-    account_id = os.environ.get("INSTAGRAM_ACCOUNT_ID")
-    access_token = os.environ.get("INSTAGRAM_ACCESS_TOKEN")
-    
     try:
         # Protect every carousel child in one conditional R2 update before the
         # parent media_publish request is allowed to run.

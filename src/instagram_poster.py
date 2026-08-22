@@ -54,6 +54,34 @@ class InstagramPublishAmbiguousError(InstagramAPIError):
     """Publishing may have succeeded but no media ID was safely obtained."""
 
 
+class InstagramCredentialFormatError(ValueError):
+    """Instagram credentials are missing or unsafe to use in an HTTP request."""
+
+
+def _contains_control_character(value: str) -> bool:
+    return any(ord(character) < 32 or ord(character) == 127 for character in value)
+
+
+def validate_instagram_credentials(
+    account_id: str | None,
+    access_token: str | None,
+) -> tuple[str, str]:
+    """Normalize and validate credentials without exposing their values."""
+    if not isinstance(account_id, str) or not isinstance(access_token, str):
+        raise InstagramCredentialFormatError("Instagram account ID and access token must be provided.")
+
+    normalized_account_id = account_id.strip()
+    normalized_access_token = access_token.strip()
+    if not normalized_account_id or not normalized_access_token:
+        raise InstagramCredentialFormatError("Instagram account ID and access token must not be empty.")
+    if _contains_control_character(normalized_account_id):
+        raise InstagramCredentialFormatError("Instagram account ID contains an invalid control character.")
+    if _contains_control_character(normalized_access_token):
+        raise InstagramCredentialFormatError("Instagram access token contains an invalid control character.")
+
+    return normalized_account_id, normalized_access_token
+
+
 def _auth_headers(access_token: str) -> dict[str, str]:
     return {"Authorization": f"Bearer {access_token}"}
 
@@ -236,11 +264,6 @@ def _publish_container(account_id: str, access_token: str, container_id: str) ->
     raise AssertionError("unreachable")
 
 
-def _validate_credentials(account_id: str, access_token: str) -> None:
-    if not account_id or not access_token:
-        raise ValueError("INSTAGRAM_ACCOUNT_ID and INSTAGRAM_ACCESS_TOKEN must be provided.")
-
-
 def post_to_instagram_graph_api(
     media_url: str,
     caption: str,
@@ -250,7 +273,7 @@ def post_to_instagram_graph_api(
     media_type: str = "IMAGE",
 ) -> str:
     """Create, wait for, and publish one Instagram media container."""
-    _validate_credentials(account_id, access_token)
+    account_id, access_token = validate_instagram_credentials(account_id, access_token)
 
     payload = {"caption": caption}
     if media_type == "REELS":
@@ -269,7 +292,7 @@ def post_to_instagram_graph_api(
 
 def post_story_to_instagram_graph_api(image_url: str, account_id: str, access_token: str) -> str:
     """Create, wait for, and publish an Instagram story container."""
-    _validate_credentials(account_id, access_token)
+    account_id, access_token = validate_instagram_credentials(account_id, access_token)
     container_id = _create_container(
         account_id,
         access_token,
@@ -284,6 +307,8 @@ def get_instagram_permalink(media_id: str, access_token: str) -> str | None:
     """Fetch a permalink without placing the access token in the request URL."""
     if not media_id or not access_token:
         return None
+
+    _, access_token = validate_instagram_credentials("permalink_lookup", access_token)
 
     try:
         payload = _request_json(
@@ -303,7 +328,7 @@ def get_instagram_permalink(media_id: str, access_token: str) -> str | None:
 
 def post_carousel_to_instagram_graph_api(media_urls: list[str], caption: str, account_id: str, access_token: str) -> str:
     """Publish a carousel only after every child and parent container is FINISHED."""
-    _validate_credentials(account_id, access_token)
+    account_id, access_token = validate_instagram_credentials(account_id, access_token)
     if not MIN_CAROUSEL_ITEMS <= len(media_urls) <= MAX_CAROUSEL_ITEMS:
         raise ValueError(f"Instagram carousels require {MIN_CAROUSEL_ITEMS}-{MAX_CAROUSEL_ITEMS} media items.")
 

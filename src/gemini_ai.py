@@ -27,7 +27,7 @@ class CarouselAnalysis(BaseModel):
 
 def analyze_artwork(image_path: str, title: str, artist: str, date: str, museum: str, medium: str = "", classification: str = "", content_type: str = "SINGLE_ARTWORK") -> Optional[Dict[str, Any]]:
     """
-    Analyzes the artwork using Gemini 2.5 Flash and returns a complete analysis.
+    Analyzes the artwork using the configured Gemini model and returns a complete analysis.
     Requires GOOGLE_GEMINI_API_KEY environment variable.
     """
     if not config.GEMINI_ENABLED:
@@ -141,7 +141,6 @@ Despite any output format rules above, you MUST return a JSON object satisfying 
             config=types.GenerateContentConfig(
                 response_mime_type="application/json",
                 response_schema=ArtworkAnalysis,
-                temperature=0.7,
             )
         )
         
@@ -220,7 +219,6 @@ Return a JSON object satisfying this schema:
             config=types.GenerateContentConfig(
                 response_mime_type="application/json",
                 response_schema=CarouselAnalysis,
-                temperature=0.7,
             )
         )
         

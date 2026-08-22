@@ -25,7 +25,7 @@ TEMP_AUDIO_PATH = os.path.join(DATA_DIR, "temp_audio.ogg")
 MET_API_BASE = "https://collectionapi.metmuseum.org/public/collection/v1"
 
 # Gemini AI Settings
-GEMINI_MODEL = "gemini-2.5-flash"
+GEMINI_MODEL = "gemini-3.7-flash"
 GEMINI_ENABLED = True
 
 # Instagram Graph API Version & Endpoints
@@ -33,4 +33,3 @@ INSTAGRAM_GRAPH_API_VERSION = "v22.0"
 GRAPH_API_BASE_URL = f"https://graph.facebook.com/{INSTAGRAM_GRAPH_API_VERSION}"
 
 # Public domain classical music tracks with specific drop points for Reels
-

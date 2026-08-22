@@ -30,6 +30,7 @@ DEFAULT_WEIGHTS = {
 
 MIN_CAROUSEL_ITEMS = 2
 MAX_CAROUSEL_ITEMS = 10
+MIN_SELECTION_ITEMS = 1
 SELECTION_SEED_ENV = "ARTFOLIO_SELECTION_SEED"
 
 
@@ -480,14 +481,14 @@ def fetch_random_artwork(posted_ids: set) -> Dict[str, Any]:
     raise RuntimeError("All top candidates failed image validation (Hard Reject)!")
 
 def fetch_themed_artworks(posted_ids: set, theme: str, count: int, color_tone: str) -> List[Dict[str, Any]]:
-    """Return exactly ``count`` validated, internally diverse carousel artworks.
+    """Return exactly ``count`` validated artworks.
 
-    A partial carousel is never returned: callers receive either a complete
+    A partial selection is never returned: callers receive either a complete
     selection or ``CarouselSelectionError`` before any history reservation.
     """
-    if not MIN_CAROUSEL_ITEMS <= count <= MAX_CAROUSEL_ITEMS:
+    if not MIN_SELECTION_ITEMS <= count <= MAX_CAROUSEL_ITEMS:
         raise ValueError(
-            f"Carousel count must be between {MIN_CAROUSEL_ITEMS} and {MAX_CAROUSEL_ITEMS}; got {count}."
+            f"Artwork selection count must be between {MIN_SELECTION_ITEMS} and {MAX_CAROUSEL_ITEMS}; got {count}."
         )
 
     museum_weights = getattr(config, "MUSEUM_SOURCE_WEIGHTS", DEFAULT_WEIGHTS)
@@ -657,3 +658,12 @@ def fetch_themed_artworks(posted_ids: set, theme: str, count: int, color_tone: s
         observability.rejection_fields(),
     )
     return final_artworks
+
+
+def fetch_carousel_artworks(posted_ids: set, theme: str, count: int, color_tone: str) -> List[Dict[str, Any]]:
+    """Return a complete carousel selection while enforcing carousel item limits."""
+    if not MIN_CAROUSEL_ITEMS <= count <= MAX_CAROUSEL_ITEMS:
+        raise ValueError(
+            f"Carousel count must be between {MIN_CAROUSEL_ITEMS} and {MAX_CAROUSEL_ITEMS}; got {count}."
+        )
+    return fetch_themed_artworks(posted_ids, theme, count, color_tone)
