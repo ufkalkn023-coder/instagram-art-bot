@@ -2,8 +2,9 @@ name: Instagram Art Bot Scheduler
 
 on:
   schedule:
-    # Runs 8 times a day, every 3 hours, in UTC.
-    - cron: "0 0,3,6,9,12,15,18,21 * * *"
+    # Runs 4 times daily at 06:00, 10:00, 14:00, and 18:00 UTC
+    # (09:00, 13:00, 17:00, and 21:00 Europe/Istanbul, UTC+3).
+    - cron: "0 6,10,14,18 * * *"
   workflow_dispatch: # Allows manual trigger from GitHub Actions tab
     inputs:
       force_carousel:

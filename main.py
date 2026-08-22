@@ -12,6 +12,8 @@ from src import art_fetcher, image_processor, instagram_poster, history_tracker,
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 logger = logging.getLogger(__name__)
 
+SCHEDULED_CAROUSEL_UTC_HOURS = {18}
+
 
 def _get_grid_color_tone_for_run(dry_run: bool) -> str:
     """Read grid state without allowing dry-run to create a new row."""
@@ -273,7 +275,7 @@ def main():
     logger.info("Starting Instagram Art Automation Bot...")
     
     current_hour = datetime.now(timezone.utc).hour
-    is_carousel_time = current_hour in [12, 21]
+    is_carousel_time = current_hour in SCHEDULED_CAROUSEL_UTC_HOURS
     
     try:
         if args.dry_run:

@@ -7,7 +7,7 @@ Bu proje, doğrulanmış kamu malı/açık erişimli müze eserlerini seçer, g�
 - Art Institute of Chicago, Metropolitan Museum of Art, Cleveland Museum of Art, Rijksmuseum, Smithsonian Institution, J. Paul Getty Museum ve Europeana kaynaklarından eser adayları toplar.
 - Yalnız doğrulanmış public-domain veya open-access hak bilgisi olan adayları kabul eder. Chicago kaynağında doğrulanmış public-domain eserler için yüksek çözünürlüklü 1686px IIIF türevi kullanılır.
 - Duplicate, hak, kalite ve çeşitlilik filtrelerinden geçen görselleri güvenli biçimde indirir; HTTPS-only erişim, private-network/SSRF koruması, redirect yeniden doğrulaması, sınırlı indirme ve Pillow doğrulaması uygular.
-- Gerçek indirilen görselin boyutlarını tekrar ölçer ve bulanık arka planlı 1080×1350 feed görseli oluşturur.
+- Gerçek indirilen görselin boyutlarını tekrar ölçer; yatay ve panoramik eserleri kırpmadan, temiz nötr bir matte üzerinde 1080×1350 feed görseli olarak sunar.
 - Gemini kullanılabiliyorsa caption, alt metin ve görsel metin önerisi üretir; anahtar yoksa veya istek başarısız olursa yerel fallback caption kullanır.
 - History bilgisini Cloudflare R2 üzerinde tutar; Instagram publish öncesinde durable kilit kullanarak olası duplicate paylaşımları engeller.
 
@@ -15,7 +15,7 @@ Bu proje, doğrulanmış kamu malı/açık erişimli müze eserlerini seçer, g�
 
 Normal koşuda bot UTC saate göre çalışır:
 
-- UTC 12:00 ve 21:00: sekiz eserlik, rastgele temalı carousel.
+- UTC 18:00: sekiz eserlik, rastgele temalı carousel.
 - Diğer zamanlar: tek eser paylaşımı.
 - `--force-carousel`: zamanı dikkate almadan sekiz eserlik carousel çalıştırır.
 
@@ -28,10 +28,10 @@ Pinterest desteği opsiyoneldir ve yalnız tek-eser akışında `--pinterest` fl
 Workflow cron değeri değişmeden şudur:
 
 ```text
-0 0,3,6,9,12,15,18,21 * * *
+0 6,10,14,18 * * *
 ```
 
-GitHub Actions cron ifadeleri UTC’dir. Türkiye saati UTC+3 kabul edildiğinde koşular 03:00, 06:00, 09:00, 12:00, 15:00, 18:00, 21:00 ve ertesi gün 00:00 TSİ’ye karşılık gelir.
+GitHub Actions cron ifadeleri UTC’dir. Türkiye saati UTC+3 kabul edildiğinde koşular 09:00, 13:00, 17:00 ve 21:00 TSİ’ye karşılık gelir.
 
 Workflow manuel olarak da **Actions → Instagram Art Bot Scheduler → Run workflow** üzerinden başlatılabilir. `force_carousel` girdisi `--force-carousel` olarak iletilir. `instagram-bot` concurrency grubu ve `cancel-in-progress: false` ayarı, aktif bir koşu varken yeni koşuların publish yarışına girmemesini sağlar.
 

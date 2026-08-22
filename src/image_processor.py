@@ -9,7 +9,7 @@ import boto3
 from datetime import datetime
 from botocore.exceptions import ClientError
 from typing import Tuple, Optional, List, Dict, Any
-from PIL import Image, ImageOps, ImageDraw, ImageFilter, ImageFont
+from PIL import Image, ImageOps, ImageDraw, ImageFont
 
 import config
 
@@ -18,6 +18,19 @@ logger = logging.getLogger(__name__)
 
 # Available frame styles
 FRAME_STYLES = ["palette_border", "gradient_border", "clean"]
+
+PORTRAIT_OR_SQUARE_MAX_RATIO = 1.15
+PANORAMIC_MIN_RATIO = 1.80
+WIDE_PANORAMA_MAX_RATIO = 2.40
+PRESENTATION_PORTRAIT_OR_SQUARE = "portrait_or_square"
+PRESENTATION_LANDSCAPE = "landscape"
+PRESENTATION_PANORAMIC = "panoramic"
+PANORAMA_WIDE = "wide_panorama"
+PANORAMA_EXTREME = "extreme_panorama"
+WIDE_PANORAMA_TOP_SPACE_SHARE = 0.42
+EXTREME_PANORAMA_TOP_SPACE_SHARE = 0.34
+MUSEUM_MATTE = (244, 242, 237)  # #F4F2ED
+SUBTLE_BORDER = (216, 213, 206)  # #D8D5CE
 
 
 def _get_dominant_colors(img: Image.Image, num_colors: int = 5) -> list:
@@ -101,64 +114,115 @@ def prepare_local_image(local_path: str) -> Tuple[str, str]:
     return local_path, orientation
 
 
+def classify_presentation_mode(width: int, height: int) -> str:
+    """Classify a downloaded artwork by its true aspect ratio."""
+    if width <= 0 or height <= 0:
+        raise ValueError("Artwork dimensions must be positive.")
+    ratio = width / height
+    if ratio <= PORTRAIT_OR_SQUARE_MAX_RATIO:
+        return PRESENTATION_PORTRAIT_OR_SQUARE
+    if ratio <= PANORAMIC_MIN_RATIO:
+        return PRESENTATION_LANDSCAPE
+    return PRESENTATION_PANORAMIC
+
+
+def classify_panorama_submode(width: int, height: int) -> str | None:
+    """Distinguish wide panoramas from extreme, single-post-limited ones."""
+    if classify_presentation_mode(width, height) != PRESENTATION_PANORAMIC:
+        return None
+    return PANORAMA_WIDE if width / height <= WIDE_PANORAMA_MAX_RATIO else PANORAMA_EXTREME
+
+
+def _fit_within_canvas(width: int, height: int, canvas_width: int, canvas_height: int) -> tuple[int, int]:
+    scale = min(canvas_width / width, canvas_height / height)
+    return max(1, round(width * scale)), max(1, round(height * scale))
+
+
+def calculate_feed_artwork_box(
+    width: int,
+    height: int,
+    canvas_width: int = config.TARGET_WIDTH,
+    canvas_height: int = config.TARGET_HEIGHT,
+) -> tuple[int, int, int, int]:
+    """Return the deterministic full-artwork placement box for a feed canvas."""
+    mode = classify_presentation_mode(width, height)
+    art_width, art_height = _fit_within_canvas(width, height, canvas_width, canvas_height)
+    paste_x = (canvas_width - art_width) // 2
+    available_vertical_space = canvas_height - art_height
+
+    if mode != PRESENTATION_PANORAMIC:
+        paste_y = available_vertical_space // 2
+    elif classify_panorama_submode(width, height) == PANORAMA_WIDE:
+        paste_y = round(available_vertical_space * WIDE_PANORAMA_TOP_SPACE_SHARE)
+    else:
+        paste_y = round(available_vertical_space * EXTREME_PANORAMA_TOP_SPACE_SHARE)
+
+    return paste_x, paste_y, art_width, art_height
+
+
+def _needs_subtle_border(img: Image.Image) -> bool:
+    """Return whether a near-white neutral artwork needs separation from the matte."""
+    sample = img.resize((32, 32), Image.Resampling.BOX)
+    edge_pixels = []
+    for coordinate in range(32):
+        edge_pixels.extend(
+            (
+                sample.getpixel((coordinate, 0)),
+                sample.getpixel((coordinate, 31)),
+                sample.getpixel((0, coordinate)),
+                sample.getpixel((31, coordinate)),
+            )
+        )
+    red = sum(pixel[0] for pixel in edge_pixels) / len(edge_pixels)
+    green = sum(pixel[1] for pixel in edge_pixels) / len(edge_pixels)
+    blue = sum(pixel[2] for pixel in edge_pixels) / len(edge_pixels)
+    luminance = 0.299 * red + 0.587 * green + 0.114 * blue
+    return luminance >= 225 and max(red, green, blue) - min(red, green, blue) <= 25
+
+
 def create_feed_post(raw_image_path: str, artist_name: str = "", artwork_title: str = "", output_path: str = config.OUTPUT_IMAGE_PATH, base_font_size: int = 46) -> str:
     """
-    Processes a raw image into a 1080x1350 Feed post with a blurred background.
+    Present a full artwork on a 1080x1350 museum-matte feed canvas.
+
+    The downloaded image dimensions are the source of truth. The artwork is
+    always fit inside the canvas without cropping, distortion, or a blurred
+    duplicate background.
     """
-    logger.info("Processing feed artwork image with Blurred Background Layout...")
-    from PIL import ImageFilter
-    
     img = Image.open(raw_image_path)
-    
+    img = ImageOps.exif_transpose(img).convert("RGB")
     canvas_w = config.TARGET_WIDTH   # 1080
     canvas_h = config.TARGET_HEIGHT  # 1350
-    
-    # --- Create blurred background filling the canvas ---
-    bg = img.copy()
-    bg_aspect = bg.width / bg.height
-    target_aspect = canvas_w / canvas_h
-
-    if bg_aspect > target_aspect:
-        new_height = canvas_h
-        new_width = int(new_height * bg_aspect)
-    else:
-        new_width = canvas_w
-        new_height = int(new_width / bg_aspect)
-
-    bg = bg.resize((new_width, new_height), Image.Resampling.LANCZOS)
-    crop_left = (new_width - canvas_w) // 2
-    crop_top = (new_height - canvas_h) // 2
-    bg = bg.crop((crop_left, crop_top, crop_left + canvas_w, crop_top + canvas_h))
-    
-    blur_radius = getattr(config, "BLUR_RADIUS", 35)
-    bg = bg.filter(ImageFilter.GaussianBlur(radius=blur_radius))
-
-    # Darken background slightly for contrast
-    dark_overlay = Image.new("RGB", (canvas_w, canvas_h), (0, 0, 0))
-    canvas = Image.blend(bg, dark_overlay, alpha=0.25)
-
-    # --- Resize and paste the actual artwork to fit inside the canvas ---
-    if img.width > img.height:
-        # Horizontal
-        art_w = canvas_w
-        art_h = int(art_w / (img.width / img.height))
-    else:
-        # Vertical or Square
-        art_h = canvas_h
-        art_w = int(art_h * (img.width / img.height))
-
-        # Check if art width exceeds canvas width
-        if art_w > canvas_w:
-            art_w = canvas_w
-            art_h = int(art_w / (img.width / img.height))
-
+    mode = classify_presentation_mode(img.width, img.height)
+    panorama_submode = classify_panorama_submode(img.width, img.height)
+    paste_x, paste_y, art_w, art_h = calculate_feed_artwork_box(
+        img.width,
+        img.height,
+        canvas_w,
+        canvas_h,
+    )
     art_resized = img.resize((art_w, art_h), Image.Resampling.LANCZOS)
-    paste_x = (canvas_w - art_w) // 2
-    paste_y = (canvas_h - art_h) // 2
+    canvas = Image.new("RGB", (canvas_w, canvas_h), MUSEUM_MATTE)
     canvas.paste(art_resized, (paste_x, paste_y))
 
+    if _needs_subtle_border(art_resized):
+        ImageDraw.Draw(canvas).rectangle(
+            (paste_x, paste_y, paste_x + art_w - 1, paste_y + art_h - 1),
+            outline=SUBTLE_BORDER,
+            width=1,
+        )
+
     canvas.save(output_path, "JPEG", quality=95)
-    logger.info(f"Feed post image processed (Blurred Layout) and saved to: {output_path}")
+    logger.info(
+        "Feed post image processed mode=%s panorama_submode=%s source=%sx%s rendered=%sx%s matte=%s saved_to=%s",
+        mode,
+        panorama_submode or "none",
+        img.width,
+        img.height,
+        art_w,
+        art_h,
+        "#F4F2ED",
+        output_path,
+    )
     return output_path
 
 
