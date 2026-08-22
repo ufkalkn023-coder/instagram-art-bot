@@ -33,10 +33,7 @@ def _install_candidates(monkeypatch, candidates):
         def fetch_candidates(self, **kwargs):
             return candidates
 
-    monkeypatch.setattr(art_fetcher, "AICAdapter", lambda: StaticAdapter())
-    monkeypatch.setattr(art_fetcher, "ClevelandAdapter", lambda: StaticAdapter())
-    monkeypatch.setattr(art_fetcher, "MetAdapter", lambda: StaticAdapter())
-    monkeypatch.setattr(art_fetcher, "RijksmuseumAdapter", lambda: StaticAdapter())
+    monkeypatch.setattr(art_fetcher, "_museum_adapters", lambda: [StaticAdapter()])
 
 
 def _install_downloads(monkeypatch, tmp_path, invalid_ids=()):
@@ -75,7 +72,7 @@ def test_supported_counts_return_exactly_requested_artworks(monkeypatch, tmp_pat
 
 @pytest.mark.parametrize("count", [0, 11])
 def test_invalid_selection_counts_fail_before_fetching(monkeypatch, count):
-    monkeypatch.setattr(art_fetcher, "AICAdapter", lambda: pytest.fail("fetch must not run"))
+    monkeypatch.setattr(art_fetcher, "_museum_adapters", lambda: pytest.fail("fetch must not run"))
 
     with pytest.raises(ValueError, match="Artwork selection count"):
         art_fetcher.fetch_themed_artworks(set(), "portrait", count=count, color_tone="warm")

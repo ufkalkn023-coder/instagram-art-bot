@@ -4,7 +4,6 @@ from .cleveland import ClevelandAdapter
 from .met import MetAdapter
 from .rijksmuseum import RijksmuseumAdapter
 from .smithsonian import SmithsonianAdapter
-from .getty import GettyAdapter
 from .europeana import EuropeanaAdapter
 
 __all__ = [
@@ -14,6 +13,5 @@ __all__ = [
     "MetAdapter",
     "RijksmuseumAdapter",
     "SmithsonianAdapter",
-    "GettyAdapter",
     "EuropeanaAdapter",
 ]

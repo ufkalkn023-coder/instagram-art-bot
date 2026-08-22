@@ -4,7 +4,7 @@ Bu proje, doğrulanmış kamu malı/açık erişimli müze eserlerini seçer, g�
 
 ## Ne yapar?
 
-- Art Institute of Chicago, Metropolitan Museum of Art, Cleveland Museum of Art, Rijksmuseum, Smithsonian Institution, J. Paul Getty Museum ve Europeana kaynaklarından eser adayları toplar.
+- Art Institute of Chicago, Metropolitan Museum of Art, Cleveland Museum of Art, Rijksmuseum, Smithsonian Institution ve Europeana kaynaklarından eser adayları toplar.
 - Yalnız doğrulanmış public-domain veya open-access hak bilgisi olan adayları kabul eder. Chicago kaynağında doğrulanmış public-domain eserler için yüksek çözünürlüklü 1686px IIIF türevi kullanılır.
 - Duplicate, hak, kalite ve çeşitlilik filtrelerinden geçen görselleri güvenli biçimde indirir; HTTPS-only erişim, private-network/SSRF koruması, redirect yeniden doğrulaması, sınırlı indirme ve Pillow doğrulaması uygular.
 - Gerçek indirilen görselin boyutlarını tekrar ölçer; yatay ve panoramik eserleri kırpmadan, temiz nötr bir matte üzerinde 1080×1350 feed görseli olarak sunar.

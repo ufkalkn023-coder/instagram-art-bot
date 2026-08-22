@@ -11,7 +11,6 @@ from src.museums import (
     AICAdapter,
     ClevelandAdapter,
     EuropeanaAdapter,
-    GettyAdapter,
     MetAdapter,
     RijksmuseumAdapter,
     SmithsonianAdapter,
@@ -35,7 +34,6 @@ DEFAULT_WEIGHTS = {
     "met": 15,
     "cleveland": 15,
     "smithsonian": 15,
-    "getty": 15,
     "europeana": 15,
 }
 
@@ -53,7 +51,6 @@ def _museum_adapters():
         MetAdapter(),
         RijksmuseumAdapter(),
         SmithsonianAdapter(),
-        GettyAdapter(),
         EuropeanaAdapter(),
     ]
 

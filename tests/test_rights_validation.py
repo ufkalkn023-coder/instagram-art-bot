@@ -189,18 +189,11 @@ def test_selection_filters_unconfirmed_rights_before_scoring_or_download(monkeyp
         def fetch_candidates(self, **kwargs):
             return self.candidates
 
-    adapters = iter(
-        [
-            StaticAdapter([restricted, safe, safe_second]),
-            StaticAdapter([]),
-            StaticAdapter([]),
-            StaticAdapter([]),
-        ]
+    monkeypatch.setattr(
+        art_fetcher,
+        "_museum_adapters",
+        lambda: [StaticAdapter([restricted, safe, safe_second])],
     )
-    monkeypatch.setattr(art_fetcher, "AICAdapter", lambda: next(adapters))
-    monkeypatch.setattr(art_fetcher, "ClevelandAdapter", lambda: next(adapters))
-    monkeypatch.setattr(art_fetcher, "MetAdapter", lambda: next(adapters))
-    monkeypatch.setattr(art_fetcher, "RijksmuseumAdapter", lambda: next(adapters))
 
     scored_ids = []
     downloaded_urls = []

@@ -6,7 +6,6 @@ from src.museums import (
     AICAdapter,
     ClevelandAdapter,
     EuropeanaAdapter,
-    GettyAdapter,
     MetAdapter,
     RijksmuseumAdapter,
     SmithsonianAdapter,
@@ -207,9 +206,8 @@ def test_adapters_instantiation():
         ClevelandAdapter(),
         RijksmuseumAdapter(),
         SmithsonianAdapter(),
-        GettyAdapter(),
         EuropeanaAdapter(),
     ]
-    assert len(adapters) == 7
+    assert len(adapters) == 6
     for a in adapters:
         assert isinstance(a.source_id, str)
