@@ -30,11 +30,7 @@ def _install_adapters(monkeypatch, candidates):
         def fetch_candidates(self, **kwargs):
             return self.values
 
-    adapters = iter([StaticAdapter(candidates), StaticAdapter([]), StaticAdapter([]), StaticAdapter([])])
-    monkeypatch.setattr(art_fetcher, "AICAdapter", lambda: next(adapters))
-    monkeypatch.setattr(art_fetcher, "ClevelandAdapter", lambda: next(adapters))
-    monkeypatch.setattr(art_fetcher, "MetAdapter", lambda: next(adapters))
-    monkeypatch.setattr(art_fetcher, "RijksmuseumAdapter", lambda: next(adapters))
+    monkeypatch.setattr(art_fetcher, "_museum_adapters", lambda: [StaticAdapter(candidates)])
 
 
 def _install_download_results(monkeypatch, dimensions):

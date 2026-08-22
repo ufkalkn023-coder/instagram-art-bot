@@ -158,10 +158,16 @@ def test_single_selection_resolves_one_root_seed_and_passes_namespaced_rngs(monk
         "resolve_selection_run_seed",
         lambda: seed_calls.append(True) or art_fetcher.SelectionRunSeed("local-fixture", "local"),
     )
-    monkeypatch.setattr(art_fetcher, "AICAdapter", lambda: EmptyAdapter("aic"))
-    monkeypatch.setattr(art_fetcher, "ClevelandAdapter", lambda: EmptyAdapter("cleveland"))
-    monkeypatch.setattr(art_fetcher, "MetAdapter", lambda: EmptyAdapter("met"))
-    monkeypatch.setattr(art_fetcher, "RijksmuseumAdapter", lambda: EmptyAdapter("rijksmuseum"))
+    monkeypatch.setattr(
+        art_fetcher,
+        "_museum_adapters",
+        lambda: [
+            EmptyAdapter("aic"),
+            EmptyAdapter("cleveland"),
+            EmptyAdapter("met"),
+            EmptyAdapter("rijksmuseum"),
+        ],
+    )
 
     with pytest.raises(RuntimeError, match="No new public domain"):
         art_fetcher.fetch_random_artwork(set())
@@ -190,10 +196,7 @@ def test_carousel_passes_stage_specific_namespaced_rngs(monkeypatch):
         "resolve_selection_run_seed",
         lambda: art_fetcher.SelectionRunSeed("carousel-fixture", "explicit"),
     )
-    monkeypatch.setattr(art_fetcher, "AICAdapter", EmptyAdapter)
-    monkeypatch.setattr(art_fetcher, "ClevelandAdapter", EmptyAdapter)
-    monkeypatch.setattr(art_fetcher, "MetAdapter", EmptyAdapter)
-    monkeypatch.setattr(art_fetcher, "RijksmuseumAdapter", EmptyAdapter)
+    monkeypatch.setattr(art_fetcher, "_museum_adapters", lambda: [EmptyAdapter() for _ in range(4)])
 
     with pytest.raises(art_fetcher.CarouselSelectionError):
         art_fetcher.fetch_themed_artworks(set(), "portrait", count=2, color_tone="warm")
