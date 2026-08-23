@@ -100,6 +100,59 @@ Dry-run şunları yapmaz:
 
 Dry-run strict offline değildir: `GOOGLE_GEMINI_API_KEY` varsa Gemini’ye dış inference isteği yapabilir.
 
+### Remotion Reel handoff export
+
+Reel planning is an explicit, local boundary; it does not run selection, Gemini,
+Remotion, or publishing. Export a serialized, already-normalized artwork plus
+its already-validated local image with:
+
+```bash
+python -m src.reel_handoff selected-artwork.json --local-image data/raw_artwork.jpg
+```
+
+The exporter accepts only the existing `CONFIRMED_PUBLIC_DOMAIN` rights
+decision, measures the local asset against the validated dimensions, and writes
+an ignored package under `output/reel-handoffs/`. The resulting JSON can be
+passed independently to the Remotion planner.
+
+### Automatic Reel candidate acquisition and batch boundary
+
+Before a normal batch, the Art Bot automatically reuses valid existing local
+handoffs and acquires only missing capacity from the active museum adapters.
+Every fresh candidate must pass the existing confirmed-public-domain decision,
+secure image downloader, required handoff metadata, and Reel geometry hard
+gates before the existing handoff exporter writes it. Remotion supplies only
+the already-produced canonical-ID exclusion set; Art Bot does not read the
+production ledger. No Gemini, publishing, or feed history is used during
+acquisition.
+
+The default safe pool is `24` (`REEL_CANDIDATE_POOL_SIZE`) and the per-run
+examination/download budget is `80` (`REEL_ACQUISITION_MAX_ATTEMPTS`). Both
+are validated: pool size must be at least `REEL_BATCH_CANDIDATE_LIMIT`, and
+the attempt limit must be at least the pool size. A compact ignored manifest is
+written to `output/reel-selection/acquisition.json`; a shortfall is reported
+but does not prevent the existing batch shortfall behavior.
+
+For acquisition-only diagnostics:
+
+```bash
+python -m src.reel_candidate_acquisition
+```
+
+The Art Bot candidate boundary then consumes that local, rights-safe handoff
+pool, applies the approved Reel pre-selector and portfolio ordering, and
+reuses the existing handoff exporter:
+
+```bash
+python -m src.reel_batch_candidates
+```
+
+`REEL_SELECTION_TARGET` remains the single target setting (default `4`).
+`REEL_BATCH_CANDIDATE_LIMIT` controls queue depth (default `8`, minimum the
+target). The compact JSON stdout is the stable cross-repository boundary used
+by the Remotion-owned batch runner; it does not fetch museum data or write
+publishing/Reel-history state.
+
 ## Ortam değişkenleri
 
 | Variable | Gerekli mi? | Amaç |

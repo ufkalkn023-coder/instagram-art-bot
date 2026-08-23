@@ -8,6 +8,7 @@ import requests
 
 from .base import MuseumAdapter
 from src.models import NormalizedArtwork, normalize_image_dimensions
+from src.source_health import classify_exception, classify_http_failure
 
 logger = logging.getLogger(__name__)
 
@@ -76,9 +77,11 @@ class EuropeanaAdapter(MuseumAdapter):
         query: str = None,
         rng: random.Random | None = None,
     ) -> List[NormalizedArtwork]:
+        self._clear_source_failure()
         api_key = os.environ.get("EUROPEANA_API_KEY", "").strip()
         if not api_key:
             logger.info("[Europeana] No API key configured, skipping.")
+            self._record_source_failure("MISSING_CREDENTIAL")
             return []
 
         requested = max(1, min(limit, 10))
@@ -98,17 +101,21 @@ class EuropeanaAdapter(MuseumAdapter):
             )
         except requests.RequestException as error:
             logger.warning("[Europeana] Search request failed (%s).", type(error).__name__)
+            self._record_source_failure(classify_exception(error))
             return []
         if response.status_code != 200:
             logger.warning("[Europeana] API returned %s", response.status_code)
+            self._record_source_failure(classify_http_failure(response.status_code, response.headers))
             return []
         try:
             payload = response.json()
         except ValueError:
             logger.warning("[Europeana] API returned malformed JSON.")
+            self._record_source_failure("INVALID_RESPONSE")
             return []
         if not isinstance(payload, dict) or not isinstance(payload.get("items"), list):
             logger.warning("[Europeana] API returned an unexpected JSON payload.")
+            self._record_source_failure("INVALID_RESPONSE")
             return []
 
         items = payload["items"]

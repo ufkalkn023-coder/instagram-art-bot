@@ -7,6 +7,7 @@ import requests
 
 from .base import MuseumAdapter
 from src.models import NormalizedArtwork, normalize_image_dimensions
+from src.source_health import classify_exception, classify_http_failure
 
 logger = logging.getLogger(__name__)
 
@@ -76,9 +77,11 @@ class SmithsonianAdapter(MuseumAdapter):
         query: str = None,
         rng: random.Random | None = None,
     ) -> List[NormalizedArtwork]:
+        self._clear_source_failure()
         api_key = os.environ.get("SMITHSONIAN_API_KEY", "").strip()
         if not api_key:
             logger.info("[Smithsonian] No API key configured, skipping.")
+            self._record_source_failure("MISSING_CREDENTIAL")
             return []
 
         requested = max(1, min(limit, 20))
@@ -98,22 +101,27 @@ class SmithsonianAdapter(MuseumAdapter):
             )
         except requests.RequestException as error:
             logger.warning("[Smithsonian] Search request failed (%s).", type(error).__name__)
+            self._record_source_failure(classify_exception(error))
             return []
         if response.status_code != 200:
             logger.warning("[Smithsonian] API returned %s", response.status_code)
+            self._record_source_failure(classify_http_failure(response.status_code, response.headers))
             return []
         try:
             payload = response.json()
         except ValueError:
             logger.warning("[Smithsonian] API returned malformed JSON.")
+            self._record_source_failure("INVALID_RESPONSE")
             return []
         if not isinstance(payload, dict):
             logger.warning("[Smithsonian] API returned an unexpected JSON payload.")
+            self._record_source_failure("INVALID_RESPONSE")
             return []
 
         response_data = payload.get("response", {})
         rows = response_data.get("rows", []) if isinstance(response_data, dict) else []
         if not isinstance(rows, list):
+            self._record_source_failure("INVALID_RESPONSE")
             return []
         random_source = rng or random
         sampled_rows = random_source.sample(rows, min(requested, len(rows)))

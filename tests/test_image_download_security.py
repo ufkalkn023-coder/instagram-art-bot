@@ -101,6 +101,26 @@ def test_normal_1686_pixel_aic_derivative_is_accepted_with_its_dimensions(monkey
     assert (result.width, result.height) == (1686, 1200)
 
 
+def test_aic_cloudflare_challenge_is_rejected_with_bounded_http_diagnostics(monkeypatch, tmp_path):
+    _install_public_dns(monkeypatch)
+    response = FakeResponse(
+        status_code=403,
+        headers={"Content-Type": "text/html", "cf-mitigated": "challenge"},
+        chunks=[b"challenge"],
+    )
+    monkeypatch.setattr(quality_filter.requests, "get", lambda *args, **kwargs: response)
+
+    result = quality_filter.validate_and_download_image_with_metadata(
+        "https://www.artic.edu/iiif/2/image-1/full/1686,/0/default.jpg",
+        str(tmp_path / "artwork.jpg"),
+    )
+
+    assert not result.valid
+    assert (result.reason, result.http_status) == ("http_status", 403)
+    assert result.cloudflare_challenge
+    assert not response.iterated
+
+
 @pytest.mark.parametrize(
     "url",
     [

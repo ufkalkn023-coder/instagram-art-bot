@@ -4,6 +4,7 @@ import requests
 from typing import List
 from .base import MuseumAdapter
 from src.models import NormalizedArtwork
+from src.source_health import classify_exception, classify_http_failure
 
 logger = logging.getLogger(__name__)
 
@@ -24,6 +25,7 @@ class AICAdapter(MuseumAdapter):
         rng: random.Random | None = None,
     ) -> List[NormalizedArtwork]:
         candidates = []
+        self._clear_source_failure()
         try:
             random_source = rng or random
             page = random_source.randint(1, 20)
@@ -40,9 +42,20 @@ class AICAdapter(MuseumAdapter):
             res = requests.get(url, headers=headers, timeout=15)
             if res.status_code != 200:
                 logger.warning(f"[AIC] API returned {res.status_code}")
+                self._record_source_failure(classify_http_failure(res.status_code, res.headers))
                 return candidates
-                
-            artworks = res.json().get("data", [])
+
+            try:
+                payload = res.json()
+            except ValueError:
+                logger.warning("[AIC] API returned malformed JSON.")
+                self._record_source_failure("INVALID_RESPONSE")
+                return candidates
+            artworks = payload.get("data") if isinstance(payload, dict) else None
+            if not isinstance(artworks, list):
+                logger.warning("[AIC] API returned an unexpected JSON payload.")
+                self._record_source_failure("INVALID_RESPONSE")
+                return candidates
             
             for item in artworks:
                 if item.get("is_public_domain") is not True:
@@ -80,6 +93,7 @@ class AICAdapter(MuseumAdapter):
                 candidates.append(artwork)
                 
         except Exception as e:
-            logger.error(f"[AIC] Error fetching candidates: {e}")
+            logger.error("[AIC] Error fetching candidates (%s).", type(e).__name__)
+            self._record_source_failure(classify_exception(e))
             
         return candidates

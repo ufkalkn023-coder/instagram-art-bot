@@ -12,6 +12,7 @@ import requests
 from PIL import Image
 
 from src.models import NormalizedArtwork, normalize_image_dimensions
+from src.source_health import is_cloudflare_challenge
 
 logger = logging.getLogger(__name__)
 
@@ -39,6 +40,8 @@ class ImageValidationResult:
     height: int | None = None
     image_format: str | None = None
     reason: str | None = None
+    http_status: int | None = None
+    cloudflare_challenge: bool = False
 
 
 def _safe_url_for_log(url: str) -> str:
@@ -162,6 +165,17 @@ def _validate_downloaded_image(path: str) -> ImageValidationResult:
     return ImageValidationResult(True, width, height, image_format, "ok")
 
 
+def validate_local_image_file(path: str) -> ImageValidationResult:
+    """Validate an existing local raster with the production decode policy.
+
+    This is the file-based counterpart to the validation performed after a
+    secure download. It intentionally shares the same Pillow format, pixel,
+    and full-decode checks so downstream local consumers do not weaken the
+    image-security boundary.
+    """
+    return _validate_downloaded_image(path)
+
+
 def _remove_file_if_present(path: Optional[str]) -> None:
     if not path:
         return
@@ -208,8 +222,17 @@ def validate_and_download_image_with_metadata(url: str, output_path: str) -> Ima
                 continue
 
             if response.status_code != 200:
-                logger.warning("Image validation failed: http_status (%s)", _safe_url_for_log(current_url))
-                return ImageValidationResult(False, reason="http_status")
+                logger.warning(
+                    "Image validation failed: http_status=%s (%s)",
+                    response.status_code,
+                    _safe_url_for_log(current_url),
+                )
+                return ImageValidationResult(
+                    False,
+                    reason="http_status",
+                    http_status=response.status_code,
+                    cloudflare_challenge=is_cloudflare_challenge(response.status_code, response.headers),
+                )
             if _content_length_exceeds_limit(response.headers):
                 logger.warning("Image validation failed: too_large (%s)", _safe_url_for_log(current_url))
                 return ImageValidationResult(False, reason="too_large")

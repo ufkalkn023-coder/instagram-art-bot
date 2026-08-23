@@ -5,6 +5,7 @@ import os
 from typing import List
 from .base import MuseumAdapter
 from src.models import NormalizedArtwork
+from src.source_health import classify_exception, classify_http_failure
 import config
 
 logger = logging.getLogger(__name__)
@@ -35,9 +36,11 @@ class RijksmuseumAdapter(MuseumAdapter):
         rng: random.Random | None = None,
     ) -> List[NormalizedArtwork]:
         candidates = []
+        self._clear_source_failure()
         api_key = os.environ.get("RIJKSMUSEUM_API_KEY", getattr(config, "RIJKSMUSEUM_API_KEY", ""))
         if not api_key:
             logger.info("[Rijksmuseum] No API key configured, skipping.")
+            self._record_source_failure("MISSING_CREDENTIAL")
             return candidates
 
         try:
@@ -55,9 +58,20 @@ class RijksmuseumAdapter(MuseumAdapter):
             res = requests.get(url, headers=headers, timeout=20)
             if res.status_code != 200:
                 logger.warning(f"[Rijksmuseum] API returned {res.status_code}")
+                self._record_source_failure(classify_http_failure(res.status_code, res.headers))
                 return candidates
 
-            artworks = res.json().get("artObjects", [])
+            try:
+                payload = res.json()
+            except ValueError:
+                logger.warning("[Rijksmuseum] API returned malformed JSON.")
+                self._record_source_failure("INVALID_RESPONSE")
+                return candidates
+            artworks = payload.get("artObjects") if isinstance(payload, dict) else None
+            if not isinstance(artworks, list):
+                logger.warning("[Rijksmuseum] API returned an unexpected JSON payload.")
+                self._record_source_failure("INVALID_RESPONSE")
+                return candidates
             
             for item in artworks:
                 rights_text = item.get("copyrightHolder")
@@ -96,6 +110,7 @@ class RijksmuseumAdapter(MuseumAdapter):
                 candidates.append(artwork)
 
         except Exception as e:
-            logger.error(f"[Rijksmuseum] Error fetching candidates: {e}")
+            logger.error("[Rijksmuseum] Error fetching candidates (%s).", type(e).__name__)
+            self._record_source_failure(classify_exception(e))
 
         return candidates
