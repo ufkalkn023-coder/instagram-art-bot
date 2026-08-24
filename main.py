@@ -42,14 +42,11 @@ def _log_dry_run_success(mode: str, artworks: list[dict], artifact_paths: list[s
 def run_single_post(args):
     logger.info("Running single post logic...")
     posted_ids = history_tracker.get_posted_ids()
-    color_tone = _get_grid_color_tone_for_run(args.dry_run)
-    
-    try:
-        artworks = art_fetcher.fetch_themed_artworks(posted_ids, "", 1, color_tone)
-        artwork = artworks[0]
-    except Exception as e:
-        logger.error(f"Failed to fetch themed artwork: {e}. Falling back to random...")
-        artwork = art_fetcher.fetch_random_artwork(posted_ids)
+    # Single-post acquisition and editorial selection are intentionally kept
+    # independent of the grid tone. Grid presentation remains a separate
+    # concern; museum adapters must not receive values such as "blue" as a
+    # search query for ordinary single posts.
+    artwork = art_fetcher.fetch_single_artwork(posted_ids)
 
     if args.dry_run:
         logger.info("[DRY-RUN MODE] Skipping history reservation.")

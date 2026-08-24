@@ -81,12 +81,11 @@ def test_recovery_expires_only_stale_pending_records(monkeypatch):
 def _mock_single_post_dependencies(monkeypatch, post_result):
     artwork = _artwork()
     monkeypatch.setattr(main.history_tracker, "get_posted_ids", lambda: set())
-    monkeypatch.setattr(main.history_tracker, "get_grid_color_tone", lambda: "warm")
     monkeypatch.setattr(main.history_tracker, "get_recent_history", lambda: [])
     monkeypatch.setattr(main.history_tracker, "reserve_artwork", lambda value: None)
     monkeypatch.setattr(main.history_tracker, "mark_artworks_publishing", lambda artwork_ids: 1)
     monkeypatch.setattr(main.history_tracker, "mark_artworks_pending", lambda artwork_ids: 1)
-    monkeypatch.setattr(main.art_fetcher, "fetch_themed_artworks", lambda *args, **kwargs: [artwork])
+    monkeypatch.setattr(main.art_fetcher, "fetch_single_artwork", lambda *args, **kwargs: artwork)
     monkeypatch.setattr(main.image_processor, "prepare_local_image", lambda path: ("raw.jpg", "vertical"))
     monkeypatch.setattr(main.image_processor, "create_feed_post", lambda *args, **kwargs: "post.jpg")
     monkeypatch.setattr(main.gemini_ai, "analyze_artwork", lambda *args, **kwargs: None)

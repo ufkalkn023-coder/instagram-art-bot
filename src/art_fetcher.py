@@ -288,15 +288,14 @@ def _select_carousel_candidates(
 
     return None
 
-def fetch_random_artwork(posted_ids: set) -> Dict[str, Any]:
+def fetch_single_artwork(posted_ids: set) -> Dict[str, Any]:
     """
-    Orchestrates the new Image-First pipeline:
-    1. Fetches candidates from all museums.
-    2. Normalizes them.
-    3. Filters out duplicates.
-    4. Scores them based on quality.
-    5. Validates the top candidate's image.
-    6. Returns the best valid artwork as a dictionary compatible with the rest of the pipeline.
+    Select one production-ready single post using the canonical editorial path.
+
+    Candidate quality gates are always evaluated before editorial adjustments;
+    ranking then uses museum, regional, visual, discovery, and bounded
+    serendipity adjustments. Adapter failures are isolated so another museum
+    can still provide the selected work.
     """
     adapters = _museum_adapters()
     
@@ -367,7 +366,18 @@ def fetch_random_artwork(posted_ids: set) -> Dict[str, Any]:
         base_score = calculate_quality_score(c, museum_weights)
         c.quality_score = base_score
         c.measurement_coverage = calculate_measurement_coverage(c)
-        
+
+        # Quality is an authoritative admission gate. Editorial adjustments
+        # must never allow an under-threshold work into the ranked pool.
+        if c.quality_score < min_score:
+            observability.reject("pre_quality_below_threshold")
+            logger.debug(
+                "single_candidate_rejected candidate=%s reason=pre_quality_below_threshold quality=%.2f",
+                c.canonical_id,
+                c.quality_score,
+            )
+            continue
+
         # Calculate diversity penalties/bonuses
         museum_penalty = content_diversity.analyze_museum_diversity(c.museum_name, recent_history)
         features = content_diversity.get_candidate_metadata_features(c)
@@ -389,17 +399,8 @@ def fetch_random_artwork(posted_ids: set) -> Dict[str, Any]:
         # Attach features for later use
         c._diversity_features = features
         c._selection_breakdown = breakdown
-        
-        if c.quality_score >= min_score:
-            scored_candidates.append(c)
-        else:
-            observability.reject("pre_quality_below_threshold")
-            logger.debug(
-                "single_candidate_rejected candidate=%s reason=pre_quality_below_threshold quality=%.2f selection=%.2f",
-                c.canonical_id,
-                c.quality_score,
-                c.selection_score,
-            )
+
+        scored_candidates.append(c)
             
     # Sort by score descending
     scored_candidates.sort(key=lambda x: x.selection_score, reverse=True)
@@ -449,7 +450,7 @@ def fetch_random_artwork(posted_ids: set) -> Dict[str, Any]:
             observability.selected += 1
             breakdown = best_candidate._selection_breakdown
             logger.info(
-                "selection_selected candidate=%s source=%s region=%s pre_quality=%.2f quality=%.2f coverage=%.1f dimensions=%sx%s museum=%+.2f visual=%+.2f discovery=%+.2f serendipity=%+.2f selection=%.2f regional=%+.2f",
+                "selection_selected candidate=%s source=%s region=%s pre_quality=%.2f quality=%.2f coverage=%.1f dimensions=%sx%s museum=%+.2f regional=%+.2f visual=%+.2f discovery=%+.2f serendipity=%+.2f selection=%.2f",
                 best_candidate.canonical_id,
                 best_candidate.source,
                 normalize_region(best_candidate.region),
@@ -459,11 +460,11 @@ def fetch_random_artwork(posted_ids: set) -> Dict[str, Any]:
                 best_candidate.image_width,
                 best_candidate.image_height,
                 breakdown.museum_adjustment,
+                breakdown.regional_adjustment,
                 breakdown.visual_adjustment,
                 breakdown.discovery_adjustment,
                 breakdown.serendipity_adjustment,
                 best_candidate.selection_score,
-                breakdown.regional_adjustment,
             )
             logger.info(
                 "selection_summary raw=%s rights_safe=%s history_new=%s quality_pass=%s downloads=%s selected=%s rejections=%s",
@@ -519,6 +520,11 @@ def fetch_random_artwork(posted_ids: set) -> Dict[str, Any]:
         observability.rejection_fields(),
     )
     raise RuntimeError("All top candidates failed image validation (Hard Reject)!")
+
+
+def fetch_random_artwork(posted_ids: set) -> Dict[str, Any]:
+    """Backward-compatible alias for the canonical single-post selector."""
+    return fetch_single_artwork(posted_ids)
 
 def fetch_themed_artworks(posted_ids: set, theme: str, count: int, color_tone: str) -> List[Dict[str, Any]]:
     """Return exactly ``count`` validated artworks.

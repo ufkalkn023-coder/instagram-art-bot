@@ -47,8 +47,8 @@ def _install_single_read_and_local_pipeline(monkeypatch, artwork, calls):
     monkeypatch.setattr(main.history_tracker, "get_recent_history", lambda: calls.append("history_recent") or [])
     monkeypatch.setattr(
         main.art_fetcher,
-        "fetch_themed_artworks",
-        lambda *args, **kwargs: calls.append(("selection", args[3])) or [artwork],
+        "fetch_single_artwork",
+        lambda *args, **kwargs: calls.append("selection") or artwork,
     )
     monkeypatch.setattr(
         main.image_processor,
@@ -82,8 +82,7 @@ def test_single_dry_run_validates_content_locally_without_external_mutations(mon
 
     assert calls == [
         "history_ids",
-        ("grid_tone", {"read_only": True}),
-        ("selection", "warm"),
+        "selection",
         ("prepare", "downloaded.jpg"),
         "history_recent",
         "content_type",
@@ -169,8 +168,8 @@ def test_repeated_dry_runs_do_not_change_history_input_or_selection_state(monkey
     monkeypatch.setattr(main.history_tracker, "get_recent_history", lambda: [])
     monkeypatch.setattr(
         main.art_fetcher,
-        "fetch_themed_artworks",
-        lambda posted_ids, *args, **kwargs: calls.append(posted_ids) or [artwork.copy()],
+        "fetch_single_artwork",
+        lambda posted_ids: calls.append(posted_ids) or artwork.copy(),
     )
     monkeypatch.setattr(main.image_processor, "prepare_local_image", lambda path: (path, "vertical"))
     monkeypatch.setattr(main.content_diversity, "select_content_type", lambda history: "SINGLE_ARTWORK")

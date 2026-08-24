@@ -74,7 +74,7 @@ def test_single_post_rejects_measured_low_quality_and_preserves_serendipity(monk
     )
     attempted = _install_download_results(monkeypatch, {"low": (300, 700), "high": (1686, 1200)})
 
-    artwork = art_fetcher.fetch_random_artwork(set())
+    artwork = art_fetcher.fetch_single_artwork(set())
 
     assert artwork["id"] == "aic_high"
     assert attempted == ["low", "high"]
@@ -144,13 +144,13 @@ def test_single_selection_logs_breakdown_and_aggregate_rejections_without_query_
 
     monkeypatch.setattr(art_fetcher, "validate_and_download_image_with_metadata", download)
 
-    artwork = art_fetcher.fetch_random_artwork({"aic_duplicate"})
+    artwork = art_fetcher.fetch_single_artwork({"aic_duplicate"})
 
     assert artwork["id"] == "aic_selected"
     assert artwork["quality_score"] == 70.0
     assert artwork["selection_score"] == 74.5
     assert "selection_selected candidate=aic_selected" in caplog.text
-    assert "museum=-3.00 visual=+4.00 discovery=+2.00 serendipity=+1.50 selection=74.50" in caplog.text
+    assert "museum=-3.00 regional=+0.00 visual=+4.00 discovery=+2.00 serendipity=+1.50 selection=74.50" in caplog.text
     assert "raw=6 rights_safe=5 history_new=4 quality_pass=3 downloads=3 selected=aic_selected" in caplog.text
     for reason in ("rights_unconfirmed:1", "history_duplicate:1", "pre_quality_below_threshold:1", "image_validation_failed:1", "post_quality_below_threshold:1"):
         assert reason in caplog.text
