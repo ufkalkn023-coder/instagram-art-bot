@@ -46,6 +46,12 @@ dependency install
 
 Install, compile veya test adımı başarısız olursa production adımı çalışmaz. Production secret’ları yalnız publish adımına verilir; compile ve test adımları secret almaz.
 
+### Instagram Insights collector
+
+Insights toplama posting akışından tamamen ayrıdır: `Instagram Insights Collector` workflow’u her gün 03:00 UTC’de çalışır ve `main.py` çağırmaz. Kesinleşmiş `publications` kayıtları için 24, 72 ve 168 saatlik hedef slotlarda yalnız parent media ID’sinin `views`, `reach`, `likes`, `comments`, `saved`, `shares` ve `total_interactions` metriklerini okur. Snapshot’lar `posted_history.json` içine eklenmez; yayının UTC `posted_at` ayına göre `insights/YYYY-MM.json` R2 objesinde saklanır. Böylece bir yayının tüm slotları, ay sınırını geçse bile birlikte kalır.
+
+Geç koleksiyon için sınırlar sırasıyla 7, 14 ve 30 gündür. Her koşu bir publication için en fazla bir (en yüksek, halen geçerli) slot toplar; boş Meta verisi slotu tüketmez ve sonraki günlük koşuda tekrar denenir. Analytics hataları publishing state’ini veya history lifecycle’ını etkileyemez. Meta token’ında en az `instagram_basic`, `instagram_manage_insights` ve gerekirse `pages_read_engagement` izinleri olmalıdır. Henüz performans skorlaması veya eser seçimine performance etkisi yoktur.
+
 ## History ve duplicate koruması
 
 History, Git commit/push ile değil Cloudflare R2’de saklanır. Kayıtların kısa lifecycle’ı şöyledir:
@@ -124,6 +130,7 @@ Dry-run strict offline değildir: `GOOGLE_GEMINI_API_KEY` varsa Gemini’ye dı�
 | --- | --- | --- |
 | `INSTAGRAM_ACCOUNT_ID` | Production publish için gerekli | Instagram Business/Creator account ID |
 | `INSTAGRAM_ACCESS_TOKEN` | Production publish için gerekli | Meta Graph API erişim token’ı |
+| `INSTAGRAM_ACCESS_TOKEN` | Insights collector için gerekli | Read-only Instagram media Insights erişimi |
 | `CLOUDFLARE_R2_ACCOUNT_ID` | Production history ve R2 media için gerekli | R2 account ID |
 | `CLOUDFLARE_R2_ACCESS_KEY_ID` | Production history ve R2 media için gerekli | R2 access key |
 | `CLOUDFLARE_R2_SECRET_ACCESS_KEY` | Production history ve R2 media için gerekli | R2 secret key |
