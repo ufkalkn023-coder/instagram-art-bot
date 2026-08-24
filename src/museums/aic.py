@@ -4,6 +4,7 @@ import requests
 from typing import List
 from .base import MuseumAdapter
 from src.models import NormalizedArtwork
+from src.region import infer_region, metadata_text
 from src.source_health import classify_exception, classify_http_failure
 
 logger = logging.getLogger(__name__)
@@ -34,7 +35,7 @@ class AICAdapter(MuseumAdapter):
             url = (
                 f"https://api.artic.edu/api/v1/artworks/search"
                 f"?q={search_query}&query[term][is_public_domain]=true"
-                f"&fields=id,title,artist_title,date_display,medium_display,image_id,classification_title,is_public_domain,copyright_notice,credit_line"
+                f"&fields=id,title,artist_title,artist_display,date_display,medium_display,image_id,classification_title,place_of_origin,department_title,style_titles,is_public_domain,copyright_notice,credit_line"
                 f"&limit={limit}&page={page}"
             )
             
@@ -82,7 +83,17 @@ class AICAdapter(MuseumAdapter):
                     artist_name=item.get("artist_title") or "Unknown Artist",
                     creation_date=item.get("date_display") or "Unknown Date",
                     medium=item.get("medium_display") or "",
+                    geographic_origin=metadata_text(item.get("place_of_origin")),
+                    artist_nationality=metadata_text(item.get("artist_display")),
+                    region=infer_region(
+                        geography=item.get("place_of_origin"),
+                        artist_nationality=item.get("artist_display"),
+                        department=item.get("department_title"),
+                        style_or_period=item.get("style_titles"),
+                    ),
+                    department=metadata_text(item.get("department_title")),
                     classification=item.get("classification_title"),
+                    style_or_period=metadata_text(item.get("style_titles")),
                     museum_name="Art Institute of Chicago",
                     image_url=image_url,
                     credit_line=item.get("credit_line"),

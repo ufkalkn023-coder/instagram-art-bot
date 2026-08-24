@@ -5,6 +5,7 @@ import re
 from typing import List
 from .base import MuseumAdapter
 from src.models import NormalizedArtwork
+from src.region import infer_region, metadata_text
 import config
 
 logger = logging.getLogger(__name__)
@@ -75,6 +76,13 @@ class MetAdapter(MuseumAdapter):
                 object_name = detail.get("objectName") or ""
                 classification = detail.get("classification") or ""
                 medium = detail.get("medium") or ""
+                culture = metadata_text(detail.get("culture"))
+                geographic_origin = metadata_text(
+                    [detail.get("city"), detail.get("country"), detail.get("region"), detail.get("subregion"), detail.get("locale")]
+                )
+                artist_nationality = metadata_text(detail.get("artistNationality"))
+                department = metadata_text(detail.get("department"))
+                style_or_period = metadata_text([detail.get("period"), detail.get("dynasty"), detail.get("reign")])
 
                 if not is_painting(title, object_name, classification, medium):
                     continue
@@ -90,8 +98,19 @@ class MetAdapter(MuseumAdapter):
                     artist_name=detail.get("artistDisplayName") or "Unknown Artist",
                     creation_date=detail.get("objectDate") or "Unknown Date",
                     medium=medium,
-                    department=detail.get("department"),
+                    culture=culture,
+                    geographic_origin=geographic_origin,
+                    artist_nationality=artist_nationality,
+                    region=infer_region(
+                        culture=culture,
+                        geography=geographic_origin,
+                        artist_nationality=artist_nationality,
+                        department=department,
+                        style_or_period=style_or_period,
+                    ),
+                    department=department,
                     classification=classification,
+                    style_or_period=style_or_period,
                     museum_name="The Metropolitan Museum of Art",
                     image_url=image_url,
                     license="The Met Open Access",

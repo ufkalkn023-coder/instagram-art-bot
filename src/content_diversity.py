@@ -2,8 +2,11 @@ import logging
 from typing import Dict, Any, List
 import random
 import re
+from src.region import normalize_region
 
 logger = logging.getLogger(__name__)
+
+REGIONAL_DIVERSITY_ADJUSTMENTS = {0: 2.0, 1: 0.0, 2: -8.0, 3: -18.0}
 
 CONTENT_TYPES = [
     "SINGLE_ARTWORK",
@@ -109,6 +112,19 @@ def analyze_museum_diversity(candidate_museum: str, recent_history: List[Dict[st
         penalty -= 15.0
         
     return penalty
+
+
+def analyze_regional_diversity(candidate_region: str, recent_history: List[Dict[str, Any]]) -> float:
+    """Apply region-agnostic fatigue using the six most recent published works."""
+    candidate_region = normalize_region(candidate_region)
+    if candidate_region == "unknown":
+        return 0.0
+
+    recent_regions = [normalize_region(post.get("region")) for post in recent_history[-6:]]
+    count = recent_regions.count(candidate_region)
+    if count >= 4:
+        return -30.0
+    return REGIONAL_DIVERSITY_ADJUSTMENTS.get(count, 0.0)
 
 def analyze_visual_diversity(candidate_features: Dict[str, str], recent_history: List[Dict[str, Any]]) -> float:
     """

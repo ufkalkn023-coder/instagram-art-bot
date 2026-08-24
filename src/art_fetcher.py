@@ -23,6 +23,7 @@ from src.quality_filter import (
 )
 from src import history_tracker
 from src import content_diversity
+from src.region import normalize_region
 import config
 
 logger = logging.getLogger(__name__)
@@ -118,6 +119,7 @@ class SelectionScoreBreakdown:
     visual_adjustment: float
     discovery_adjustment: float
     serendipity_adjustment: float
+    regional_adjustment: float = 0.0
 
     @property
     def selection_score(self) -> float:
@@ -127,6 +129,7 @@ class SelectionScoreBreakdown:
             + self.visual_adjustment
             + self.discovery_adjustment
             + self.serendipity_adjustment
+            + self.regional_adjustment
         )
 
 
@@ -196,6 +199,7 @@ def _select_carousel_candidates(
     validated_paths: dict,
     artist_cap: int,
     museum_cap: int,
+    region_cap: int | None,
     museum_weights: dict,
     min_score: float,
     observability: SelectionObservability,
@@ -203,6 +207,7 @@ def _select_carousel_candidates(
     """Add validated candidates that fit the current internal diversity caps."""
     artist_counts = {}
     museum_counts = {}
+    region_counts = {}
     for candidate in selected:
         artist_key = _normalized_diversity_key(candidate.artist_name)
         museum_key = _normalized_diversity_key(candidate.museum_name)
@@ -210,6 +215,9 @@ def _select_carousel_candidates(
             artist_counts[artist_key] = artist_counts.get(artist_key, 0) + 1
         if museum_key:
             museum_counts[museum_key] = museum_counts.get(museum_key, 0) + 1
+        region = normalize_region(getattr(candidate, "region", "unknown"))
+        if region != "unknown":
+            region_counts[region] = region_counts.get(region, 0) + 1
 
     for candidate in candidates:
         if len(selected) == count:
@@ -223,6 +231,7 @@ def _select_carousel_candidates(
 
         artist_key = _normalized_diversity_key(candidate.artist_name)
         museum_key = _normalized_diversity_key(candidate.museum_name)
+        region = normalize_region(getattr(candidate, "region", "unknown"))
         if artist_key and artist_counts.get(artist_key, 0) >= artist_cap:
             observability.reject("internal_artist_limit")
             logger.debug("carousel_candidate_rejected candidate=%s reason=internal_artist_limit", candidate_id)
@@ -230,6 +239,10 @@ def _select_carousel_candidates(
         if museum_key and museum_counts.get(museum_key, 0) >= museum_cap:
             observability.reject("internal_museum_limit")
             logger.debug("carousel_candidate_rejected candidate=%s reason=internal_museum_limit", candidate_id)
+            continue
+        if region != "unknown" and region_cap is not None and region_counts.get(region, 0) >= region_cap:
+            observability.reject("internal_region_limit")
+            logger.debug("carousel_candidate_rejected candidate=%s reason=internal_region_limit region=%s", candidate_id, region)
             continue
 
         if candidate_id not in validated_paths:
@@ -270,6 +283,8 @@ def _select_carousel_candidates(
             artist_counts[artist_key] = artist_counts.get(artist_key, 0) + 1
         if museum_key:
             museum_counts[museum_key] = museum_counts.get(museum_key, 0) + 1
+        if region != "unknown":
+            region_counts[region] = region_counts.get(region, 0) + 1
 
     return None
 
@@ -359,6 +374,7 @@ def fetch_random_artwork(posted_ids: set) -> Dict[str, Any]:
         visual_bonus = content_diversity.analyze_visual_diversity(features, recent_history)
         discovery_bonus = content_diversity.analyze_discovery_score(features, base_score, recent_history)
         serendipity_bonus = calculate_serendipity_bonus(selection_run_seed.value, c.canonical_id)
+        regional_adjustment = content_diversity.analyze_regional_diversity(c.region, recent_history)
         
         breakdown = SelectionScoreBreakdown(
             quality_score=base_score,
@@ -366,6 +382,7 @@ def fetch_random_artwork(posted_ids: set) -> Dict[str, Any]:
             visual_adjustment=visual_bonus,
             discovery_adjustment=discovery_bonus,
             serendipity_adjustment=serendipity_bonus,
+            regional_adjustment=regional_adjustment,
         )
         c.selection_score = breakdown.selection_score
 
@@ -432,9 +449,10 @@ def fetch_random_artwork(posted_ids: set) -> Dict[str, Any]:
             observability.selected += 1
             breakdown = best_candidate._selection_breakdown
             logger.info(
-                "selection_selected candidate=%s source=%s pre_quality=%.2f quality=%.2f coverage=%.1f dimensions=%sx%s museum=%+.2f visual=%+.2f discovery=%+.2f serendipity=%+.2f selection=%.2f",
+                "selection_selected candidate=%s source=%s region=%s pre_quality=%.2f quality=%.2f coverage=%.1f dimensions=%sx%s museum=%+.2f visual=%+.2f discovery=%+.2f serendipity=%+.2f selection=%.2f regional=%+.2f",
                 best_candidate.canonical_id,
                 best_candidate.source,
+                normalize_region(best_candidate.region),
                 pre_quality_score,
                 best_candidate.quality_score,
                 best_candidate.measurement_coverage,
@@ -445,6 +463,7 @@ def fetch_random_artwork(posted_ids: set) -> Dict[str, Any]:
                 breakdown.discovery_adjustment,
                 breakdown.serendipity_adjustment,
                 best_candidate.selection_score,
+                breakdown.regional_adjustment,
             )
             logger.info(
                 "selection_summary raw=%s rights_safe=%s history_new=%s quality_pass=%s downloads=%s selected=%s rejections=%s",
@@ -480,6 +499,7 @@ def fetch_random_artwork(posted_ids: set) -> Dict[str, Any]:
                 # Passed down to reserve_artwork
                 "visual_category": features.get("visual_category", "other"),
                 "period": features.get("period", "unknown"),
+                "region": normalize_region(best_candidate.region),
             }
         else:
             observability.reject("image_validation_failed")
@@ -586,36 +606,42 @@ def fetch_themed_artworks(posted_ids: set, theme: str, count: int, color_tone: s
 
     strict_museum_cap = min(3, count)
     relaxed_museum_cap = min(4, count)
+    strict_region_cap = min(2, count)
+    relaxed_region_cap = min(3, count)
 
     add_candidates(f"{color_tone} {theme}", 25, "tone_and_theme")
     _select_carousel_candidates(
-        ranked_candidates(), count, selected, selected_ids, validated_paths, 1, strict_museum_cap,
+        ranked_candidates(), count, selected, selected_ids, validated_paths, 1, strict_museum_cap, strict_region_cap,
         museum_weights, min_score, observability,
     )
 
     if len(selected) < count:
         add_candidates(theme, 25, "theme_only")
         _select_carousel_candidates(
-            ranked_candidates(), count, selected, selected_ids, validated_paths, 1, strict_museum_cap,
+            ranked_candidates(), count, selected, selected_ids, validated_paths, 1, strict_museum_cap, strict_region_cap,
             museum_weights, min_score, observability,
         )
 
     if len(selected) < count:
-        logger.info("Carousel selection relaxing internal caps: artist<=2, museum<=%s", relaxed_museum_cap)
+        logger.info(
+            "Carousel selection relaxing internal caps: artist<=2, museum<=%s, region<=%s",
+            relaxed_museum_cap,
+            relaxed_region_cap,
+        )
         _select_carousel_candidates(
-            ranked_candidates(), count, selected, selected_ids, validated_paths, 2, relaxed_museum_cap,
+            ranked_candidates(), count, selected, selected_ids, validated_paths, 2, relaxed_museum_cap, relaxed_region_cap,
             museum_weights, min_score, observability,
         )
 
     if len(selected) < count:
         add_candidates(theme, 50, "expanded_theme")
         _select_carousel_candidates(
-            ranked_candidates(), count, selected, selected_ids, validated_paths, 1, strict_museum_cap,
+            ranked_candidates(), count, selected, selected_ids, validated_paths, 1, strict_museum_cap, strict_region_cap,
             museum_weights, min_score, observability,
         )
         if len(selected) < count:
             _select_carousel_candidates(
-                ranked_candidates(), count, selected, selected_ids, validated_paths, 2, relaxed_museum_cap,
+                ranked_candidates(), count, selected, selected_ids, validated_paths, 2, relaxed_museum_cap, relaxed_region_cap,
                 museum_weights, min_score, observability,
             )
 
@@ -667,11 +693,13 @@ def fetch_themed_artworks(posted_ids: set, theme: str, count: int, color_tone: s
             "description": candidate.description,
             "visual_category": features["visual_category"],
             "period": features["period"],
+            "region": normalize_region(candidate.region),
         })
 
     source_distribution = Counter(candidate.source for candidate in selected)
+    region_distribution = Counter(normalize_region(candidate.region) for candidate in selected)
     logger.info(
-        "carousel_selection_summary requested=%s selected=%s safe_candidates=%s validated_images=%s stages=%s downloads=%s artists_unique=%s source_distribution=%s rejections=%s result=selected",
+        "carousel_selection_summary requested=%s selected=%s safe_candidates=%s validated_images=%s stages=%s downloads=%s artists_unique=%s source_distribution=%s region_distribution=%s rejections=%s result=selected",
         count,
         len(selected),
         len(candidates_by_id),
@@ -680,6 +708,7 @@ def fetch_themed_artworks(posted_ids: set, theme: str, count: int, color_tone: s
         observability.downloads,
         len({_normalized_diversity_key(candidate.artist_name) for candidate in selected if _normalized_diversity_key(candidate.artist_name)}),
         ",".join(f"{source}:{source_distribution[source]}" for source in sorted(source_distribution)) or "none",
+        ",".join(f"{region}:{region_distribution[region]}" for region in sorted(region_distribution)) or "none",
         observability.rejection_fields(),
     )
     return final_artworks

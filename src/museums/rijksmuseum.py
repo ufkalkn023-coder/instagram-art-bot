@@ -5,6 +5,7 @@ import os
 from typing import List
 from .base import MuseumAdapter
 from src.models import NormalizedArtwork
+from src.region import infer_region, metadata_text
 from src.source_health import classify_exception, classify_http_failure
 import config
 
@@ -92,6 +93,8 @@ class RijksmuseumAdapter(MuseumAdapter):
                 title = item.get("title") or "Untitled"
                 artist = item.get("principalOrFirstMaker") or "Unknown Artist"
                 date = item.get("longTitle", "").split(",")[-1].strip() if item.get("longTitle") else "Unknown Date"
+                geographic_origin = metadata_text(item.get("productionPlaces"))
+                style_or_period = metadata_text(item.get("dating"))
 
                 artwork = NormalizedArtwork(
                     source=self.source_id,
@@ -100,6 +103,10 @@ class RijksmuseumAdapter(MuseumAdapter):
                     artist_name=artist,
                     creation_date=date,
                     medium="painting",
+                    geographic_origin=geographic_origin,
+                    region=infer_region(geography=geographic_origin, style_or_period=style_or_period),
+                    classification=metadata_text(item.get("objectTypes")),
+                    style_or_period=style_or_period,
                     museum_name="Rijksmuseum, Amsterdam",
                     image_url=image_url,
                     license=rights_text,

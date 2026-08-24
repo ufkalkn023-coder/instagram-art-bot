@@ -1,5 +1,6 @@
 from typing import Optional
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
+from src.region import REGION_UNKNOWN, normalize_region
 
 
 LEGACY_ARTWORK_ID_PREFIXES = {
@@ -66,7 +67,11 @@ class NormalizedArtwork(BaseModel):
     dimensions: Optional[str] = None
     
     # Classification & Context
+    # culture remains raw source metadata; region is the controlled selection key.
     culture: Optional[str] = None
+    geographic_origin: Optional[str] = None
+    artist_nationality: Optional[str] = None
+    region: str = Field(default=REGION_UNKNOWN, description="Normalized editorial region")
     department: Optional[str] = None
     classification: Optional[str] = None
     style_or_period: Optional[str] = None
@@ -100,6 +105,11 @@ class NormalizedArtwork(BaseModel):
         default=None,
         description="Post-gate ranking score including diversity/discovery/serendipity adjustments",
     )
+
+    @field_validator("region", mode="before")
+    @classmethod
+    def normalize_region_value(cls, value: object) -> str:
+        return normalize_region(value)
     
     @property
     def canonical_id(self) -> str:

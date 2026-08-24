@@ -8,6 +8,7 @@ import requests
 
 from .base import MuseumAdapter
 from src.models import NormalizedArtwork, normalize_image_dimensions
+from src.region import infer_region, metadata_text
 from src.source_health import classify_exception, classify_http_failure
 
 logger = logging.getLogger(__name__)
@@ -156,6 +157,8 @@ class EuropeanaAdapter(MuseumAdapter):
             image_url, rights_uri, rights_status, resource = image
             width, height = normalize_image_dimensions(resource.get("ebucoreWidth"), resource.get("ebucoreHeight"))
             provider = _first_text(record.get("dataProvider"), _first_text(record.get("provider"), "Europeana"))
+            geographic_origin = metadata_text([record.get("dcCoverage"), record.get("edmPlace")])
+            style_or_period = metadata_text(record.get("dcType"))
             candidates.append(
                 NormalizedArtwork(
                     source=self.source_id,
@@ -164,7 +167,10 @@ class EuropeanaAdapter(MuseumAdapter):
                     artist_name=_first_text(record.get("dcCreator"), "Unknown Artist"),
                     creation_date=_first_text(record.get("year"), "Unknown Date"),
                     medium=_first_text(record.get("dcFormat")),
+                    geographic_origin=geographic_origin,
+                    region=infer_region(geography=geographic_origin, style_or_period=style_or_period),
                     classification=_first_text(record.get("type")),
+                    style_or_period=style_or_period,
                     museum_name=provider,
                     artwork_url=f"https://www.europeana.eu/item/{record_id}",
                     image_url=image_url,

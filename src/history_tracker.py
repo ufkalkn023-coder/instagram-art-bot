@@ -197,7 +197,9 @@ def get_recent_history() -> list:
         item
         for item in history.get("posted_artworks", [])
         if not _is_stale_pending(item, now)
-        and str(item.get("status", "")).upper() not in {"EXPIRED", "AMBIGUOUS"}
+        # Status-less records predate lifecycle tracking and are legacy
+        # published history. Transient reservations must not create fatigue.
+        and str(item.get("status", "")).upper() in {"", "PUBLISHED"}
     ]
 
 def reserve_artwork(artwork_data: Dict[str, Any]):
@@ -224,6 +226,7 @@ def reserve_artwork(artwork_data: Dict[str, Any]):
         "visual_category": artwork_data.get("visual_category", "other"),
         "medium": artwork_data.get("medium", "other"),
         "period": artwork_data.get("period", "unknown"),
+        "region": artwork_data.get("region", "unknown"),
         "quality_score": artwork_data.get("quality_score"),
         "measurement_coverage": artwork_data.get("measurement_coverage"),
         "selection_score": artwork_data.get("selection_score"),

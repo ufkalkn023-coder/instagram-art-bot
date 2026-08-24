@@ -7,6 +7,7 @@ import requests
 
 from .base import MuseumAdapter
 from src.models import NormalizedArtwork, normalize_image_dimensions
+from src.region import infer_region, metadata_text
 from src.source_health import classify_exception, classify_http_failure
 
 logger = logging.getLogger(__name__)
@@ -144,6 +145,10 @@ class SmithsonianAdapter(MuseumAdapter):
             if not isinstance(descriptive, dict) or not isinstance(indexed, dict):
                 continue
             image_width, image_height = normalize_image_dimensions(resource.get("width"), resource.get("height"))
+            culture = metadata_text(indexed.get("culture"))
+            geographic_origin = metadata_text(indexed.get("place"))
+            artist_nationality = metadata_text(indexed.get("nationality"))
+            style_or_period = _freetext_value(content, "style")
             candidates.append(
                 NormalizedArtwork(
                     source=self.source_id,
@@ -152,7 +157,17 @@ class SmithsonianAdapter(MuseumAdapter):
                     artist_name=_first_text(indexed.get("name"), "Unknown Artist"),
                     creation_date=_first_text(indexed.get("date"), "Unknown Date"),
                     medium=_freetext_value(content, "physicalDescription"),
+                    culture=culture,
+                    geographic_origin=geographic_origin,
+                    artist_nationality=artist_nationality,
+                    region=infer_region(
+                        culture=culture,
+                        geography=geographic_origin,
+                        artist_nationality=artist_nationality,
+                        style_or_period=style_or_period,
+                    ),
                     classification=_first_text(indexed.get("object_type")),
+                    style_or_period=style_or_period or None,
                     museum_name=f"Smithsonian Institution ({item.get('unitCode') or 'Open Access'})",
                     artwork_url=descriptive.get("record_link") if isinstance(descriptive.get("record_link"), str) else None,
                     image_url=resource["url"],

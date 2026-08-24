@@ -5,6 +5,7 @@ import re
 from typing import List
 from .base import MuseumAdapter
 from src.models import NormalizedArtwork, normalize_image_dimensions
+from src.region import infer_region, metadata_text
 
 logger = logging.getLogger(__name__)
 
@@ -97,6 +98,16 @@ class ClevelandAdapter(MuseumAdapter):
                 if creators and isinstance(creators, list):
                     desc = creators[0].get("description", "")
                     artist = desc.split("(")[0].strip() if "(" in desc else desc
+
+                culture = metadata_text(item.get("culture"))
+                geographic_origin = metadata_text(
+                    [item.get("creation_place"), item.get("country_of_origin"), item.get("place_of_origin")]
+                )
+                artist_nationality = metadata_text(
+                    creators[0].get("nationality") if creators and isinstance(creators, list) and isinstance(creators[0], dict) else None
+                )
+                department = metadata_text(item.get("department"))
+                style_or_period = metadata_text(item.get("style"))
                 
                 artwork = NormalizedArtwork(
                     source=self.source_id,
@@ -105,6 +116,18 @@ class ClevelandAdapter(MuseumAdapter):
                     artist_name=artist,
                     creation_date=item.get("creation_date") or "Unknown Date",
                     medium=medium,
+                    culture=culture,
+                    geographic_origin=geographic_origin,
+                    artist_nationality=artist_nationality,
+                    region=infer_region(
+                        culture=culture,
+                        geography=geographic_origin,
+                        artist_nationality=artist_nationality,
+                        department=department,
+                        style_or_period=style_or_period,
+                    ),
+                    department=department,
+                    style_or_period=style_or_period,
                     museum_name="Cleveland Museum of Art",
                     image_url=image_url,
                     credit_line=item.get("creditline"),
