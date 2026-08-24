@@ -12,7 +12,7 @@ import math
 import os
 import tempfile
 from dataclasses import dataclass, replace
-from datetime import UTC, datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Iterable
 
@@ -27,6 +27,9 @@ from src.reel_handoff import (
     _measure_validated_image,
     _required_metadata,
 )
+
+
+UTC = timezone.utc
 
 
 logger = logging.getLogger(__name__)

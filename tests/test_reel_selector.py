@@ -1,10 +1,9 @@
 import json
-from datetime import UTC, datetime
+from datetime import datetime, timezone
 from pathlib import Path
 
 import pytest
 from PIL import Image
-
 from src.models import NormalizedArtwork
 from src.reel_selector import (
     DEFAULT_SHORTLIST_SIZE,
@@ -13,6 +12,9 @@ from src.reel_selector import (
     select_reel_candidates,
     write_selection_manifest,
 )
+
+
+UTC = timezone.utc
 
 
 def _artwork(source_id="1", **overrides):

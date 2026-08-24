@@ -1,8 +1,7 @@
 import json
-from datetime import UTC, datetime
+from datetime import datetime, timezone
 
 import pytest
-
 from src.models import NormalizedArtwork
 from src.reel_portfolio import (
     ADJUSTMENTS,
@@ -14,6 +13,9 @@ from src.reel_portfolio import (
     write_portfolio_selection_manifest,
 )
 from src.reel_selector import ReelCandidate, ReelCandidateDecision, ReelScoreBreakdown
+
+
+UTC = timezone.utc
 
 
 def _decision(

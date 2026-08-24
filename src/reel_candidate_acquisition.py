@@ -16,7 +16,7 @@ import tempfile
 import time
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -34,6 +34,9 @@ from src.source_health import (
     classify_exception,
     normalize_source_failure_category,
 )
+
+
+UTC = timezone.utc
 
 
 ACQUISITION_VERSION = "reel-candidate-acquisition-v2"
