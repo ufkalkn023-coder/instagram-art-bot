@@ -29,6 +29,14 @@ def _forbid_mutations(monkeypatch):
 
     monkeypatch.setattr(main.history_tracker, "reserve_artwork", forbidden("history reserve"))
     monkeypatch.setattr(main.history_tracker, "confirm_artwork", forbidden("history confirm"))
+    monkeypatch.setattr(
+        main.history_tracker,
+        "confirm_artworks_and_record_publication",
+        forbidden("history publication finalization"),
+    )
+    monkeypatch.setattr(main.history_tracker, "reserve_artworks", forbidden("history batch reserve"))
+    monkeypatch.setattr(main.history_tracker, "mark_artworks_publishing", forbidden("history publishing"))
+    monkeypatch.setattr(main.history_tracker, "mark_artworks_pending", forbidden("history rollback"))
     monkeypatch.setattr(main.history_tracker, "mark_artwork_ambiguous", forbidden("history ambiguous"))
     monkeypatch.setattr(main.history_tracker, "mark_artworks_ambiguous", forbidden("history ambiguous"))
     monkeypatch.setattr(main.image_processor, "upload_temp_media", forbidden("R2 media upload"))
@@ -83,9 +91,9 @@ def test_single_dry_run_validates_content_locally_without_external_mutations(mon
     assert calls == [
         "history_ids",
         "selection",
-        ("prepare", "downloaded.jpg"),
         "history_recent",
         "content_type",
+        ("prepare", "downloaded.jpg"),
         "gemini",
         "process",
     ]

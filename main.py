@@ -48,17 +48,18 @@ def run_single_post(args):
     # search query for ordinary single posts.
     artwork = art_fetcher.fetch_single_artwork(posted_ids)
 
-    if args.dry_run:
-        logger.info("[DRY-RUN MODE] Skipping history reservation.")
-    else:
-        logger.info("Reserving artwork in history (PRE-WRITE)...")
-        history_tracker.reserve_artwork(artwork)
-    
-    raw_image_path = image_processor.prepare_local_image(artwork["local_image_path"])[0]
-    
     recent_history = history_tracker.get_recent_history()
     content_type = content_diversity.select_content_type(recent_history)
     artwork["content_type"] = content_type
+
+    if args.dry_run:
+        logger.info("[DRY-RUN MODE] Skipping history reservation.")
+        publication_id = None
+    else:
+        logger.info("Reserving artwork in history (PRE-WRITE)...")
+        publication_id = history_tracker.reserve_artwork(artwork)
+    
+    raw_image_path = image_processor.prepare_local_image(artwork["local_image_path"])[0]
     
     logger.info(f"Analyzing artwork with Google Gemini AI (Content Type: {content_type})...")
     ai_analysis = gemini_ai.analyze_artwork(
@@ -155,7 +156,20 @@ def run_single_post(args):
             logger.exception("Failed to roll back single-post publish lock; preserving PUBLISHING state.")
         raise
 
-    history_tracker.confirm_artwork(artwork["id"], media_id)
+    try:
+        history_tracker.confirm_artworks_and_record_publication(
+            [artwork["id"]],
+            media_id,
+            "single",
+            publication_id=publication_id,
+            content_type=content_type,
+        )
+    except Exception:
+        logger.exception(
+            "Instagram single publish succeeded, but atomic history finalization failed; "
+            "the durable PUBLISHING lock must remain in place."
+        )
+        raise
     
     if args.pinterest:
         logger.info("Triggering Pinterest cross-post...")
@@ -182,9 +196,11 @@ def run_carousel_post(args):
     
     if args.dry_run:
         logger.info("[DRY-RUN MODE] Skipping history reservations.")
+        publication_id = None
     else:
         for art in artworks:
-            history_tracker.reserve_artwork(art)
+            art["content_type"] = None
+        publication_id = history_tracker.reserve_artworks(artworks, "carousel")
         
     ai_analysis = gemini_ai.analyze_carousel(theme, artworks)
     base_font_size = ai_analysis.get("recommended_font_size", 46) if ai_analysis else 46
@@ -236,7 +252,7 @@ def run_carousel_post(args):
         # Protect every carousel child in one conditional R2 update before the
         # parent media_publish request is allowed to run.
         history_tracker.mark_artworks_publishing(art["id"] for art in artworks)
-        carousel_id = instagram_poster.post_carousel_to_instagram_graph_api(
+        media_id = instagram_poster.post_carousel_to_instagram_graph_api(
             media_urls=public_urls,
             caption=final_caption,
             account_id=account_id,
@@ -257,8 +273,20 @@ def run_carousel_post(args):
             logger.exception("Failed to roll back carousel publish locks; preserving PUBLISHING state.")
         raise
     
-    for art in artworks:
-        history_tracker.confirm_artwork(art["id"], carousel_id)
+    try:
+        history_tracker.confirm_artworks_and_record_publication(
+            [art["id"] for art in artworks],
+            media_id,
+            "carousel",
+            publication_id=publication_id,
+            theme=theme,
+        )
+    except Exception:
+        logger.exception(
+            "Instagram carousel publish succeeded, but atomic history finalization failed; "
+            "all durable PUBLISHING locks must remain in place."
+        )
+        raise
 
 
 def main():

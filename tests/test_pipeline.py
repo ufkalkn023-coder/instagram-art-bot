@@ -53,18 +53,17 @@ def test_different_artwork_ids_are_not_duplicates(monkeypatch):
     assert "aic_84775" not in history_tracker.get_posted_ids()
 
 
-def test_reservation_writes_canonical_id_without_migrating_history(monkeypatch):
+def test_reservation_rejects_canonical_duplicate_without_migrating_history(monkeypatch):
     history = {"posted_artworks": [{"id": "artic_84774", "status": "PUBLISHED"}]}
     uploaded = []
     monkeypatch.setattr(history_tracker, "load_history_with_etag", lambda: (history, "etag"))
     monkeypatch.setattr(history_tracker, "_upload_history", lambda value, etag: uploaded.append((value, etag)))
 
-    history_tracker.reserve_artwork({"id": "aic_84774", "title": "A", "artist": "B"})
+    with pytest.raises(RuntimeError, match="already protected"):
+        history_tracker.reserve_artwork({"id": "aic_84774", "title": "A", "artist": "B"})
 
-    assert len(uploaded) == 1
-    saved_history, etag = uploaded[0]
-    assert etag == "etag"
-    assert [item["id"] for item in saved_history["posted_artworks"]] == ["aic_84774"]
+    assert uploaded == []
+    assert history == {"posted_artworks": [{"id": "artic_84774", "status": "PUBLISHED"}]}
 
 
 @pytest.mark.parametrize("artwork_id", ["artic_84774", "aic_84774", "met_123", "rijksmuseum_SK-A-1"])

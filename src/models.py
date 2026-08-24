@@ -1,5 +1,7 @@
-from typing import Optional
-from pydantic import BaseModel, Field, field_validator
+from datetime import datetime
+from typing import Literal, Optional
+
+from pydantic import BaseModel, Field, field_validator, model_validator
 from src.region import REGION_UNKNOWN, normalize_region
 
 
@@ -40,6 +42,57 @@ def normalize_image_dimensions(width: object, height: object) -> tuple[int | Non
     if normalized_width is None or normalized_height is None:
         return None, None
     return normalized_width, normalized_height
+
+
+class PublicationRecord(BaseModel):
+    """One proven Instagram feed publication, separate from artwork locks."""
+
+    id: str = Field(..., min_length=1)
+    type: Literal["single", "carousel"]
+    media_id: str = Field(..., min_length=1)
+    artwork_ids: list[str] = Field(..., min_length=1)
+    posted_at: str = Field(..., min_length=1)
+    theme: Optional[str] = None
+    content_type: Optional[str] = None
+
+    @field_validator("id", "media_id", "posted_at")
+    @classmethod
+    def require_nonempty_text(cls, value: str) -> str:
+        normalized = value.strip()
+        if not normalized:
+            raise ValueError("must not be empty")
+        return normalized
+
+    @field_validator("posted_at")
+    @classmethod
+    def require_aware_timestamp(cls, value: str) -> str:
+        try:
+            timestamp = datetime.fromisoformat(value.replace("Z", "+00:00"))
+        except ValueError as exc:
+            raise ValueError("must be an ISO-8601 timestamp") from exc
+        if timestamp.tzinfo is None or timestamp.utcoffset() is None:
+            raise ValueError("must include a timezone")
+        return value
+
+    @field_validator("artwork_ids")
+    @classmethod
+    def require_unique_canonical_artwork_ids(cls, artwork_ids: list[str]) -> list[str]:
+        normalized_ids = []
+        for artwork_id in artwork_ids:
+            if not isinstance(artwork_id, str) or not artwork_id.strip():
+                raise ValueError("artwork IDs must be nonempty strings")
+            normalized_ids.append(normalize_artwork_id(artwork_id.strip()))
+        if len(normalized_ids) != len(set(normalized_ids)):
+            raise ValueError("artwork IDs must be unique")
+        return normalized_ids
+
+    @model_validator(mode="after")
+    def require_type_appropriate_artwork_count(self):
+        if self.type == "single" and len(self.artwork_ids) != 1:
+            raise ValueError("single publications require exactly one artwork")
+        if self.type == "carousel" and len(self.artwork_ids) < 2:
+            raise ValueError("carousel publications require at least two artworks")
+        return self
 
 
 class NormalizedArtwork(BaseModel):

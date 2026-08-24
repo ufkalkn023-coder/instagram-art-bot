@@ -82,9 +82,14 @@ def _mock_single_post_dependencies(monkeypatch, post_result):
     artwork = _artwork()
     monkeypatch.setattr(main.history_tracker, "get_posted_ids", lambda: set())
     monkeypatch.setattr(main.history_tracker, "get_recent_history", lambda: [])
-    monkeypatch.setattr(main.history_tracker, "reserve_artwork", lambda value: None)
+    monkeypatch.setattr(main.history_tracker, "reserve_artwork", lambda value: "publication-1")
     monkeypatch.setattr(main.history_tracker, "mark_artworks_publishing", lambda artwork_ids: 1)
     monkeypatch.setattr(main.history_tracker, "mark_artworks_pending", lambda artwork_ids: 1)
+    monkeypatch.setattr(
+        main.history_tracker,
+        "confirm_artworks_and_record_publication",
+        lambda *args, **kwargs: None,
+    )
     monkeypatch.setattr(main.art_fetcher, "fetch_single_artwork", lambda *args, **kwargs: artwork)
     monkeypatch.setattr(main.image_processor, "prepare_local_image", lambda path: ("raw.jpg", "vertical"))
     monkeypatch.setattr(main.image_processor, "create_feed_post", lambda *args, **kwargs: "post.jpg")
@@ -108,7 +113,11 @@ def test_single_ambiguous_publish_marks_history_and_reraises(monkeypatch):
 
     artwork = _mock_single_post_dependencies(monkeypatch, publish)
     monkeypatch.setattr(main.history_tracker, "mark_artwork_ambiguous", lambda artwork_id: marked.append(artwork_id))
-    monkeypatch.setattr(main.history_tracker, "confirm_artwork", lambda *args: confirmed.append(args))
+    monkeypatch.setattr(
+        main.history_tracker,
+        "confirm_artworks_and_record_publication",
+        lambda *args, **kwargs: confirmed.append((args, kwargs)),
+    )
 
     with pytest.raises(instagram_poster.InstagramPublishAmbiguousError):
         main.run_single_post(SimpleNamespace(dry_run=False, image_url="https://example.test/image.jpg", pinterest=False))
@@ -139,12 +148,44 @@ def test_successful_single_publish_confirms_history(monkeypatch):
         monkeypatch,
         lambda **kwargs: published.append(kwargs) or "media-123",
     )
-    monkeypatch.setattr(main.history_tracker, "confirm_artwork", lambda *args: confirmed.append(args))
+    monkeypatch.setattr(
+        main.history_tracker,
+        "confirm_artworks_and_record_publication",
+        lambda *args, **kwargs: confirmed.append((args, kwargs)),
+    )
 
     main.run_single_post(SimpleNamespace(dry_run=False, image_url="https://example.test/image.jpg", pinterest=False))
 
-    assert confirmed == [(artwork["id"], "media-123")]
+    assert confirmed == [
+        (
+            ([artwork["id"]], "media-123", "single"),
+            {"publication_id": "publication-1", "content_type": "SINGLE_ARTWORK"},
+        )
+    ]
     assert artwork["title"] in published[0]["caption"]
+
+
+def test_single_history_finalization_failure_after_publish_never_rolls_back(monkeypatch):
+    rollback_calls = []
+    artwork = _mock_single_post_dependencies(monkeypatch, lambda **kwargs: "media-123")
+    monkeypatch.setattr(
+        main.history_tracker,
+        "mark_artworks_pending",
+        lambda artwork_ids: rollback_calls.append(list(artwork_ids)),
+    )
+    monkeypatch.setattr(
+        main.history_tracker,
+        "confirm_artworks_and_record_publication",
+        lambda *args, **kwargs: (_ for _ in ()).throw(OSError("R2 finalization failed")),
+    )
+
+    with pytest.raises(OSError, match="R2 finalization failed"):
+        main.run_single_post(
+            SimpleNamespace(dry_run=False, image_url="https://example.test/image.jpg", pinterest=False)
+        )
+
+    assert rollback_calls == []
+    assert artwork["id"] == "aic_84774"
 
 
 def test_single_publish_boundary_write_failure_does_not_call_instagram(monkeypatch):
@@ -197,6 +238,36 @@ def test_ambiguous_carousel_marks_every_reservation_and_reraises(monkeypatch):
     assert confirmed == []
 
 
+def test_definite_carousel_publish_failure_rolls_every_lock_back_to_pending(monkeypatch):
+    artworks = [_artwork("aic_1"), _artwork("cleveland_2")]
+    history = {"posted_artworks": []}
+    monkeypatch.setattr(main.history_tracker, "get_posted_ids", lambda: set())
+    monkeypatch.setattr(main.history_tracker, "get_grid_color_tone", lambda: "warm")
+    monkeypatch.setattr(main.history_tracker, "load_history_with_etag", lambda: (history, "etag"))
+    monkeypatch.setattr(main.history_tracker, "_upload_history", lambda value, etag: None)
+    monkeypatch.setattr(main.art_fetcher, "fetch_carousel_artworks", lambda *args, **kwargs: artworks)
+    monkeypatch.setattr(main.gemini_ai, "analyze_carousel", lambda *args, **kwargs: None)
+    monkeypatch.setattr(main.image_processor, "prepare_local_image", lambda path: ("raw.jpg", "vertical"))
+    monkeypatch.setattr(main.image_processor, "create_feed_post", lambda *args, **kwargs: "post.jpg")
+    monkeypatch.setattr(main.image_processor, "upload_temp_media", lambda path: f"https://example.test/{path}")
+    monkeypatch.setattr(
+        main.instagram_poster,
+        "validate_instagram_credentials",
+        lambda account_id, access_token: ("account", "token"),
+    )
+    monkeypatch.setattr(
+        main.instagram_poster,
+        "post_carousel_to_instagram_graph_api",
+        lambda **kwargs: (_ for _ in ()).throw(instagram_poster.InstagramAPIError("definite failure")),
+    )
+
+    with pytest.raises(instagram_poster.InstagramAPIError, match="definite failure"):
+        main.run_carousel_post(SimpleNamespace(dry_run=False, image_url=None, pinterest=False))
+
+    assert [item["status"] for item in history["posted_artworks"]] == ["PENDING", "PENDING"]
+    assert "publications" not in history
+
+
 def test_invalid_single_credential_fails_before_media_upload_or_publish(monkeypatch):
     real_validator = main.instagram_poster.validate_instagram_credentials
     _mock_single_post_dependencies(monkeypatch, lambda **kwargs: pytest.fail("publish must not run"))
@@ -215,7 +286,7 @@ def test_invalid_carousel_credential_fails_before_media_upload_or_publish(monkey
     artworks = [_artwork("aic_1"), _artwork("cleveland_2")]
     monkeypatch.setattr(main.history_tracker, "get_posted_ids", lambda: set())
     monkeypatch.setattr(main.history_tracker, "get_grid_color_tone", lambda: "warm")
-    monkeypatch.setattr(main.history_tracker, "reserve_artwork", lambda artwork: None)
+    monkeypatch.setattr(main.history_tracker, "reserve_artworks", lambda artworks, publication_type: "publication-1")
     monkeypatch.setattr(main.art_fetcher, "fetch_carousel_artworks", lambda *args, **kwargs: artworks)
     monkeypatch.setattr(main.gemini_ai, "analyze_carousel", lambda *args, **kwargs: None)
     monkeypatch.setattr(main.image_processor, "upload_temp_media", lambda path: pytest.fail("upload must not run"))

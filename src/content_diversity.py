@@ -18,6 +18,37 @@ CONTENT_TYPES = [
     "DETAIL_FOCUS"
 ]
 
+
+def _publication_groups(recent_history: List[Dict[str, Any]]) -> List[List[Dict[str, Any]]]:
+    """Group new records by publication while keeping each legacy record as one slot."""
+    groups: List[List[Dict[str, Any]]] = []
+    groups_by_id: Dict[str, List[Dict[str, Any]]] = {}
+    for artwork in recent_history:
+        publication_id = artwork.get("publication_id")
+        if isinstance(publication_id, str) and publication_id:
+            group = groups_by_id.get(publication_id)
+            if group is None:
+                group = []
+                groups_by_id[publication_id] = group
+                groups.append(group)
+            group.append(artwork)
+        else:
+            groups.append([artwork])
+    return groups
+
+
+def _artworks_from_recent_publications(
+    recent_history: List[Dict[str, Any]], publication_limit: int
+) -> List[Dict[str, Any]]:
+    if publication_limit <= 0:
+        return []
+    return [
+        artwork
+        for group in _publication_groups(recent_history)[-publication_limit:]
+        for artwork in group
+    ]
+
+
 def _extract_century(date_str: str) -> str:
     """Attempts to extract a century string (e.g. '1800s') from a date string."""
     if not date_str or not isinstance(date_str, str):
@@ -94,12 +125,11 @@ def analyze_museum_diversity(candidate_museum: str, recent_history: List[Dict[st
         return 0.0
         
     penalty = 0.0
-    history_limit = min(10, len(recent_history))
-    if history_limit == 0:
+    recent_artworks = _artworks_from_recent_publications(recent_history, 10)
+    if not recent_artworks:
         return 0.0
         
-    # Check the last 10 posts
-    recent_museums = [post.get("museum_name", "") for post in recent_history[-history_limit:]]
+    recent_museums = [post.get("museum_name", "") for post in recent_artworks]
     count = recent_museums.count(candidate_museum)
     
     if count == 1:
@@ -115,12 +145,15 @@ def analyze_museum_diversity(candidate_museum: str, recent_history: List[Dict[st
 
 
 def analyze_regional_diversity(candidate_region: str, recent_history: List[Dict[str, Any]]) -> float:
-    """Apply region-agnostic fatigue using the six most recent published works."""
+    """Apply region-agnostic fatigue using the six most recent publications."""
     candidate_region = normalize_region(candidate_region)
     if candidate_region == "unknown":
         return 0.0
 
-    recent_regions = [normalize_region(post.get("region")) for post in recent_history[-6:]]
+    recent_regions = [
+        normalize_region(post.get("region"))
+        for post in _artworks_from_recent_publications(recent_history, 6)
+    ]
     count = recent_regions.count(candidate_region)
     if count >= 4:
         return -30.0
@@ -131,23 +164,29 @@ def analyze_visual_diversity(candidate_features: Dict[str, str], recent_history:
     Scores visual diversity (category, artist, medium, period).
     """
     score = 0.0
-    history_limit = min(15, len(recent_history))
-    if history_limit == 0:
+    recent_posts = _artworks_from_recent_publications(recent_history, 15)
+    if not recent_posts:
         return score
-        
-    recent_posts = recent_history[-history_limit:]
     
     # 1. Artist Diversity (Heavy penalty for same artist recently)
     recent_artists = [post.get("artist_name", "") for post in recent_posts if post.get("artist_name")]
+    recent_three_publication_artists = [
+        post.get("artist_name", "")
+        for post in _artworks_from_recent_publications(recent_history, 3)
+        if post.get("artist_name")
+    ]
     if candidate_features["artist_name"] != "unknown Artist" and candidate_features["artist_name"] != "unknown":
-        if candidate_features["artist_name"] in recent_artists[-3:]:
+        if candidate_features["artist_name"] in recent_three_publication_artists:
             score -= 30.0 # Extreme penalty if same artist in last 3 posts (Artist Cooldown)
         elif candidate_features["artist_name"] in recent_artists:
             score -= 10.0
             
     # 2. Visual Category (Subject Fatigue)
-    recent_categories = [post.get("visual_category", "") for post in recent_posts]
-    cat_count_last_5 = recent_categories[-5:].count(candidate_features["visual_category"])
+    recent_categories = [
+        post.get("visual_category", "")
+        for post in _artworks_from_recent_publications(recent_history, 5)
+    ]
+    cat_count_last_5 = recent_categories.count(candidate_features["visual_category"])
     if candidate_features["visual_category"] != "other":
         if cat_count_last_5 >= 2:
             score -= 10.0 # Content fatigue penalty increased
@@ -155,8 +194,11 @@ def analyze_visual_diversity(candidate_features: Dict[str, str], recent_history:
             score += 3.0 # Bonus for fresh category
             
     # 3. Period Diversity (Period Fatigue)
-    recent_periods = [post.get("period", "") for post in recent_posts]
-    period_count_last_5 = recent_periods[-5:].count(candidate_features["period"])
+    recent_periods = [
+        post.get("period", "")
+        for post in _artworks_from_recent_publications(recent_history, 5)
+    ]
+    period_count_last_5 = recent_periods.count(candidate_features["period"])
     if candidate_features["period"] != "unknown":
         if period_count_last_5 >= 3:
             score -= 10.0 # Period fatigue penalty increased
@@ -164,8 +206,11 @@ def analyze_visual_diversity(candidate_features: Dict[str, str], recent_history:
             score += 2.0
             
     # 4. Medium Diversity
-    recent_mediums = [post.get("medium", "") for post in recent_posts]
-    med_count = recent_mediums[-4:].count(candidate_features["medium"])
+    recent_mediums = [
+        post.get("medium", "")
+        for post in _artworks_from_recent_publications(recent_history, 4)
+    ]
+    med_count = recent_mediums.count(candidate_features["medium"])
     if candidate_features["medium"] != "other":
         if med_count >= 3:
             score -= 2.0
@@ -196,7 +241,7 @@ def analyze_discovery_score(
 
     recent_artist_keys = {
         history_artist_key
-        for post in recent_history[-15:]
+        for post in _artworks_from_recent_publications(recent_history, 15)
         if (history_artist_key := _normalized_artist_key(post.get("artist_name"))) is not None
     }
     return 0.0 if artist_key in recent_artist_keys else 2.0
@@ -208,8 +253,11 @@ def select_content_type(recent_history: List[Dict[str, Any]]) -> str:
     if not recent_history:
         return random.choice(CONTENT_TYPES)
         
-    history_limit = min(3, len(recent_history))
-    recent_types = [post.get("content_type", "") for post in recent_history[-history_limit:]]
+    recent_types = []
+    for publication_group in _publication_groups(recent_history)[-3:]:
+        recent_types.append(
+            next((post.get("content_type") for post in publication_group if post.get("content_type")), "")
+        )
     
     available_types = [t for t in CONTENT_TYPES if t not in recent_types]
     if not available_types:

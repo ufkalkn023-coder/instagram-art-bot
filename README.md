@@ -59,6 +59,24 @@ PENDING → EXPIRED
 
 `PENDING` rezervasyonları güvenle stale olduğu kanıtlanırsa expire edilebilir. Instagram publish sınırından hemen önce R2’ye yazılan `PUBLISHING` state’i otomatik expire edilmez; publish sonucu belirsizse `AMBIGUOUS` da kalıcı duplicate kilididir. Bu yaklaşım, yeniden paylaşma riskini availability’ye tercih eder.
 
+History iki ayrı kavramı additive bir şemada tutar:
+
+```json
+{
+  "posted_artworks": [],
+  "publications": [],
+  "grid_publication_count": 0,
+  "active_color_tone": "warm"
+}
+```
+
+- `posted_artworks`, eser bazlı duplicate ve lifecycle kilitlerinin authoritative kaynağıdır. Carousel içindeki her eser burada ayrı kayıt olarak kalır.
+- `publications`, yalnız Instagram'ın kesin media ID döndürdüğü yeni paylaşımları tutar. Tek paylaşım bir eser ID'si, carousel ise bütün child eser ID'lerini içeren tek publication kaydı üretir.
+- `grid_publication_count`, bu şemanın devreye alınmasından sonra kesinleşen feed publication sayısıdır; eski `posted_artworks` kayıtlarından geriye dönük sayı veya carousel grubu tahmin edilmez.
+- Eski R2 objesinde `publications` ve sayaç yoksa migration gerekmez. İlk yeni başarılı finalization mevcut `active_color_tone` değerini korur ve forward-only sayacı `1` ile başlatır.
+
+Başarılı Instagram publish sonrasında bütün artwork kayıtlarının `PUBLISHED` yapılması, tek publication eklenmesi ve grid sayacının bir artırılması aynı ETag-korumalı R2 yazısında gerçekleşir. Bu yazı başarısız olursa artwork kayıtları durable `PUBLISHING` kilidinde kalır; `PENDING` durumuna geri alınmaz ve hata görünür biçimde üst katmana iletilir.
+
 ## Kurulum ve yerel kullanım
 
 Fresh checkout için:
