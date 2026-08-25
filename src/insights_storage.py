@@ -9,7 +9,11 @@ import boto3
 from botocore.exceptions import ClientError
 
 HISTORY_OBJECT_KEY = "posted_history.json"
+ASSOCIATION_OBJECT_KEY = "insights/media-associations.json"
 SNAPSHOT_SCHEMA_VERSION = 1
+ASSOCIATION_SCHEMA_VERSION = 1
+SNAPSHOT_SLOTS = {1, 6, 24, 72, 168}
+MATCH_METHODS = {"caption_exact", "caption_normalized", "title_artist_timestamp", "manual", "bot_publication"}
 
 
 class InsightsStorageError(Exception):
@@ -21,11 +25,14 @@ class InsightsConcurrencyError(InsightsStorageError):
 
 
 def parse_aware_timestamp(value: Any) -> datetime | None:
-    if not isinstance(value, str) or not value:
-        return None
-    try:
-        timestamp = datetime.fromisoformat(value.replace("Z", "+00:00"))
-    except ValueError:
+    if isinstance(value, datetime):
+        timestamp = value
+    elif isinstance(value, str) and value:
+        try:
+            timestamp = datetime.fromisoformat(value.replace("Z", "+00:00"))
+        except ValueError:
+            return None
+    else:
         return None
     if timestamp.tzinfo is None or timestamp.utcoffset() is None:
         return None
@@ -75,11 +82,11 @@ def _is_valid_snapshot(snapshot: Any) -> bool:
         return False
     if not isinstance(snapshot.get("media_id"), str) or not snapshot["media_id"]:
         return False
-    if snapshot.get("target_age_hours") not in {24, 72, 168}:
+    if snapshot.get("target_age_hours") not in SNAPSHOT_SLOTS:
         return False
     if parse_aware_timestamp(snapshot.get("captured_at")) is None:
         return False
-    actual_age = snapshot.get("actual_age_hours")
+    actual_age = snapshot.get("age_seconds", snapshot.get("actual_age_hours"))
     if isinstance(actual_age, bool) or not isinstance(actual_age, (int, float)) or actual_age < 0:
         return False
     metrics = snapshot.get("metrics")
@@ -87,7 +94,47 @@ def _is_valid_snapshot(snapshot: Any) -> bool:
         return False
     if any(not isinstance(key, str) or isinstance(value, bool) or not isinstance(value, (int, float)) for key, value in metrics.items()):
         return False
+    derived = snapshot.get("derived_metrics", {})
+    if not isinstance(derived, dict) or any(
+        not isinstance(key, str) or isinstance(value, bool) or not isinstance(value, (int, float))
+        for key, value in derived.items()
+    ):
+        return False
     return isinstance(snapshot.get("missing_metrics"), list) and isinstance(snapshot.get("api_version"), str)
+
+
+def _is_valid_association(association: Any) -> bool:
+    if not isinstance(association, dict):
+        return False
+    for key in ("canonical_artwork_id", "reel_id", "instagram_media_id"):
+        if not isinstance(association.get(key), str) or not association[key].strip():
+            return False
+    if parse_aware_timestamp(association.get("published_at")) is None:
+        return False
+    if parse_aware_timestamp(association.get("matched_at")) is None:
+        return False
+    if association.get("match_method") not in MATCH_METHODS:
+        return False
+    permalink = association.get("permalink")
+    return permalink is None or (isinstance(permalink, str) and permalink.startswith("https://"))
+
+
+def _validated_associations_object(data: Any) -> dict[str, Any]:
+    if not isinstance(data, dict) or data.get("schema_version") != ASSOCIATION_SCHEMA_VERSION:
+        raise InsightsStorageError("Malformed media associations object")
+    associations = data.get("associations")
+    if not isinstance(associations, list):
+        raise InsightsStorageError("Malformed media associations")
+    seen_reels: set[str] = set()
+    seen_media: set[str] = set()
+    for association in associations:
+        if not _is_valid_association(association):
+            raise InsightsStorageError("Malformed media association")
+        if association["reel_id"] in seen_reels or association["instagram_media_id"] in seen_media:
+            raise InsightsStorageError("Duplicate media association")
+        seen_reels.add(association["reel_id"])
+        seen_media.add(association["instagram_media_id"])
+    return data
 
 
 def _validated_analytics_object(data: Any) -> dict[str, Any]:
@@ -100,11 +147,11 @@ def _validated_analytics_object(data: Any) -> dict[str, Any]:
     for snapshot in snapshots:
         if not _is_valid_snapshot(snapshot):
             raise InsightsStorageError("Malformed analytics snapshot")
-        slot = (snapshot["publication_id"], snapshot["target_age_hours"])
-        previous_media = seen_slots.get(slot)
-        if previous_media is not None:
+        slot = (snapshot["media_id"], snapshot["target_age_hours"])
+        previous_publication = seen_slots.get(slot)
+        if previous_publication is not None:
             raise InsightsStorageError("Duplicate analytics snapshot slot")
-        seen_slots[slot] = snapshot["media_id"]
+        seen_slots[slot] = snapshot["publication_id"]
     return data
 
 
@@ -139,15 +186,51 @@ class InsightsStorage:
             raise InsightsStorageError("Analytics partition is unreadable or malformed") from exc
         return key, data, response.get("ETag", "").strip('"')
 
+    def load_associations(self) -> tuple[dict[str, Any], str | None]:
+        try:
+            response = self._s3.get_object(Bucket=self._bucket, Key=ASSOCIATION_OBJECT_KEY)
+        except ClientError as exc:
+            if exc.response.get("Error", {}).get("Code") in {"NoSuchKey", "404"}:
+                return {"schema_version": ASSOCIATION_SCHEMA_VERSION, "associations": []}, None
+            raise InsightsStorageError("Unable to read media associations from R2") from exc
+        try:
+            data = _validated_associations_object(json.loads(response["Body"].read().decode("utf-8")))
+        except (KeyError, UnicodeDecodeError, json.JSONDecodeError) as exc:
+            raise InsightsStorageError("Media associations are unreadable or malformed") from exc
+        return data, response.get("ETag", "").strip('"')
+
+    def write_associations(self, data: dict[str, Any], etag: str | None) -> None:
+        validated = _validated_associations_object(data)
+        ordered = {
+            "schema_version": ASSOCIATION_SCHEMA_VERSION,
+            "associations": sorted(validated["associations"], key=lambda item: item["reel_id"]),
+        }
+        kwargs: dict[str, Any] = {
+            "Bucket": self._bucket,
+            "Key": ASSOCIATION_OBJECT_KEY,
+            "Body": (json.dumps(ordered, ensure_ascii=False, indent=2, sort_keys=True) + "\n").encode("utf-8"),
+            "ContentType": "application/json",
+        }
+        if etag:
+            kwargs["IfMatch"] = etag
+        else:
+            kwargs["IfNoneMatch"] = "*"
+        try:
+            self._s3.put_object(**kwargs)
+        except ClientError as exc:
+            if exc.response.get("Error", {}).get("Code") in {"PreconditionFailed", "412"}:
+                raise InsightsConcurrencyError("Media association conditional write conflict") from exc
+            raise InsightsStorageError("Unable to write media associations to R2") from exc
+
     def append_snapshot(self, key: str, data: dict[str, Any], etag: str | None, snapshot: dict[str, Any]) -> None:
         _validated_analytics_object(data)
         if not _is_valid_snapshot(snapshot):
             raise InsightsStorageError("Attempted to store malformed analytics snapshot")
-        slot = (snapshot["publication_id"], snapshot["target_age_hours"])
+        slot = (snapshot["media_id"], snapshot["target_age_hours"])
         for existing in data["snapshots"]:
-            if (existing["publication_id"], existing["target_age_hours"]) != slot:
+            if (existing["media_id"], existing["target_age_hours"]) != slot:
                 continue
-            if existing["media_id"] != snapshot["media_id"]:
+            if existing["publication_id"] != snapshot["publication_id"]:
                 raise InsightsStorageError("Conflicting analytics snapshot identity")
             raise InsightsStorageError("Analytics snapshot slot already exists")
 
@@ -155,7 +238,7 @@ class InsightsStorage:
         kwargs: dict[str, Any] = {
             "Bucket": self._bucket,
             "Key": key,
-            "Body": json.dumps(payload, ensure_ascii=False, indent=2).encode("utf-8"),
+            "Body": (json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True) + "\n").encode("utf-8"),
             "ContentType": "application/json",
         }
         if etag:

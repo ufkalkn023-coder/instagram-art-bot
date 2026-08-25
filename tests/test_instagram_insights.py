@@ -2,18 +2,23 @@ import requests
 import pytest
 
 from src.instagram_insights import (
+    InstagramInsightsAuthenticationError,
     InstagramInsightsClient,
+    InstagramInsightsConfigurationError,
     InstagramInsightsPermissionError,
     InstagramInsightsRequestError,
+    OPTIONAL_METRICS,
     TARGET_METRICS,
+    parse_rate_limit_headers,
 )
 
 
 class FakeResponse:
-    def __init__(self, status_code, payload=None, json_error=False):
+    def __init__(self, status_code, payload=None, json_error=False, headers=None):
         self.status_code = status_code
         self.payload = payload
         self.json_error = json_error
+        self.headers = headers or {}
 
     def json(self):
         if self.json_error:
@@ -64,6 +69,74 @@ def test_partial_and_malformed_values_remain_missing():
     assert "impressions" not in response.metrics
 
 
+def test_unsupported_optional_metric_is_isolated_without_losing_core_metrics():
+    calls = []
+
+    class Session:
+        def get(self, *args, **kwargs):
+            requested = tuple(kwargs["params"]["metric"].split(","))
+            calls.append(requested)
+            if "ig_reels_avg_watch_time" in requested:
+                return FakeResponse(400, {"error": {"code": 100, "message": "unsupported"}})
+            return FakeResponse(200, {"data": [{"name": name, "values": [{"value": 1}]} for name in requested]})
+
+    response = InstagramInsightsClient("token", Session()).fetch_media_insights("media")
+    assert response.metrics["views"] == 1
+    assert "ig_reels_avg_watch_time" not in response.metrics
+    assert "ig_reels_avg_watch_time" in response.missing_metrics
+    assert response.api_calls == len(calls) > 1
+    assert set(OPTIONAL_METRICS).intersection(response.requested_metrics)
+
+
+def test_server_error_is_not_misreported_as_an_unsupported_metric():
+    class Session:
+        def get(self, *args, **kwargs):
+            return FakeResponse(503, {"error": {"code": 2, "message": "temporary"}})
+
+    with pytest.raises(InstagramInsightsRequestError, match="HTTP 503"):
+        InstagramInsightsClient("token", Session()).fetch_media_insights("media")
+
+
+def test_discovery_filters_reels_and_uses_get_only():
+    calls = []
+
+    class Session:
+        def get(self, *args, **kwargs):
+            calls.append((args, kwargs))
+            return FakeResponse(200, {"data": [
+                {"id": "reel", "media_type": "VIDEO", "media_product_type": "REELS", "caption": "safe", "timestamp": "2026-08-25T10:00:00+0000"},
+                {"id": "photo", "media_type": "IMAGE", "media_product_type": "FEED", "timestamp": "2026-08-25T09:00:00+0000"},
+            ]})
+
+    response = InstagramInsightsClient("token", Session()).discover_recent_media("account")
+    assert [item.id for item in response.media] == ["reel"]
+    assert calls[0][0][0].endswith("/v22.0/account/media")
+    assert not hasattr(Session(), "post")
+
+
+def test_discovery_rejects_account_id_stored_as_access_token_without_an_api_call():
+    class Session:
+        def get(self, *args, **kwargs):
+            raise AssertionError("Meta must not be called with a known-invalid credential")
+
+    with pytest.raises(InstagramInsightsConfigurationError, match="contains INSTAGRAM_ACCOUNT_ID"):
+        InstagramInsightsClient("17841470283853922", Session()).discover_recent_media("17841470283853922")
+
+
+def test_rate_limit_headers_keep_only_anonymous_numeric_usage():
+    usage = parse_rate_limit_headers({
+        "x-app-usage": '{"call_count":3,"total_cputime":2,"total_time":4}',
+        "x-business-use-case-usage": '{"178-secret":[{"type":"instagram","call_count":5,"estimated_time_to_regain_access":0}]}',
+        "authorization": "secret-token",
+    })
+    assert usage == {
+        "app.call_count": 3, "app.total_cputime": 2, "app.total_time": 4,
+        "business.call_count": 5, "business.estimated_time_to_regain_access": 0,
+    }
+    assert "178-secret" not in str(usage)
+    assert "secret-token" not in str(usage)
+
+
 @pytest.mark.parametrize("payload", [{"data": []}, {"data": [{}]}])
 def test_empty_or_unusable_data_is_normal_availability_pending(payload):
     class Session:
@@ -97,12 +170,47 @@ def test_network_and_permission_errors_do_not_expose_token(caplog):
     assert secret not in str(network_error.value)
     assert secret not in caplog.text
 
-    class PermissionSession:
+
+def test_meta_400_diagnostic_is_sanitized_and_identifies_request(caplog):
+    secret = "very-secret-token"
+
+    class Session:
+        def get(self, *args, **kwargs):
+            return FakeResponse(400, {"error": {
+                "type": "OAuthException",
+                "code": 100,
+                "error_subcode": 33,
+                "message": f"Unsupported get request. access_token={secret}",
+            }})
+
+    with pytest.raises(InstagramInsightsRequestError) as caught:
+        InstagramInsightsClient(secret, Session()).discover_recent_media("178900000000001")
+
+    diagnostic = str(caught.value)
+    assert "type=OAuthException" in diagnostic
+    assert "code=100" in diagnostic
+    assert "error_subcode=33" in diagnostic
+    assert "message=Unsupported get request. access_token=[REDACTED]" in diagnostic
+    assert "endpoint=https://graph.facebook.com/v22.0/178900000000001/media" in diagnostic
+    assert "api_version=v22.0" in diagnostic
+    assert secret not in diagnostic
+    assert secret not in caplog.text
+
+    class AuthenticationSession:
         def get(self, *args, **kwargs):
             return FakeResponse(400, {"error": {"code": 190, "message": secret}})
+
+    with pytest.raises(InstagramInsightsAuthenticationError) as authentication_error:
+        InstagramInsightsClient(secret, AuthenticationSession()).fetch_media_insights("media-123456")
+    assert "replace or refresh" in str(authentication_error.value)
+    assert secret not in str(authentication_error.value)
+    assert secret not in caplog.text
+
+    class PermissionSession:
+        def get(self, *args, **kwargs):
+            return FakeResponse(400, {"error": {"code": 200, "message": secret}})
 
     with pytest.raises(InstagramInsightsPermissionError) as permission_error:
         InstagramInsightsClient(secret, PermissionSession()).fetch_media_insights("media-123456")
     assert "instagram_manage_insights" in str(permission_error.value)
     assert secret not in str(permission_error.value)
-    assert secret not in caplog.text

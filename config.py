@@ -28,8 +28,9 @@ MET_API_BASE = "https://collectionapi.metmuseum.org/public/collection/v1"
 GEMINI_MODEL = "gemini-3.7-flash"
 GEMINI_ENABLED = True
 
-# Instagram Graph API Version & Endpoints
-INSTAGRAM_GRAPH_API_VERSION = "v22.0"
+# Instagram Graph API Version & Endpoints. Keep one version source for publish
+# and read-only analytics; deployments can pin a newer tested version.
+INSTAGRAM_GRAPH_API_VERSION = os.environ.get("INSTAGRAM_GRAPH_API_VERSION", "v22.0").strip() or "v22.0"
 GRAPH_API_BASE_URL = f"https://graph.facebook.com/{INSTAGRAM_GRAPH_API_VERSION}"
 
 # Public domain classical music tracks with specific drop points for Reels

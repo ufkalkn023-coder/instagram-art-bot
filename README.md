@@ -48,9 +48,48 @@ Install, compile veya test adımı başarısız olursa production adımı çalı
 
 ### Instagram Insights collector
 
-Insights toplama posting akışından tamamen ayrıdır: `Instagram Insights Collector` workflow’u her gün 03:00 UTC’de çalışır ve `main.py` çağırmaz. Kesinleşmiş `publications` kayıtları için 24, 72 ve 168 saatlik hedef slotlarda yalnız parent media ID’sinin `views`, `reach`, `likes`, `comments`, `saved`, `shares` ve `total_interactions` metriklerini okur. Snapshot’lar `posted_history.json` içine eklenmez; yayının UTC `posted_at` ayına göre `insights/YYYY-MM.json` R2 objesinde saklanır. Böylece bir yayının tüm slotları, ay sınırını geçse bile birlikte kalır.
+Artfolio Reel analitiği posting akışından tamamen ayrıdır ve yalnız GET çağrıları yapar. Yerel `artfolio-reels` production history, ReelData ve `output/social` caption dosyaları okunur; son sahipli Instagram medyası içinden yalnız Reels/video kayıtları alınır. Tam veya normalize caption eşleşmesi önceliklidir. Caption dosyası yoksa artwork title + artist + üretim/yayın zamanı birlikte ikincil kanıt olabilir. Birden fazla aday asla otomatik bağlanmaz.
 
-Geç koleksiyon için sınırlar sırasıyla 7, 14 ve 30 gündür. Her koşu bir publication için en fazla bir (en yüksek, halen geçerli) slot toplar; boş Meta verisi slotu tüketmez ve sonraki günlük koşuda tekrar denenir. Analytics hataları publishing state’ini veya history lifecycle’ını etkileyemez. Meta token’ında en az `instagram_basic`, `instagram_manage_insights` ve gerekirse `pages_read_engagement` izinleri olmalıdır. Henüz performans skorlaması veya eser seçimine performance etkisi yoktur.
+```console
+python3 scripts/collect_insights.py
+python3 scripts/collect_insights.py --dry-run
+python3 scripts/collect_insights.py --check-secrets
+```
+
+Normal akışta kullanıcı Instagram permalink’i, media ID’si veya Reel eşlemesi girmez. Kullanıcı Reel’i Instagram Edits ile yayınladıktan sonra saatlik yerel koşu yeni owned Reel/video medyasını keşfeder; üretim zaman penceresindeki yerel Artfolio kayıtlarıyla önce birebir caption, sonra normalize caption, son olarak güçlü title + artist + zaman kanıtıyla global one-to-one eşleştirir. Yalnız tek ve yüksek güvenli aday R2’de `insights/media-associations.json` objesine yazılır. Kalıcı eşlemeler sonraki koşularda önceliklidir ve aynı Reel veya Instagram media ID ikinci kez bağlanamaz.
+
+Yerel Mac için gerekli secret’lar launchd plist’ine veya repo dosyalarına yazılmaz. Bir kerelik Keychain kurulumu, güvenli tanı ve LaunchAgent kurulumu:
+
+```console
+cd /Users/ufuk/Desktop/instagram-art-bot-final
+python3 scripts/install_insights_launchd.py configure-keychain
+python3 scripts/collect_insights.py --check-secrets
+python3 scripts/install_insights_launchd.py install
+```
+
+`configure-keychain`, her eksik değer için macOS Keychain’in gizli giriş prompt’unu açar; değer komut satırı argümanına, shell history’ye veya log’a girmez. Mevcut process environment değerleri interaktif çalıştırmada önceliklidir, fakat LaunchAgent yalnız Keychain kayıtlarını yükler. Installer idempotent olarak `~/Library/LaunchAgents/com.artfolio.instagram-insights.plist` dosyasını günceller ve user LaunchAgent’ı yeniden yükler. Her login/reboot sonrasında ve en fazla saatte bir tek-seferlik collector çalışır. Dönen operasyon log’ları `~/Library/Logs/Artfolio/instagram-insights.log` altında 1 MiB + üç backup ile sınırlıdır.
+
+Bir credential’ı daha sonra değiştirmek için `python3 scripts/install_insights_launchd.py configure-keychain --force` kullanılır. Log’da `Operation not permitted` görülürse LaunchAgent’ın kullandığı Python interpreter’a macOS Privacy & Security ayarlarından Desktop erişimi verilmelidir.
+
+Devre dışı bırakma ve kaldırma:
+
+```console
+python3 scripts/install_insights_launchd.py uninstall
+```
+
+Mac uykudayken veya offline iken daemon/polling yapılmaz. Sonraki saatlik koşu mevcut missed-slot politikasını uygular: o anda hâlâ açık olan en yeni 1h/6h/24h/72h/7d slotunu alır, kapanmış eski pencereleri compact `missed_slots` olarak raporlar ve Meta’yı agresif biçimde sorgulamaz.
+
+Ambiguous veya unmatched sonuçlar yazılmaz; özet yalnız örneğin `[insights] ambiguous=1` gösterir. Sadece böyle istisnai bir Reel incelendikten sonra emergency fallback kullanılabilir:
+
+```console
+python3 scripts/collect_insights.py --link LOCAL_REEL_ID INSTAGRAM_MEDIA_ID
+```
+
+Manuel eşleme otomatik eşlemeye üstün gelir; başka bir manuel eşlemeyi sessizce değiştirmez. Snapshot’lar Reel’in UTC yayın ayına göre `insights/YYYY-MM.json` içinde ETag koşullu ve append-only tutulur.
+
+Hedef slotlar 1, 6, 24, 72 ve 168 saattir. Her slotun penceresi bir sonraki hedefe kadar açıktır; 168 saat slotu 30 güne kadar alınabilir. Gecikmiş koşu en yeni açık slotu alır ve önceki kapanmış pencereleri `missed_slots` olarak raporlar. Boş Meta verisi slotu tüketmez. Ham Meta metrikleri önce saklanır: `views`, `reach`, `likes`, `comments`, `saved`, `shares`, `total_interactions`, `ig_reels_video_view_total_time`, `ig_reels_avg_watch_time`, `clips_replays_count`, `ig_reels_aggregated_all_plays_count`. Desteklenmeyen metrikler ayrı izole edilerek eksik bırakılır; sıfır uydurulmaz. `save_rate`, `share_rate`, `like_rate` ve `comment_rate` yalnız pozitif `reach` varsa `metric / reach` olarak hesaplanır.
+
+Mevcut günlük GitHub workflow değişmeyen 03:00 UTC cron’unda çalışır. GitHub runner yerel Artfolio dosyalarını görmediği için yeni eşleme yapmaz; R2’de önceden oluşmuş association’ların ve mevcut legacy `publications` kayıtlarının due snapshot’larını bağımsız toplar. Yeni GitHub cron’u eklenmemiştir. Analytics hataları publishing state’ini veya history lifecycle’ını etkileyemez. Facebook Login modu için token’da `instagram_basic`, `instagram_manage_insights` ve `pages_read_engagement` izinleri bulunmalıdır. Henüz performans skorlaması veya eser seçimine performance etkisi yoktur.
 
 ## History ve duplicate koruması
 
@@ -128,9 +167,11 @@ Dry-run strict offline değildir: `GOOGLE_GEMINI_API_KEY` varsa Gemini’ye dı�
 
 | Variable | Gerekli mi? | Amaç |
 | --- | --- | --- |
-| `INSTAGRAM_ACCOUNT_ID` | Production publish için gerekli | Instagram Business/Creator account ID |
+| `INSTAGRAM_ACCOUNT_ID` | Production publish ve Reel discovery için gerekli | Instagram Business/Creator account ID |
 | `INSTAGRAM_ACCESS_TOKEN` | Production publish için gerekli | Meta Graph API erişim token’ı |
 | `INSTAGRAM_ACCESS_TOKEN` | Insights collector için gerekli | Read-only Instagram media Insights erişimi |
+| `INSTAGRAM_GRAPH_API_VERSION` | Opsiyonel | Tek Graph API version kaynağını override eder (varsayılan `v22.0`) |
+| `ARTFOLIO_REELS_ROOT` | Opsiyonel | Varsayılan sibling konumunda değilse Artfolio Reels repo yolu |
 | `CLOUDFLARE_R2_ACCOUNT_ID` | Production history ve R2 media için gerekli | R2 account ID |
 | `CLOUDFLARE_R2_ACCESS_KEY_ID` | Production history ve R2 media için gerekli | R2 access key |
 | `CLOUDFLARE_R2_SECRET_ACCESS_KEY` | Production history ve R2 media için gerekli | R2 secret key |

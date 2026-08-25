@@ -1,8 +1,10 @@
 import sys
 import requests
 
-GRAPH_API_VERSION = "v22.0"
-BASE_URL = f"https://graph.facebook.com/{GRAPH_API_VERSION}"
+import config
+
+GRAPH_API_VERSION = config.INSTAGRAM_GRAPH_API_VERSION
+BASE_URL = config.GRAPH_API_BASE_URL
 
 
 def exchange_short_token_for_long_lived(app_id: str, app_secret: str, short_token: str) -> str:

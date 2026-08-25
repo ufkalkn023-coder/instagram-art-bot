@@ -1,10 +1,17 @@
 import io
 import json
+from datetime import datetime, timezone
 
 import pytest
 from botocore.exceptions import ClientError
 
-from src.insights_storage import InsightsConcurrencyError, InsightsStorage, InsightsStorageError
+from src.insights_storage import (
+    InsightsConcurrencyError,
+    InsightsStorage,
+    InsightsStorageError,
+    parse_aware_timestamp,
+    partition_key,
+)
 
 
 def _client_error(code):
@@ -55,7 +62,16 @@ def test_missing_partition_initializes_and_uses_if_none_match():
     assert "IfMatch" not in fake.put_calls[0]
 
 
-def test_existing_partition_uses_etag_and_rejects_duplicates_or_conflicts():
+def test_aware_datetime_is_preserved_and_naive_or_malformed_values_are_rejected():
+    aware = datetime(2026, 8, 24, 15, 30, tzinfo=timezone.utc)
+
+    assert parse_aware_timestamp(aware) is aware
+    assert partition_key(aware) == "insights/2026-08.json"
+    assert parse_aware_timestamp(datetime(2026, 8, 24, 15, 30)) is None
+    assert parse_aware_timestamp("not-a-date") is None
+
+
+def test_existing_partition_uses_etag_and_keys_slots_by_instagram_media():
     existing = _snapshot()
     fake = FakeS3({"insights/2026-08.json": json.dumps({"schema_version": 1, "snapshots": [existing]})})
     storage = InsightsStorage(fake, "bucket")
@@ -65,8 +81,26 @@ def test_existing_partition_uses_etag_and_rejects_duplicates_or_conflicts():
     assert fake.put_calls[0]["IfMatch"] == "etag-1"
     with pytest.raises(InsightsStorageError, match="slot already exists"):
         storage.append_snapshot(key, data, etag, _snapshot())
-    with pytest.raises(InsightsStorageError, match="Conflicting"):
-        storage.append_snapshot(key, data, etag, _snapshot(media_id="other-media"))
+    storage.append_snapshot(key, data, etag, _snapshot(media_id="corrected-media"))
+
+
+def test_associations_use_conditional_deterministic_writes_and_reject_duplicates():
+    fake = FakeS3()
+    storage = InsightsStorage(fake, "bucket")
+    data, etag = storage.load_associations()
+    association = {
+        "canonical_artwork_id": "met_1", "reel_id": "met_1", "instagram_media_id": "ig_1",
+        "permalink": "https://instagram.com/reel/ig_1/", "published_at": "2026-08-24T12:00:00Z",
+        "matched_at": "2026-08-25T12:00:00Z", "match_method": "manual",
+    }
+    storage.write_associations({**data, "associations": [association]}, etag)
+    assert fake.put_calls[0]["IfNoneMatch"] == "*"
+    payload = fake.put_calls[0]["Body"].decode()
+    assert payload.endswith("\n")
+    assert "access_token" not in payload
+
+    with pytest.raises(InsightsStorageError, match="Duplicate"):
+        storage.write_associations({"schema_version": 1, "associations": [association, {**association, "instagram_media_id": "ig_2"}]}, None)
 
 
 def test_conditional_write_conflict_and_malformed_object_fail_closed():
