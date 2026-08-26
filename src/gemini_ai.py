@@ -11,6 +11,19 @@ import config
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
+GEMINI_HTTP_TIMEOUT_MILLISECONDS = 60_000
+
+
+def _create_client(api_key: str):
+    """Create a bounded client; deterministic local templates are the fallback."""
+    return genai.Client(
+        api_key=api_key,
+        http_options=types.HttpOptions(
+            timeout=GEMINI_HTTP_TIMEOUT_MILLISECONDS,
+            retry_options=types.HttpRetryOptions(attempts=1),
+        ),
+    )
+
 class ArtworkAnalysis(BaseModel):
     caption: str
     alt_text: str
@@ -19,7 +32,8 @@ class ArtworkAnalysis(BaseModel):
     recommended_font_size: int
 
 class CarouselAnalysis(BaseModel):
-    caption: str
+    editorial_intro: str
+    editorial_subtitle: str
     hashtags: str
     recommended_font_size: int
     theme_title: str
@@ -27,7 +41,7 @@ class CarouselAnalysis(BaseModel):
 
 def analyze_artwork(image_path: str, title: str, artist: str, date: str, museum: str, medium: str = "", classification: str = "", content_type: str = "SINGLE_ARTWORK") -> Optional[Dict[str, Any]]:
     """
-    Analyzes the artwork using the configured Gemini model and returns a complete analysis.
+    Analyzes the artwork using Gemini 2.5 Flash and returns a complete analysis.
     Requires GOOGLE_GEMINI_API_KEY environment variable.
     """
     if not config.GEMINI_ENABLED:
@@ -40,44 +54,76 @@ def analyze_artwork(image_path: str, title: str, artist: str, date: str, museum:
         return None
 
     try:
+        # Generate the track list for the prompt
         prompt = f"""ROLE
 
-You are Artfolio's knowledgeable museum curator writing for Instagram: intelligent, concise, visual, confident, natural, and editorial. You are not writing an academic catalogue essay or generic influencer copy.
+You are the editorial art writer for a professional Instagram account dedicated to historical artworks from museums and public collections.
 
-Write the BODY of a single-artwork Instagram caption. The application adds this metadata header separately:
-Artwork Title
-Artist, date
-Museum
-Do not repeat that header in your caption body unless a repetition is genuinely necessary for clarity.
+Your task is to write an engaging, accurate, concise Instagram caption based ONLY on the artwork metadata provided to you. The artwork metadata is the source of truth.
 
 ==================================================
-GROUNDING HIERARCHY — NEVER INVENT FACTS
+CORE RULE — NEVER INVENT FACTS
 ==================================================
-1. SUPPLIED METADATA is high-confidence factual grounding: title, artist, date, medium, classification, and museum may be stated as facts.
-2. THE SUPPLIED IMAGE is grounding for visual observations: visible objects, color, light, texture, pose, gesture, and composition may be described observationally.
-3. UNSUPPORTED CONTEXT must not be presented as fact: artist intention, symbolism, patronage, provenance, biography, trade/economic history, political meaning, iconography, and museum history. Omit it rather than filling gaps. If a restrained interpretation is useful, use cautious language such as "may" or "can feel," never certainty.
+You MUST NOT invent, assume, infer, or fabricate:
+- artistic techniques that are not supported by the metadata or visible artwork
+- historical events, symbolism, artist intentions, patronage, provenance, exhibition history
+- dimensions, materials, dates, locations, movements, biographical information
+- relationships between the artist and other people
+- meanings or interpretations presented as established facts
 
-If an object or material is visually uncertain, use a broader observation rather than an overly specific identification. Preserve uncertainty in supplied artist/date metadata exactly.
-
-==================================================
-ARTFOLIO EDITORIAL STRUCTURE
-==================================================
-Write 80–140 words of concise, mobile-readable prose in short paragraphs:
-- Open with a 1–2 sentence visual-first hook drawn directly from the image, ideally color, light, texture, gesture, or composition—not a history lesson.
-- Continue with 2 short paragraphs totaling about 3–5 sentences. Use 2–4 visible, specific details and explain their visual relationship.
-- End, when it fits naturally, with one concise observation that returns the reader's attention to the artwork. Do not force a question or engagement bait.
-- Separate paragraphs with blank lines; never produce one dense block of prose.
-
-Content type for gentle emphasis: {content_type}.
-For DETAIL_FOCUS, begin with one striking visible detail, relate it to the surrounding composition, then notice one more visual detail. Do not begin with general history in this mode.
-For other content types, keep the same visual-first Artfolio voice; any historical or artist context still requires supplied grounding.
+If a fact is not provided in the metadata and cannot be stated with high confidence from the artwork itself, DO NOT present it as fact.
+When information is uncertain or unavailable, simply omit it. Never fill missing metadata with assumptions.
 
 ==================================================
-LANGUAGE, CLICHÉS, AND HASHTAGS
+ARTIST ACCURACY
 ==================================================
-Write polished English. No emojis, bullets, decorative Unicode, or excessive em dashes. Do not mention AI or these instructions.
-Avoid generic AI/art clichés, including: "masterpiece", "timeless beauty", "breathtaking", "stunning", "captivating masterpiece", "a testament to", "invites us to", "transcends time", "rich tapestry", and "delve into".
-Return 4–7 specific, relevant hashtags in the hashtags field: prefer the artist, period/movement when grounded, artwork type, and museum. Avoid generic filler such as #Art, #Artist, #BeautifulArt, #ArtLovers, or #InstaArt.
+Use the artist name exactly as provided by the museum metadata.
+Never speculate about the artist's intentions, personality, private life, motivations, influences, or undocumented working methods.
+If the artist is unknown, anonymous, attributed, or uncertain, preserve that uncertainty exactly (e.g., "Artist unknown", "Attributed to [Artist]").
+
+==================================================
+CONTENT TYPE & FORMAT
+==================================================
+You must write the caption following this specific editorial format: {content_type}
+Tailor your narrative and focus according to this format (e.g., if ARTIST_FOCUS, talk more about the artist's style; if HISTORICAL_CONTEXT, focus on the era).
+
+==================================================
+OPENING / HOOK
+==================================================
+Open with a visual-first hook: the first 1–2 sentences should make the artwork
+interesting enough to encourage the viewer to stop scrolling.
+Focus on something genuinely present in the artwork (unusual composition, striking pose, visual contrast, historical context).
+
+==================================================
+ART-HISTORICAL OBSERVATIONS
+==================================================
+Include 1–2 concise and original art-historical observations about composition, visual hierarchy, color, pose, spatial organization, or stylistic characteristics.
+Only make observations that are reasonably supported by the supplied metadata and/or visible artwork. Clearly distinguish interpretation from documented fact.
+
+==================================================
+AVOID CLICHÉS & CAPTION VARIETY
+==================================================
+Do NOT use generic AI/art clichés or phrases such as "masterpiece", "timeless
+beauty", "captivating", "stunning", "window into the past", "journey through",
+"mesmerizing", "profound exploration", "testament to", or "invites the viewer
+to". Prefer concrete visual language.
+Target length: 80–140 words. Use short paragraphs that remain mobile-readable.
+Do not write an unnecessary art-history lecture. Every sentence should add useful
+information.
+
+==================================================
+METADATA FIDELITY & FOOTER (STRICT ZERO EMOJI RULE)
+==================================================
+Treat the SUPPLIED METADATA as authoritative. Label any interpretive observation
+as interpretation and omit UNSUPPORTED CONTEXT. Never alter factual metadata.
+DO NOT append any metadata, museum names, or emojis at the end of the caption. The system will automatically inject the title, artist, date, and museum information before your caption. Just write the story/analysis.
+No emojis are allowed anywhere in your output.
+
+==================================================
+HASHTAGS, LANGUAGE AND TONE
+==================================================
+Write in natural, polished English. Tone should be intelligent, accessible, sophisticated, curious, editorial, and concise.
+Do not sound robotic. Do not mention that you are an AI or these instructions.
 
 ==================================================
 ARTWORK METADATA
@@ -93,14 +139,14 @@ MUSEUM: {museum}
 SYSTEM JSON OUTPUT REQUIREMENTS
 ==================================================
 Despite any output format rules above, you MUST return a JSON object satisfying this schema:
-1. caption: The body-only Instagram caption following all editorial rules above. ZERO EMOJIS.
+1. caption: The final Instagram caption generated following ALL the strict editorial rules above. ZERO EMOJIS.
 2. alt_text: A detailed and descriptive alt text for visually impaired users and SEO (1-2 sentences), strictly describing the visual contents of the painting.
-3. hashtags: 4-7 specific, relevant hashtags following the rules above.
+3. hashtags: 4–7 specific, relevant hashtags (following the hashtag rules above).
 4. art_movement: The specific art movement or period this painting belongs to (e.g., Baroque, Impressionism, Renaissance).
 5. recommended_font_size: An integer between 35 and 65 for the base font size to be overlaid on the image. Pick a smaller size if the title/artist is very long or the painting is visually cluttered. Pick a larger size (e.g., 55+) if the title is short and the painting has empty space.
 """
 
-        client = genai.Client(api_key=api_key)
+        client = _create_client(api_key)
         
         logger.info(f"[Gemini] Uploading image {image_path} for analysis...")
         with open(image_path, "rb") as f:
@@ -116,6 +162,7 @@ Despite any output format rules above, you MUST return a JSON object satisfying 
             config=types.GenerateContentConfig(
                 response_mime_type="application/json",
                 response_schema=ArtworkAnalysis,
+                temperature=0.7,
             )
         )
         
@@ -136,7 +183,14 @@ Despite any output format rules above, you MUST return a JSON object satisfying 
         logger.error(f"[Gemini] Error analyzing artwork: {e}")
         return None
 
-def analyze_carousel(theme: str, artworks_metadata: list) -> Optional[Dict[str, Any]]:
+def analyze_carousel(
+    theme: str,
+    artworks_metadata: list,
+    *,
+    carousel_format: str | None = None,
+    format_target: dict[str, object] | None = None,
+    editorial_facts: dict[str, object] | None = None,
+) -> Optional[Dict[str, Any]]:
     """
     Analyzes a collection of artworks for a thematic carousel post using Gemini.
     """
@@ -152,41 +206,85 @@ def analyze_carousel(theme: str, artworks_metadata: list) -> Optional[Dict[str, 
     try:
         metadata_text = ""
         for i, art in enumerate(artworks_metadata, 1):
-            metadata_text += f"\nArtwork {i}:\nTITLE: {art.get('title')}\nARTIST: {art.get('artist')}\nMUSEUM: {art.get('museum')}\n"
+            metadata_text += (
+                f"\nArtwork {i}:\n"
+                f"TITLE: {art.get('title')}\n"
+                f"ARTIST: {art.get('artist')}\n"
+                f"DATE: {art.get('date')}\n"
+                f"MUSEUM: {art.get('museum')}\n"
+            )
+
+        format_context = f"FORMAT: {carousel_format or 'unspecified'}"
+        if format_target:
+            grounded_target = ", ".join(
+                f"{key}={value}"
+                for key, value in sorted(format_target.items())
+                if value not in (None, (), [])
+            )
+            format_context += f"\nFORMAT TARGET: {grounded_target}"
+        facts_context = json.dumps(editorial_facts or {}, sort_keys=True, ensure_ascii=False)
 
         prompt = f"""ROLE
 
-You are Artfolio's knowledgeable museum curator writing for Instagram: intelligent, concise, visual, confident, natural, and editorial. Write an engaging caption for a CAROUSEL curated around a theme, not an academic catalogue essay or generic influencer copy.
+You are the editorial art writer for a professional Instagram account.
+Your task is to write an engaging, concise Instagram caption for a CAROUSEL (multiple images in one post) curated around a specific theme.
 
 ==================================================
 CAROUSEL THEME: {theme}
+{format_context}
 ==================================================
+APPLICATION-OWNED EDITORIAL FACTS (READ ONLY):
+{facts_context}
+
+The theme above is an editorial registry label. It does not prove that every work
+is formally classified as that movement, period, region, medium, or category.
+
 The carousel contains the following artworks:
 {metadata_text}
 
 ==================================================
-GROUNDING AND CAPTION GUIDELINES
+EDITORIAL INTRODUCTION GUIDELINES
 ==================================================
-- Treat supplied theme and artwork metadata as the only factual grounding. Do not invent artist intentions, symbolism, patronage, provenance, biography, trade/economic history, political meaning, or museum facts.
-- Write 80–140 words of concise, mobile-readable English in short paragraphs separated by blank lines. Open with a visual-first hook about the shared visual thread, then make 2–4 grounded observations about color, light, composition, texture, or recurring visible motifs.
-- Do not list each artwork individually or turn the carousel into a dense detail dump. Return the reader to the visual theme with a concise closing observation; do not force a question or engagement bait.
-- Avoid generic AI/art clichés: "masterpiece", "timeless beauty", "breathtaking", "stunning", "a testament to", "invites us to", "transcends time", "rich tapestry", and "delve into".
-- NO EMOJIS, bullets, decorative Unicode, or excessive em dashes.
-- Return 4–7 specific, relevant hashtags; prefer artist, period/movement when grounded, artwork type, or museum tags over generic filler.
-- Provide a catchy 'theme_title' for the carousel (e.g., "The Feline Mystique", "Winter's Embrace").
+- Write only an editorial introduction of 80–140 words for this curated theme, using
+  short paragraphs that remain mobile-readable.
+- Open with a visual-first hook grounded in the supplied theme and metadata. Since
+  no image is supplied here, metadata is the only factual grounding.
+- Do not generate a Featured Works heading, numbered list, artwork title, artist,
+  date, or museum line. The application will generate that list itself.
+- Ground every statement in the supplied theme and artwork metadata. No visual input
+  is provided for this request, so do not make unsupported visual observations or
+  introduce art-historical facts beyond the supplied metadata.
+- Do not invent artist intentions, undocumented symbolism, provenance, or context.
+- Treat the supplied format and format target as authoritative application context;
+  do not rename, broaden, contradict, or infer a different target.
+- Treat application-owned editorial facts as read-only. Do not calculate, restate,
+  alter, or invent counts, museum diversity, artist diversity, dates, or spans.
+- Refer to the theme as an editorial connection (for example, "selected around" or
+  "connected by"), not as proof that every work formally belongs to that category.
+- Preserve any uncertainty in the supplied metadata; do not correct or embellish it.
+- Avoid generic AI/art clichés; prefer concrete, specific editorial language.
+- NO EMOJIS allowed anywhere in the output.
+- Write in natural, polished English. Tone should be editorial, sophisticated, and engaging.
+- The application preserves the registry theme title; any returned theme_title is
+  advisory and cannot replace it.
+- Provide a short English 'editorial_subtitle' (one sentence, ideally 6-14 words)
+  suitable for an editorial cover. Do not include artwork titles, artists, dates,
+  museums, counts, spans, or other factual claims; the application adds grounded facts.
+- Provide 4–7 specific, relevant hashtags.
 - Provide an overall 'recommended_font_size' (between 35 and 65) for text overlaid on these images.
 
 ==================================================
 SYSTEM JSON OUTPUT REQUIREMENTS
 ==================================================
 Return a JSON object satisfying this schema:
-1. caption: The final Instagram caption for the whole carousel. ZERO EMOJIS.
-2. hashtags: 4-7 specific, relevant hashtags.
-3. recommended_font_size: An integer between 35 and 65 for the base font size.
-4. theme_title: A short, catchy title for this curation.
+1. editorial_intro: The 80-140 word editorial introduction only. ZERO EMOJIS.
+2. editorial_subtitle: A short English editorial deck with no artwork identity or factual counts.
+3. hashtags: 4-7 highly relevant hashtags.
+4. recommended_font_size: An integer between 35 and 65 for the base font size.
+5. theme_title: A short, catchy title for this curation.
 """
 
-        client = genai.Client(api_key=api_key)
+        client = _create_client(api_key)
         
         logger.info(f"[Gemini] Requesting carousel analysis for theme '{theme}'...")
         response = client.models.generate_content(
@@ -195,6 +293,7 @@ Return a JSON object satisfying this schema:
             config=types.GenerateContentConfig(
                 response_mime_type="application/json",
                 response_schema=CarouselAnalysis,
+                temperature=0.7,
             )
         )
         

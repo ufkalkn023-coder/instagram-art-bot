@@ -1,0 +1,71 @@
+name: R2 Integration Verification
+
+"on":
+  workflow_dispatch:
+    inputs:
+      confirm_r2_integration:
+        description: "Type RUN_R2_INTEGRATION to run live Cloudflare R2 tests"
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  verify-r2-conditional-writes:
+    if: "${{ github.event_name == 'workflow_dispatch' && github.event.inputs.confirm_r2_integration == 'RUN_R2_INTEGRATION' }}"
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.10
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.10"
+          cache: pip
+          cache-dependency-path: requirements-dev.lock
+
+      - name: Install locked development dependencies
+        run: python -m pip install --require-hashes -r requirements-dev.lock
+
+      - name: Run offline R2 safety preflight
+        run: python -m pytest -q tests/test_r2_integration_safety.py
+
+      - name: Verify required R2 secrets are configured
+        shell: bash
+        env:
+          CLOUDFLARE_R2_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_R2_ACCOUNT_ID }}
+          CLOUDFLARE_R2_ACCESS_KEY_ID: ${{ secrets.CLOUDFLARE_R2_ACCESS_KEY_ID }}
+          CLOUDFLARE_R2_SECRET_ACCESS_KEY: ${{ secrets.CLOUDFLARE_R2_SECRET_ACCESS_KEY }}
+          CLOUDFLARE_R2_BUCKET_NAME: ${{ secrets.CLOUDFLARE_R2_BUCKET_NAME }}
+        run: |
+          set -euo pipefail
+          missing=0
+          for name in \
+            CLOUDFLARE_R2_ACCOUNT_ID \
+            CLOUDFLARE_R2_ACCESS_KEY_ID \
+            CLOUDFLARE_R2_SECRET_ACCESS_KEY \
+            CLOUDFLARE_R2_BUCKET_NAME
+          do
+            if [[ -n "${!name:-}" ]]; then
+              echo "$name: configured"
+            else
+              echo "$name: missing" >&2
+              missing=1
+            fi
+          done
+          if [[ "$missing" -ne 0 ]]; then
+            echo "Live R2 verification stopped before object creation." >&2
+            exit 1
+          fi
+
+      - name: Run live R2 conditional-write integration suite
+        env:
+          ARTFOLIO_RUN_R2_INTEGRATION: "1"
+          CLOUDFLARE_R2_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_R2_ACCOUNT_ID }}
+          CLOUDFLARE_R2_ACCESS_KEY_ID: ${{ secrets.CLOUDFLARE_R2_ACCESS_KEY_ID }}
+          CLOUDFLARE_R2_SECRET_ACCESS_KEY: ${{ secrets.CLOUDFLARE_R2_SECRET_ACCESS_KEY }}
+          CLOUDFLARE_R2_BUCKET_NAME: ${{ secrets.CLOUDFLARE_R2_BUCKET_NAME }}
+        run: python -m pytest -q -s tests/integration/test_r2_conditional_writes.py

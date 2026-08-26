@@ -1,4 +1,3 @@
-import io
 import os
 import random
 import logging
@@ -7,9 +6,17 @@ import time
 import uuid
 import boto3
 from datetime import datetime
-from botocore.exceptions import ClientError
-from typing import Tuple, Optional, List, Dict, Any
-from PIL import Image, ImageOps, ImageDraw, ImageFont
+from botocore.config import Config
+from botocore.exceptions import (
+    ClientError,
+    ConnectTimeoutError,
+    ConnectionClosedError,
+    EndpointConnectionError,
+    ReadTimeoutError,
+)
+from typing import Tuple
+
+from PIL import Image, ImageDraw
 
 import config
 
@@ -18,19 +25,44 @@ logger = logging.getLogger(__name__)
 
 # Available frame styles
 FRAME_STYLES = ["palette_border", "gradient_border", "clean"]
+R2_CLIENT_CONFIG = Config(
+    connect_timeout=10,
+    read_timeout=30,
+    # upload_temp_media owns the three logged application-level attempts.
+    retries={"total_max_attempts": 1, "mode": "standard"},
+)
+_TRANSIENT_R2_HTTP_STATUSES = {408, 429, 500, 502, 503, 504}
+_TRANSIENT_R2_ERROR_CODES = {
+    "InternalError",
+    "RequestTimeout",
+    "ServiceUnavailable",
+    "SlowDown",
+    "Throttling",
+    "ThrottlingException",
+}
+_TRANSIENT_R2_EXCEPTIONS = (
+    ConnectTimeoutError,
+    ConnectionClosedError,
+    EndpointConnectionError,
+    ReadTimeoutError,
+)
 
-PORTRAIT_OR_SQUARE_MAX_RATIO = 1.15
-PANORAMIC_MIN_RATIO = 1.80
-WIDE_PANORAMA_MAX_RATIO = 2.40
-PRESENTATION_PORTRAIT_OR_SQUARE = "portrait_or_square"
-PRESENTATION_LANDSCAPE = "landscape"
-PRESENTATION_PANORAMIC = "panoramic"
-PANORAMA_WIDE = "wide_panorama"
-PANORAMA_EXTREME = "extreme_panorama"
-WIDE_PANORAMA_TOP_SPACE_SHARE = 0.42
-EXTREME_PANORAMA_TOP_SPACE_SHARE = 0.34
-MUSEUM_MATTE = (244, 242, 237)  # #F4F2ED
-SUBTLE_BORDER = (216, 213, 206)  # #D8D5CE
+
+def _is_transient_r2_upload_error(error: BaseException) -> bool:
+    """Classify retryable R2 failures, including boto3 wrapper chains."""
+    current: BaseException | None = error
+    seen: set[int] = set()
+    while current is not None and id(current) not in seen:
+        seen.add(id(current))
+        if isinstance(current, _TRANSIENT_R2_EXCEPTIONS):
+            return True
+        if isinstance(current, ClientError):
+            response = current.response
+            status = response.get("ResponseMetadata", {}).get("HTTPStatusCode")
+            code = response.get("Error", {}).get("Code")
+            return status in _TRANSIENT_R2_HTTP_STATUSES or code in _TRANSIENT_R2_ERROR_CODES
+        current = current.__cause__ or current.__context__
+    return False
 
 
 def _get_dominant_colors(img: Image.Image, num_colors: int = 5) -> list:
@@ -95,135 +127,64 @@ def _apply_gradient_border(img: Image.Image, border_size: int = 60) -> Image.Ima
 
 
 def prepare_local_image(local_path: str) -> Tuple[str, str]:
-    """
-    Takes an already downloaded raw image, normalizes it (EXIF transpose, RGB), and determines orientation.
-    Returns (output_path, orientation).
+    """Inspect a downloaded image without changing its bytes.
+
+    The single-post pipeline owns compatibility processing in ``instagram_image``.
+    This legacy helper remains for callers that only need an orientation label.
     """
     logger.info(f"Preparing local artwork image: {local_path}")
-    
-    img = Image.open(local_path)
-    img = ImageOps.exif_transpose(img)
-    if img.mode != "RGB":
-        img = img.convert("RGB")
 
-    img.save(local_path, "JPEG", quality=100)
-    
-    orientation = "horizontal" if img.width > img.height else "vertical"
-    logger.info(f"Prepared raw image: {img.width}x{img.height} ({orientation})")
-    
+    from src.instagram_image import inspect_instagram_image_publishability
+
+    inspected = inspect_instagram_image_publishability(local_path)
+    if inspected.width is None or inspected.height is None:
+        raise ValueError("Local artwork image could not be decoded.")
+    orientation = "horizontal" if inspected.width > inspected.height else "vertical"
+    logger.info(
+        "Inspected raw image without modification: %sx%s (%s)",
+        inspected.width,
+        inspected.height,
+        orientation,
+    )
     return local_path, orientation
 
 
-def classify_presentation_mode(width: int, height: int) -> str:
-    """Classify a downloaded artwork by its true aspect ratio."""
-    if width <= 0 or height <= 0:
-        raise ValueError("Artwork dimensions must be positive.")
-    ratio = width / height
-    if ratio <= PORTRAIT_OR_SQUARE_MAX_RATIO:
-        return PRESENTATION_PORTRAIT_OR_SQUARE
-    if ratio <= PANORAMIC_MIN_RATIO:
-        return PRESENTATION_LANDSCAPE
-    return PRESENTATION_PANORAMIC
-
-
-def classify_panorama_submode(width: int, height: int) -> str | None:
-    """Distinguish wide panoramas from extreme, single-post-limited ones."""
-    if classify_presentation_mode(width, height) != PRESENTATION_PANORAMIC:
-        return None
-    return PANORAMA_WIDE if width / height <= WIDE_PANORAMA_MAX_RATIO else PANORAMA_EXTREME
-
-
-def _fit_within_canvas(width: int, height: int, canvas_width: int, canvas_height: int) -> tuple[int, int]:
-    scale = min(canvas_width / width, canvas_height / height)
-    return max(1, round(width * scale)), max(1, round(height * scale))
-
-
-def calculate_feed_artwork_box(
-    width: int,
-    height: int,
-    canvas_width: int = config.TARGET_WIDTH,
-    canvas_height: int = config.TARGET_HEIGHT,
-) -> tuple[int, int, int, int]:
-    """Return the deterministic full-artwork placement box for a feed canvas."""
-    mode = classify_presentation_mode(width, height)
-    art_width, art_height = _fit_within_canvas(width, height, canvas_width, canvas_height)
-    paste_x = (canvas_width - art_width) // 2
-    available_vertical_space = canvas_height - art_height
-
-    if mode != PRESENTATION_PANORAMIC:
-        paste_y = available_vertical_space // 2
-    elif classify_panorama_submode(width, height) == PANORAMA_WIDE:
-        paste_y = round(available_vertical_space * WIDE_PANORAMA_TOP_SPACE_SHARE)
-    else:
-        paste_y = round(available_vertical_space * EXTREME_PANORAMA_TOP_SPACE_SHARE)
-
-    return paste_x, paste_y, art_width, art_height
-
-
-def _needs_subtle_border(img: Image.Image) -> bool:
-    """Return whether a near-white neutral artwork needs separation from the matte."""
-    sample = img.resize((32, 32), Image.Resampling.BOX)
-    edge_pixels = []
-    for coordinate in range(32):
-        edge_pixels.extend(
-            (
-                sample.getpixel((coordinate, 0)),
-                sample.getpixel((coordinate, 31)),
-                sample.getpixel((0, coordinate)),
-                sample.getpixel((31, coordinate)),
-            )
-        )
-    red = sum(pixel[0] for pixel in edge_pixels) / len(edge_pixels)
-    green = sum(pixel[1] for pixel in edge_pixels) / len(edge_pixels)
-    blue = sum(pixel[2] for pixel in edge_pixels) / len(edge_pixels)
-    luminance = 0.299 * red + 0.587 * green + 0.114 * blue
-    return luminance >= 225 and max(red, green, blue) - min(red, green, blue) <= 25
-
-
 def create_feed_post(raw_image_path: str, artist_name: str = "", artwork_title: str = "", output_path: str = config.OUTPUT_IMAGE_PATH, base_font_size: int = 46) -> str:
+    """Prepare a single feed asset with only required compatibility changes.
+
+    Artist/title/font arguments are retained for API compatibility; single artwork
+    images never receive overlays, framing, blur, crop, or forced-canvas treatment.
     """
-    Present a full artwork on a 1080x1350 museum-matte feed canvas.
-
-    The downloaded image dimensions are the source of truth. The artwork is
-    always fit inside the canvas without cropping, distortion, or a blurred
-    duplicate background.
-    """
-    img = Image.open(raw_image_path)
-    img = ImageOps.exif_transpose(img).convert("RGB")
-    canvas_w = config.TARGET_WIDTH   # 1080
-    canvas_h = config.TARGET_HEIGHT  # 1350
-    mode = classify_presentation_mode(img.width, img.height)
-    panorama_submode = classify_panorama_submode(img.width, img.height)
-    paste_x, paste_y, art_w, art_h = calculate_feed_artwork_box(
-        img.width,
-        img.height,
-        canvas_w,
-        canvas_h,
+    from src.instagram_image import (
+        InstagramImageNotPublishableError,
+        prepare_single_instagram_image,
     )
-    art_resized = img.resize((art_w, art_h), Image.Resampling.LANCZOS)
-    canvas = Image.new("RGB", (canvas_w, canvas_h), MUSEUM_MATTE)
-    canvas.paste(art_resized, (paste_x, paste_y))
 
-    if _needs_subtle_border(art_resized):
-        ImageDraw.Draw(canvas).rectangle(
-            (paste_x, paste_y, paste_x + art_w - 1, paste_y + art_h - 1),
-            outline=SUBTLE_BORDER,
-            width=1,
-        )
+    prepared = prepare_single_instagram_image(raw_image_path, output_path)
+    if prepared.path is None:
+        raise InstagramImageNotPublishableError(prepared.publishability)
+    return prepared.path
 
-    canvas.save(output_path, "JPEG", quality=95)
-    logger.info(
-        "Feed post image processed mode=%s panorama_submode=%s source=%sx%s rendered=%sx%s matte=%s saved_to=%s",
-        mode,
-        panorama_submode or "none",
-        img.width,
-        img.height,
-        art_w,
-        art_h,
-        "#F4F2ED",
-        output_path,
-    )
-    return output_path
+
+_UPLOAD_IMAGE_TYPES = {
+    "JPEG": ("image/jpeg", ".jpg"),
+    "PNG": ("image/png", ".png"),
+    "WEBP": ("image/webp", ".webp"),
+}
+
+
+def _upload_image_metadata(file_path: str) -> tuple[str, str]:
+    """Derive R2 metadata from decoded bytes instead of the local suffix."""
+    try:
+        with Image.open(file_path) as image:
+            image_format = (image.format or "").upper()
+    except (OSError, SyntaxError, ValueError) as error:
+        raise ValueError("Media upload requires a valid decoded image.") from error
+
+    try:
+        return _UPLOAD_IMAGE_TYPES[image_format]
+    except KeyError as error:
+        raise ValueError(f"Unsupported image upload format: {image_format or 'unknown'}") from error
 
 
 
@@ -249,8 +210,8 @@ def upload_temp_media(file_path: str) -> str:
     timestamp = datetime.now().strftime("%Y%m%d%H%M%S")
     unique_id = str(uuid.uuid4())[:8]
     
-    content_type = "image/jpeg"
-    object_key = f"images/{timestamp}_{unique_id}.jpg"
+    content_type, file_suffix = _upload_image_metadata(file_path)
+    object_key = f"images/{timestamp}_{unique_id}{file_suffix}"
         
     endpoint_url = f"https://{account_id}.r2.cloudflarestorage.com"
     
@@ -260,7 +221,8 @@ def upload_temp_media(file_path: str) -> str:
         endpoint_url=endpoint_url,
         aws_access_key_id=access_key,
         aws_secret_access_key=secret_key,
-        region_name="auto"
+        region_name="auto",
+        config=R2_CLIENT_CONFIG,
     )
     
     # Upload with 3 retries
@@ -276,21 +238,25 @@ def upload_temp_media(file_path: str) -> str:
             )
             upload_success = True
             break
-        except ClientError as e:
-            logger.warning(f"R2 upload failed on attempt {attempt}: {e}")
-            if attempt < 3:
-                time.sleep(2)
         except Exception as e:
-            logger.warning(f"Unexpected R2 upload error on attempt {attempt}: {e}")
-            if attempt < 3:
+            retryable = _is_transient_r2_upload_error(e)
+            logger.warning(
+                "R2 upload failed attempt=%s/3 error=%s retryable=%s",
+                attempt,
+                type(e).__name__,
+                retryable,
+            )
+            if retryable and attempt < 3:
                 time.sleep(2)
+                continue
+            break
                 
     if not upload_success:
         raise RuntimeError("Failed to upload media to Cloudflare R2 after 3 attempts.")
         
     # Construct public URL
     final_url = f"{public_url_base}/{object_key}"
-    logger.info(f"File uploaded to R2. Validating public URL: {final_url}")
+    logger.info("File uploaded to R2. Validating public object: %s", object_key)
     
     # HEAD check to ensure Instagram can reach it
     for head_attempt in range(1, 4):
@@ -301,7 +267,8 @@ def upload_temp_media(file_path: str) -> str:
                 res_content_length = int(head_res.headers.get("Content-Length", 0))
                 
                 # Verify length and type
-                if res_content_length > 0 and content_type in res_content_type:
+                response_media_type = res_content_type.split(";", 1)[0].strip().casefold()
+                if res_content_length > 0 and response_media_type == content_type:
                     logger.info("Public URL health check passed!")
                     return final_url
                 else:
@@ -314,4 +281,6 @@ def upload_temp_media(file_path: str) -> str:
             
         time.sleep(2)
         
-    raise RuntimeError(f"R2 uploaded successfully, but public URL health check failed: {final_url}")
+    raise RuntimeError(
+        f"R2 object {object_key} uploaded successfully, but its public health check failed."
+    )

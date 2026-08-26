@@ -1,12 +1,16 @@
 __pycache__/
 *.pyc
 *.pyo
+.pytest_cache/
+.ruff_cache/
+.DS_Store
 .env
 test.env
 data/Inter-Regular.ttf
 data/output_*
 data/raw_*
 data/temp_*
+data/qc_carousels/
 output/reel-handoffs/
 output/reel-selection/
 output/reel-batches/

@@ -3,116 +3,76 @@ from pathlib import Path
 import pytest
 from PIL import Image
 
-import main
 from src import image_processor
+from src.instagram_image import InstagramImageNotPublishableError
 
 
-def _render(tmp_path, size, color=(38, 78, 118)):
+def test_prepare_local_image_preserves_source_bytes_and_natural_orientation(tmp_path):
     source_path = tmp_path / "source.jpg"
-    output_path = tmp_path / "feed.jpg"
-    Image.new("RGB", size, color).save(source_path, "JPEG")
-    image_processor.create_feed_post(str(source_path), output_path=str(output_path))
-    return Image.open(output_path)
+    Image.new("RGB", (1600, 1000), (38, 78, 118)).save(source_path, "JPEG")
+    source_bytes = source_path.read_bytes()
+
+    prepared_path, orientation = image_processor.prepare_local_image(str(source_path))
+
+    assert prepared_path == str(source_path)
+    assert orientation == "horizontal"
+    assert source_path.read_bytes() == source_bytes
 
 
-@pytest.mark.parametrize(
-    ("size", "expected"),
-    [
-        ((800, 1200), image_processor.PRESENTATION_PORTRAIT_OR_SQUARE),
-        ((1000, 1000), image_processor.PRESENTATION_PORTRAIT_OR_SQUARE),
-        ((1600, 1000), image_processor.PRESENTATION_LANDSCAPE),
-        ((2400, 800), image_processor.PRESENTATION_PANORAMIC),
-        ((1150, 1000), image_processor.PRESENTATION_PORTRAIT_OR_SQUARE),
-        ((1151, 1000), image_processor.PRESENTATION_LANDSCAPE),
-        ((1800, 1000), image_processor.PRESENTATION_LANDSCAPE),
-        ((1801, 1000), image_processor.PRESENTATION_PANORAMIC),
-    ],
-)
-def test_presentation_mode_thresholds_are_deterministic(size, expected):
-    assert image_processor.classify_presentation_mode(*size) == expected
+def test_legacy_feed_wrapper_is_zero_touch_for_publishable_jpeg(tmp_path, monkeypatch):
+    source_path = tmp_path / "source.jpg"
+    output_path = tmp_path / "unused.jpg"
+    Image.new("RGB", (1600, 1000), (38, 78, 118)).save(source_path, "JPEG")
+    source_bytes = source_path.read_bytes()
 
-
-@pytest.mark.parametrize(
-    ("size", "submode"),
-    [
-        ((1800, 1000), None),
-        ((1801, 1000), image_processor.PANORAMA_WIDE),
-        ((2400, 1000), image_processor.PANORAMA_WIDE),
-        ((2401, 1000), image_processor.PANORAMA_EXTREME),
-    ],
-)
-def test_panorama_submode_boundaries(size, submode):
-    assert image_processor.classify_panorama_submode(*size) == submode
-
-
-def test_panorama_layout_uses_asymmetric_museum_plate_placement():
-    assert image_processor.calculate_feed_artwork_box(2400, 1000) == (0, 378, 1080, 450)
-    assert image_processor.calculate_feed_artwork_box(3000, 1000) == (0, 337, 1080, 360)
-
-
-@pytest.mark.parametrize(
-    "size",
-    [
-        (800, 1200),
-        (1000, 1000),
-        (1600, 1000),
-        (1800, 1000),
-        (2000, 1000),
-        (2400, 1000),
-        (3000, 1000),
-        (4000, 1000),
-        (6000, 1000),
-    ],
-)
-def test_feed_render_keeps_artwork_aspect_ratio_and_canvas_size(tmp_path, size):
-    rendered = _render(tmp_path, size)
-
-    assert rendered.size == (1080, 1350)
-    source_ratio = size[0] / size[1]
-    expected_width = min(1080, round(1350 * source_ratio))
-    expected_height = min(1350, round(1080 / source_ratio))
-    assert image_processor.calculate_feed_artwork_box(*size)[2:] == (expected_width, expected_height)
-    assert (expected_width / expected_height) == pytest.approx(source_ratio, abs=0.002)
-
-
-@pytest.mark.parametrize(
-    "size",
-    [(1600, 1000), (1800, 1000), (2000, 1000), (2400, 1000), (3000, 1000), (4000, 1000), (6000, 1000)],
-)
-def test_landscape_and_panorama_use_solid_matte_without_blur(tmp_path, monkeypatch, size):
     def forbidden_filter(*args, **kwargs):
-        pytest.fail("feed presentation must not create a blurred artwork background")
+        pytest.fail("single artwork presentation must not create a blurred background")
 
     monkeypatch.setattr(Image.Image, "filter", forbidden_filter)
-    rendered = _render(tmp_path, size)
+    rendered_path = image_processor.create_feed_post(
+        str(source_path), output_path=str(output_path)
+    )
 
-    assert rendered.size == (1080, 1350)
-    assert rendered.getpixel((0, 0)) == pytest.approx(image_processor.MUSEUM_MATTE, abs=2)
-    assert rendered.getpixel((1079, 1349)) == pytest.approx(image_processor.MUSEUM_MATTE, abs=2)
-
-
-def test_light_artwork_gets_only_a_thin_neutral_separation_border(tmp_path):
-    rendered = _render(tmp_path, (1600, 1000), color=(250, 250, 248))
-
-    assert rendered.getpixel((0, 337)) == pytest.approx(image_processor.SUBTLE_BORDER, abs=3)
-    assert rendered.getpixel((500, 0)) == pytest.approx(image_processor.MUSEUM_MATTE, abs=2)
+    assert rendered_path == str(source_path)
+    assert source_path.read_bytes() == source_bytes
+    assert not output_path.exists()
+    with Image.open(rendered_path) as rendered:
+        assert rendered.size == (1600, 1000)
 
 
-def test_rendering_is_deterministic_for_the_same_artwork(tmp_path):
-    source_path = tmp_path / "source.jpg"
-    first_path = tmp_path / "first.jpg"
-    second_path = tmp_path / "second.jpg"
+def test_legacy_feed_wrapper_only_converts_format_when_required(tmp_path):
+    source_path = tmp_path / "source.png"
+    output_path = tmp_path / "converted.jpg"
+    Image.new("RGB", (1000, 1200), (38, 78, 118)).save(source_path, "PNG")
+
+    rendered_path = image_processor.create_feed_post(
+        str(source_path), output_path=str(output_path)
+    )
+
+    assert rendered_path == str(output_path)
+    with Image.open(rendered_path) as rendered:
+        assert rendered.format == "JPEG"
+        assert rendered.size == (1000, 1200)
+
+
+def test_legacy_feed_wrapper_rejects_unpublishable_aspect_without_crop(tmp_path):
+    source_path = tmp_path / "panorama.jpg"
+    output_path = tmp_path / "feed.jpg"
     Image.new("RGB", (2400, 800), (38, 78, 118)).save(source_path, "JPEG")
 
-    image_processor.create_feed_post(str(source_path), output_path=str(first_path))
-    image_processor.create_feed_post(str(source_path), output_path=str(second_path))
+    with pytest.raises(InstagramImageNotPublishableError):
+        image_processor.create_feed_post(
+            str(source_path), output_path=str(output_path)
+        )
 
-    assert first_path.read_bytes() == second_path.read_bytes()
+    assert not output_path.exists()
 
 
-def test_workflow_uses_four_daily_istanbul_feed_windows():
+def test_workflow_uses_explicit_split_single_and_carousel_schedules():
     workflow = Path(".github/workflows/instagram_bot.yml").read_text()
 
-    assert 'cron: "0 6,10,14,18 * * *"' in workflow
+    assert 'cron: "0 0,3,6,9,15,18 * * *"' in workflow
+    assert 'cron: "0 12,21 * * *"' in workflow
+    assert "python main.py --mode single" in workflow
+    assert "python main.py --mode carousel" in workflow
     assert "workflow_dispatch" in workflow
-    assert main.SCHEDULED_CAROUSEL_UTC_HOURS == {18}

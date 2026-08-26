@@ -53,17 +53,108 @@ def test_different_artwork_ids_are_not_duplicates(monkeypatch):
     assert "aic_84775" not in history_tracker.get_posted_ids()
 
 
-def test_reservation_rejects_canonical_duplicate_without_migrating_history(monkeypatch):
+def test_reservation_never_overwrites_published_canonical_equivalent(monkeypatch):
     history = {"posted_artworks": [{"id": "artic_84774", "status": "PUBLISHED"}]}
     uploaded = []
     monkeypatch.setattr(history_tracker, "load_history_with_etag", lambda: (history, "etag"))
     monkeypatch.setattr(history_tracker, "_upload_history", lambda value, etag: uploaded.append((value, etag)))
 
-    with pytest.raises(RuntimeError, match="already protected"):
+    with pytest.raises(RuntimeError, match="protected by history"):
         history_tracker.reserve_artwork({"id": "aic_84774", "title": "A", "artist": "B"})
 
     assert uploaded == []
-    assert history == {"posted_artworks": [{"id": "artic_84774", "status": "PUBLISHED"}]}
+    assert history["posted_artworks"] == [{"id": "artic_84774", "status": "PUBLISHED"}]
+
+
+def test_single_image_publication_metadata_is_backwards_compatible(monkeypatch):
+    history = {"posted_artworks": []}
+    monkeypatch.setattr(history_tracker, "load_history_with_etag", lambda: (history, "etag"))
+    monkeypatch.setattr(history_tracker, "_upload_history", lambda value, etag: None)
+
+    history_tracker.reserve_artwork(
+        {
+            "id": "aic_technical",
+            "title": "Artwork",
+            "artist": "Artist",
+            "image_width": 1800,
+            "image_height": 1200,
+            "published_width": 1800,
+            "published_height": 1200,
+            "source_width": 1800,
+            "source_height": 1200,
+            "source_image_format": "JPEG",
+            "source_image_file_size": 456789,
+            "published_image_format": "JPEG",
+            "published_image_file_size": 456789,
+            "exif_orientation": 1,
+            "image_processing": "ZERO_TOUCH",
+            "compatibility_conversion": False,
+            "source_bytes_preserved": True,
+            "jpeg_compatibility_quality": None,
+            "compatibility_attempts": 0,
+            "published_orientation": "LANDSCAPE",
+            "normalized_artist_key": "artist",
+            "semantic_family": "LANDSCAPE",
+            "visual_tone": "MID",
+            "visual_color_family": "BLUE",
+        }
+    )
+
+    record = history["posted_artworks"][0]
+    assert record["image_width"] == record["published_width"] == 1800
+    assert record["image_height"] == record["published_height"] == 1200
+    assert record["source_width"] == record["published_width"] == 1800
+    assert record["source_height"] == record["published_height"] == 1200
+    assert record["source_image_format"] == record["published_image_format"] == "JPEG"
+    assert record["image_processing"] == "ZERO_TOUCH"
+    assert record["source_bytes_preserved"] is True
+    assert record["compatibility_conversion"] is False
+    assert record["jpeg_compatibility_quality"] is None
+    assert record["compatibility_attempts"] == 0
+    assert record["publication_type"] == "single"
+    assert record["published_orientation"] == "LANDSCAPE"
+    assert record["normalized_artist_key"] == "artist"
+    assert record["semantic_family"] == "LANDSCAPE"
+    assert record["visual_tone"] == "MID"
+    assert record["visual_color_family"] == "BLUE"
+
+
+def test_size_compatibility_metadata_is_preserved_in_history(monkeypatch):
+    history = {"posted_artworks": []}
+    monkeypatch.setattr(
+        history_tracker, "load_history_with_etag", lambda: (history, "etag")
+    )
+    monkeypatch.setattr(history_tracker, "_upload_history", lambda value, etag: None)
+
+    history_tracker.reserve_artwork(
+        {
+            "id": "aic_oversized",
+            "title": "Artwork",
+            "artist": "Artist",
+            "source_width": 4000,
+            "source_height": 3000,
+            "published_width": 4000,
+            "published_height": 3000,
+            "source_image_format": "JPEG",
+            "published_image_format": "JPEG",
+            "source_image_file_size": 9_500_000,
+            "published_image_file_size": 7_900_000,
+            "image_processing": "JPEG_SIZE_COMPATIBILITY",
+            "source_bytes_preserved": False,
+            "jpeg_compatibility_quality": 86,
+            "compatibility_attempts": 5,
+        }
+    )
+
+    record = history["posted_artworks"][0]
+    assert (record["source_width"], record["source_height"]) == (4000, 3000)
+    assert (record["published_width"], record["published_height"]) == (4000, 3000)
+    assert record["source_image_file_size"] == 9_500_000
+    assert record["published_image_file_size"] == 7_900_000
+    assert record["image_processing"] == "JPEG_SIZE_COMPATIBILITY"
+    assert record["source_bytes_preserved"] is False
+    assert record["jpeg_compatibility_quality"] == 86
+    assert record["compatibility_attempts"] == 5
 
 
 @pytest.mark.parametrize("artwork_id", ["artic_84774", "aic_84774", "met_123", "rijksmuseum_SK-A-1"])
@@ -174,7 +265,7 @@ def test_quality_filter_scoring():
         image_height=2000
     )
     score = calculate_quality_score(art, museum_weights={"test": 15})
-    # Core metadata (20), great image res (40), good source (15), perfect ratio (20)
+    # Core metadata (20), great image resolution (40), good source (15).
     assert score == 100
 
     art_bad = NormalizedArtwork(
@@ -189,12 +280,15 @@ def test_quality_filter_scoring():
         image_height=300
     )
     score_bad = calculate_quality_score(art_bad, museum_weights={"test": 15})
-    # Bad core metadata (0), low res (15), good source (15), extreme ratio (10)
-    assert score_bad == 40 / 95 * 100
+    # Bad core metadata (0), low resolution (15), measured image (20), good source (15).
+    # Aspect ratio is a publishability concern, not an artwork-quality signal.
+    assert score_bad == 50 / 95 * 100
     
 def test_image_validator_invalid_url():
-    assert validate_and_download_image("not a url", "test.jpg") == False
-    assert validate_and_download_image("http://invalid.domain.that.does.not.exist.com/image.jpg", "test.jpg") == False
+    assert not validate_and_download_image("not a url", "test.jpg")
+    assert not validate_and_download_image(
+        "http://invalid.domain.that.does.not.exist.com/image.jpg", "test.jpg"
+    )
     if os.path.exists("test.jpg"):
         os.remove("test.jpg")
 

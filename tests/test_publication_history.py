@@ -1,13 +1,11 @@
 import copy
 from datetime import datetime, timedelta, timezone
-from types import SimpleNamespace
 from unittest.mock import Mock
 
 import pytest
 from botocore.exceptions import ClientError
 from pydantic import ValidationError
 
-import main
 from src import content_diversity, history_tracker
 
 
@@ -434,9 +432,9 @@ def test_conditional_upload_translates_r2_precondition_failure(monkeypatch):
     monkeypatch.setattr(history_tracker, "_get_bucket_name", lambda: "bucket")
 
     with pytest.raises(history_tracker.ConcurrentWriteError):
-        history_tracker._upload_history({"posted_artworks": []}, "etag-1")
+        history_tracker._upload_history({"posted_artworks": []}, '"etag-1"')
 
-    assert calls[0]["IfMatch"] == "etag-1"
+    assert calls[0]["IfMatch"] == '"etag-1"'
 
 
 def test_single_publication_history_contains_its_artwork_exactly_once(monkeypatch):
@@ -701,58 +699,23 @@ def test_identical_carousel_retry_is_idempotent_without_another_upload(monkeypat
     assert len(uploads) == 1
 
 
-def test_run_carousel_post_uses_one_ordered_batch_finalizer(monkeypatch):
-    artworks = [
-        {
-            **_artwork(f"aic_{index}"),
-            "date": "1900",
-            "local_image_path": f"/tmp/aic_{index}.jpg",
-        }
-        for index in range(8)
-    ]
-    artwork_ids = [artwork["id"] for artwork in artworks]
-    finalizer = Mock()
-    legacy_finalizer = Mock()
-    publish = Mock(return_value="media-carousel")
-
-    monkeypatch.setattr(main.history_tracker, "get_posted_ids", lambda: set())
-    monkeypatch.setattr(main.history_tracker, "get_grid_color_tone", lambda: "warm")
-    monkeypatch.setattr(main.history_tracker, "reserve_artworks", lambda *args: "publication-carousel")
-    monkeypatch.setattr(main.history_tracker, "mark_artworks_publishing", lambda artwork_ids: 8)
-    monkeypatch.setattr(main.history_tracker, "confirm_artworks_and_record_publication", finalizer)
-    monkeypatch.setattr(main.history_tracker, "confirm_artwork", legacy_finalizer)
-    monkeypatch.setattr(main.random, "choice", lambda themes: "portrait")
-    monkeypatch.setattr(main.art_fetcher, "fetch_carousel_artworks", lambda *args, **kwargs: artworks)
-    monkeypatch.setattr(main.gemini_ai, "analyze_carousel", lambda *args, **kwargs: None)
+def test_carousel_finalizer_uses_one_ordered_additive_history_update(monkeypatch):
+    cover_id = "aic_cover"
+    featured_ids = [f"aic_{index}" for index in range(1, 9)]
+    artwork_ids = [cover_id, *featured_ids]
+    finalizer = Mock(return_value={"artwork_ids": artwork_ids})
     monkeypatch.setattr(
-        main.image_processor, "prepare_local_image", lambda path: (f"raw-{path}", "vertical")
-    )
-    monkeypatch.setattr(main.image_processor, "create_feed_post", lambda *args, **kwargs: "post.jpg")
-    monkeypatch.setattr(
-        main.image_processor,
-        "upload_temp_media",
-        lambda path: f"https://example.test/{path}",
-    )
-    monkeypatch.setattr(
-        main.instagram_poster,
-        "validate_instagram_credentials",
-        lambda account_id, access_token: ("account", "token"),
-    )
-    monkeypatch.setattr(main.instagram_poster, "post_carousel_to_instagram_graph_api", publish)
-
-    main.run_carousel_post(
-        SimpleNamespace(dry_run=False, image_url=None, pinterest=False)
+        history_tracker, "confirm_artworks_and_record_publication", finalizer
     )
 
-    publish.assert_called_once()
+    finalized_count = history_tracker.confirm_carousel_publication(
+        cover_id, featured_ids, "media-carousel"
+    )
+
+    assert finalized_count == 9
     finalizer.assert_called_once_with(
-        artwork_ids,
-        "media-carousel",
-        "carousel",
-        publication_id="publication-carousel",
-        theme="portrait",
+        artwork_ids, "media-carousel", "carousel"
     )
-    legacy_finalizer.assert_not_called()
 
 
 def test_legacy_grid_rotates_only_after_three_continuous_new_publications(monkeypatch):

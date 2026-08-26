@@ -3,7 +3,7 @@ import random
 import requests
 import re
 from typing import List
-from .base import MuseumAdapter
+from .base import AdapterHTTPError, MuseumAdapter
 from src.models import NormalizedArtwork, normalize_image_dimensions
 from src.region import infer_region, metadata_text
 
@@ -49,6 +49,8 @@ class ClevelandAdapter(MuseumAdapter):
             headers = {"User-Agent": "InstagramArtBot/1.0"}
             res = requests.get(url, headers=headers, timeout=15)
             if res.status_code != 200:
+                if res.status_code in {403, 429}:
+                    raise AdapterHTTPError(self.source_id, res.status_code)
                 logger.warning(f"[Cleveland] API returned {res.status_code}")
                 return candidates
                 
@@ -56,7 +58,7 @@ class ClevelandAdapter(MuseumAdapter):
             
             for item in artworks:
                 if item.get("share_license_status") != "CC0":
-                    logger.info(f"[Cleveland] Rejected {item.get('id')}: rights not confirmed.")
+                    logger.debug(f"[Cleveland] Rejected {item.get('id')}: rights not confirmed.")
                     continue
 
                 images = item.get("images")
@@ -140,6 +142,8 @@ class ClevelandAdapter(MuseumAdapter):
                 )
                 candidates.append(artwork)
                 
+        except AdapterHTTPError:
+            raise
         except Exception as e:
             logger.error(f"[Cleveland] Error fetching candidates: {e}")
             

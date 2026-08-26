@@ -5,6 +5,12 @@ from types import SimpleNamespace
 
 import main
 from src import art_fetcher, history_tracker
+from src.instagram_image import (
+    InstagramImagePublishability,
+    InstagramImagePublishabilityReason,
+    PreparedSingleImage,
+    SingleImageProcessing,
+)
 from src.models import NormalizedArtwork
 from src.quality_filter import ImageValidationResult
 
@@ -46,16 +52,40 @@ def test_run_single_post_uses_canonical_selector_without_grid_or_carousel_select
     monkeypatch.setattr(main.history_tracker, "get_posted_ids", lambda: set())
     monkeypatch.setattr(main.history_tracker, "get_grid_color_tone", lambda **kwargs: (_ for _ in ()).throw(AssertionError("grid read")))
     monkeypatch.setattr(main.art_fetcher, "fetch_themed_artworks", lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("carousel selector")))
-    monkeypatch.setattr(main.art_fetcher, "fetch_single_artwork", lambda posted_ids: calls.append(posted_ids) or artwork)
-    monkeypatch.setattr(main.image_processor, "prepare_local_image", lambda path: (path, "vertical"))
+    monkeypatch.setattr(
+        main.art_fetcher,
+        "iter_single_post_candidates",
+        lambda posted_ids, **kwargs: calls.append((posted_ids, kwargs)) or iter([artwork]),
+    )
+    publishability = InstagramImagePublishability(
+        publishable=True,
+        reason=InstagramImagePublishabilityReason.SUPPORTED_AS_IS,
+        width=1000,
+        height=1200,
+        aspect_ratio=1000 / 1200,
+        image_format="JPEG",
+        file_size=100,
+        exif_orientation=1,
+    )
+    monkeypatch.setattr(
+        main,
+        "prepare_single_instagram_image",
+        lambda *args: PreparedSingleImage(
+            path="downloaded.jpg",
+            source=publishability,
+            publishability=publishability,
+            processing=SingleImageProcessing.ZERO_TOUCH,
+            source_bytes_preserved=True,
+            compatibility_conversion=False,
+        ),
+    )
     monkeypatch.setattr(main.history_tracker, "get_recent_history", lambda: [])
     monkeypatch.setattr(main.content_diversity, "select_content_type", lambda history: "SINGLE_ARTWORK")
     monkeypatch.setattr(main.gemini_ai, "analyze_artwork", lambda *args, **kwargs: None)
-    monkeypatch.setattr(main.image_processor, "create_feed_post", lambda *args, **kwargs: "post.jpg")
 
     main.run_single_post(SimpleNamespace(dry_run=True, image_url=None, pinterest=False))
 
-    assert calls == [set()]
+    assert calls == [(set(), {"max_candidates": main.SINGLE_POST_CANDIDATE_ATTEMPT_LIMIT})]
 
 
 def test_single_acquisition_omits_color_query_and_isolates_failed_sources(monkeypatch, tmp_path, caplog):
@@ -92,7 +122,7 @@ def test_single_acquisition_omits_color_query_and_isolates_failed_sources(monkey
 
 
 def test_single_selector_penalizes_recent_artist_and_region_while_rewarding_fresh_editorial_fit(monkeypatch, tmp_path, caplog):
-    caplog.set_level(logging.INFO, logger=art_fetcher.__name__)
+    caplog.set_level(logging.DEBUG, logger=art_fetcher.__name__)
     repeated = _candidate("repeated", artist="Repeated Artist", region="europe", title="Portrait of a sitter")
     fresh = _candidate("fresh", artist="Fresh Artist", region="latin_america_caribbean", title="Landscape with river")
     fresh.creation_date = "1800"
@@ -120,9 +150,9 @@ def test_single_selector_penalizes_recent_artist_and_region_while_rewarding_fres
     artwork = art_fetcher.fetch_single_artwork(set())
 
     assert artwork["id"] == "aic_fresh"
-    assert attempted == ["fresh"]
+    assert attempted == ["fresh", "repeated"]
     assert "region=latin_america_caribbean" in caplog.text
-    assert "regional=+2.00" in caplog.text
+    assert "region_adjustment=+2.00" in caplog.text
 
 
 def test_single_quality_gate_rejects_editorially_boosted_low_quality_candidate(monkeypatch, tmp_path):
@@ -179,7 +209,8 @@ def test_seeded_single_selection_is_repeatable_and_serendipity_is_bounded(monkey
     second = art_fetcher.fetch_single_artwork(set())
 
     assert first["id"] == second["id"]
-    assert attempted == [first["id"].removeprefix("aic_"), second["id"].removeprefix("aic_")]
+    expected_finalist_pool = [candidate.source_id for candidate in candidates]
+    assert attempted == expected_finalist_pool * 2
     assert 0.0 <= art_fetcher.calculate_serendipity_bonus("fixture", "candidate") <= 5.0
 
     random.seed(20260824)

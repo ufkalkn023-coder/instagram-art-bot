@@ -30,7 +30,11 @@ def _install_adapters(monkeypatch, candidates):
         def fetch_candidates(self, **kwargs):
             return self.values
 
-    monkeypatch.setattr(art_fetcher, "_museum_adapters", lambda: [StaticAdapter(candidates)])
+    adapters = iter([StaticAdapter(candidates), StaticAdapter([]), StaticAdapter([]), StaticAdapter([])])
+    monkeypatch.setattr(art_fetcher, "AICAdapter", lambda: next(adapters))
+    monkeypatch.setattr(art_fetcher, "ClevelandAdapter", lambda: next(adapters))
+    monkeypatch.setattr(art_fetcher, "MetAdapter", lambda: next(adapters))
+    monkeypatch.setattr(art_fetcher, "RijksmuseumAdapter", lambda: next(adapters))
 
 
 def _install_download_results(monkeypatch, dimensions):
@@ -74,7 +78,7 @@ def test_single_post_rejects_measured_low_quality_and_preserves_serendipity(monk
     )
     attempted = _install_download_results(monkeypatch, {"low": (300, 700), "high": (1686, 1200)})
 
-    artwork = art_fetcher.fetch_single_artwork(set())
+    artwork = art_fetcher.fetch_random_artwork(set())
 
     assert artwork["id"] == "aic_high"
     assert attempted == ["low", "high"]
@@ -83,6 +87,24 @@ def test_single_post_rejects_measured_low_quality_and_preserves_serendipity(monk
     assert artwork["selection_score"] == 71.5
     assert artwork["measurement_coverage"] == 1.0
     assert (artwork["image_width"], artwork["image_height"]) == (1686, 1200)
+
+
+def test_single_candidate_pool_deduplicates_before_secure_download(monkeypatch, tmp_path):
+    duplicate = _candidate("duplicate")
+    _install_adapters(monkeypatch, [duplicate, duplicate])
+    monkeypatch.setattr(
+        art_fetcher.config, "OUTPUT_RAW_IMAGE_PATH", str(tmp_path / "raw.jpg")
+    )
+    monkeypatch.setattr(art_fetcher.history_tracker, "get_recent_history", lambda: [])
+    monkeypatch.setattr(art_fetcher, "calculate_quality_score", lambda *args: 90.0)
+    attempted = _install_download_results(monkeypatch, {"duplicate": (1200, 1200)})
+
+    candidates = list(
+        art_fetcher.iter_single_post_candidates(set(), max_candidates=5)
+    )
+
+    assert [candidate["id"] for candidate in candidates] == ["aic_duplicate"]
+    assert attempted == ["duplicate"]
 
 
 def test_selection_breakdown_is_mathematically_consistent():
@@ -112,7 +134,6 @@ def test_single_selection_logs_breakdown_and_aggregate_rejections_without_query_
     monkeypatch.setattr(art_fetcher.history_tracker, "get_recent_history", lambda: [])
     monkeypatch.setattr(art_fetcher.content_diversity, "get_candidate_metadata_features", lambda candidate: {})
     monkeypatch.setattr(art_fetcher.content_diversity, "analyze_museum_diversity", lambda *args: -3.0)
-    monkeypatch.setattr(art_fetcher.content_diversity, "analyze_visual_diversity", lambda *args: 4.0)
     monkeypatch.setattr(art_fetcher.content_diversity, "analyze_discovery_score", lambda *args: 2.0)
     monkeypatch.setenv(art_fetcher.SELECTION_SEED_ENV, "super-secret-looking-seed")
     monkeypatch.setattr(art_fetcher, "calculate_serendipity_bonus", lambda *args: 1.5)
@@ -144,13 +165,22 @@ def test_single_selection_logs_breakdown_and_aggregate_rejections_without_query_
 
     monkeypatch.setattr(art_fetcher, "validate_and_download_image_with_metadata", download)
 
-    artwork = art_fetcher.fetch_single_artwork({"aic_duplicate"})
+    artwork = art_fetcher.fetch_random_artwork({"aic_duplicate"})
 
     assert artwork["id"] == "aic_selected"
     assert artwork["quality_score"] == 70.0
-    assert artwork["selection_score"] == 74.5
-    assert "selection_selected candidate=aic_selected" in caplog.text
-    assert "museum=-3.00 regional=+0.00 visual=+4.00 discovery=+2.00 serendipity=+1.50 selection=74.50" in caplog.text
+    assert artwork["selection_score"] == 70.5
+    assert artwork["_single_selection_breakdown"] == {
+        "quality": 70.0,
+        "museum": -3.0,
+        "region": 0.0,
+        "orientation": 0.0,
+        "artist": 0.0,
+        "visual_category": 0.0,
+        "discovery": 2.0,
+        "serendipity": 1.5,
+        "final": 70.5,
+    }
     assert "raw=6 rights_safe=5 history_new=4 quality_pass=3 downloads=3 selected=aic_selected" in caplog.text
     for reason in ("rights_unconfirmed:1", "history_duplicate:1", "pre_quality_below_threshold:1", "image_validation_failed:1", "post_quality_below_threshold:1"):
         assert reason in caplog.text

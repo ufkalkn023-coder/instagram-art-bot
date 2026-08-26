@@ -43,8 +43,8 @@ def test_image_dimension_normalization(width, height, expected):
         (2000, 1600, 100.0),  # high-resolution, ordinary landscape
         (900, 900, 85 / 95 * 100),  # moderate resolution, square
         (600, 600, 70 / 95 * 100),  # low resolution, square
-        (2000, 500, 85 / 95 * 100),  # high-resolution extreme panoramic image
-        (300, 700, 60 / 95 * 100),  # low-resolution extreme tall image
+        (2000, 500, 100.0),  # high-resolution extreme panoramic image
+        (300, 700, 70 / 95 * 100),  # low-resolution extreme tall image
     ],
 )
 def test_quality_score_uses_real_resolution_and_aspect_ratio(width, height, expected_score):
@@ -96,14 +96,14 @@ def test_downloaded_dimensions_replace_unknown_technical_evidence(width, height,
     assert calculate_quality_score(artwork, {"aic": 15}) == pytest.approx(expected_score)
 
 
-def test_measured_extreme_ratio_uses_aspect_penalty_after_unknown_pre_score():
+def test_measured_extreme_ratio_does_not_change_editorial_quality():
     artwork = _artwork()
 
     assert calculate_quality_score(artwork, {"aic": 15}) == 100.0
     artwork.image_width = 2000
     artwork.image_height = 400
 
-    assert calculate_quality_score(artwork, {"aic": 15}) == pytest.approx(85 / 95 * 100)
+    assert calculate_quality_score(artwork, {"aic": 15}) == 100.0
 
 
 def test_ordinary_landscape_is_not_penalized_against_portrait_or_square():

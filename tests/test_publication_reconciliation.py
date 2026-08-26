@@ -1,0 +1,470 @@
+from datetime import datetime, timezone
+from types import SimpleNamespace
+
+import pytest
+
+import main
+from src import history_tracker, publication_reconciliation
+
+
+NOW = datetime(2026, 8, 26, 12, 0, tzinfo=timezone.utc)
+
+
+def _single(
+    status="PUBLISHING",
+    *,
+    publication_id="single-1",
+    artwork_id="aic_1",
+    container_id="container-1",
+    published_media_id=None,
+    started_at="2026-08-26T10:00:00Z",
+):
+    record = {
+        "id": artwork_id,
+        "publication_id": publication_id,
+        "publication_type": "SINGLE",
+        "status": status,
+        "reserved_at": "2026-08-26T09:00:00Z",
+    }
+    if container_id is not None:
+        record["container_id"] = container_id
+    if started_at is not None:
+        record["publish_started_at"] = started_at
+    if published_media_id is not None:
+        record["publish_response_media_id"] = published_media_id
+    return record
+
+
+def _carousel(status="PUBLISHING", *, container_id="parent-1", featured_count=8):
+    publication_id = "carousel-1"
+    records = []
+    for index in range(featured_count + 1):
+        records.append(
+            {
+                "id": "met_cover" if index == 0 else f"aic_{index}",
+                "publication_id": publication_id,
+                "publication_type": "CAROUSEL",
+                "publication_role": "COVER" if index == 0 else "FEATURED",
+                "featured_position": index if index else None,
+                "status": status,
+                "reserved_at": "2026-08-26T09:00:00Z",
+                "publish_started_at": "2026-08-26T10:00:00Z",
+                "container_id": container_id,
+                "child_container_ids": [
+                    f"child-{child}" for child in range(featured_count + 1)
+                ],
+            }
+        )
+    return records
+
+
+def _backend(monkeypatch, records):
+    history = {"posted_artworks": records}
+    uploads = []
+    monkeypatch.setattr(history_tracker, "load_history_with_etag", lambda: (history, "etag"))
+    monkeypatch.setattr(
+        history_tracker,
+        "_upload_history",
+        lambda value, etag: uploads.append((value, etag)),
+    )
+    return history, uploads
+
+
+def test_stale_pending_expires_without_instagram_lookup(monkeypatch):
+    record = _single(
+        "PENDING", container_id=None, started_at=None
+    )
+    _backend(monkeypatch, [record])
+    monkeypatch.setattr(
+        publication_reconciliation.instagram_poster,
+        "get_container_status",
+        lambda *args: pytest.fail("PENDING must not query Instagram"),
+    )
+
+    summary = publication_reconciliation.reconcile_publications(
+        access_token="token", now=NOW
+    )
+
+    assert record["status"] == "EXPIRED"
+    assert summary.confirmed_not_published == 1
+
+
+@pytest.mark.parametrize("featured_count", [3, 5, 8])
+def test_parent_published_status_atomically_confirms_whole_carousel(
+    monkeypatch, featured_count
+):
+    records = _carousel(featured_count=featured_count)
+    _, uploads = _backend(monkeypatch, records)
+    calls = []
+    monkeypatch.setattr(
+        publication_reconciliation.instagram_poster,
+        "get_container_status",
+        lambda container_id, token: calls.append((container_id, token)) or "PUBLISHED",
+    )
+
+    summary = publication_reconciliation.reconcile_publications(
+        access_token="token", now=NOW
+    )
+
+    assert calls == [("parent-1", "token")]
+    assert {record["status"] for record in records} == {"PUBLISHED"}
+    assert len(uploads) == 1
+    assert summary.confirmed_published == 1
+
+
+@pytest.mark.parametrize("featured_count", [3, 5, 8])
+def test_carousel_boundary_persists_parent_and_children_on_every_row(
+    monkeypatch, featured_count
+):
+    records = _carousel("PENDING", container_id=None, featured_count=featured_count)
+    for record in records:
+        record.pop("publish_started_at", None)
+        record.pop("child_container_ids", None)
+    _backend(monkeypatch, records)
+    ids = [record["id"] for record in records]
+    children = tuple(f"child-{index}" for index in range(featured_count + 1))
+
+    assert history_tracker.start_publication_attempt(
+        ids, "parent-1", children
+    ) == featured_count + 1
+
+    assert {record["status"] for record in records} == {"PUBLISHING"}
+    assert {record["container_id"] for record in records} == {"parent-1"}
+    assert {
+        tuple(record["child_container_ids"]) for record in records
+    } == {children}
+    assert all(record["publish_started_at"] for record in records)
+
+
+@pytest.mark.parametrize("featured_count", [3, 5, 8])
+def test_child_finished_status_is_never_used_as_publication_evidence(
+    monkeypatch, featured_count
+):
+    records = _carousel(featured_count=featured_count)
+    _backend(monkeypatch, records)
+    queried = []
+    monkeypatch.setattr(
+        publication_reconciliation.instagram_poster,
+        "get_container_status",
+        lambda container_id, token: queried.append(container_id) or "FINISHED",
+    )
+
+    summary = publication_reconciliation.reconcile_publications(
+        access_token="token", now=NOW
+    )
+
+    assert queried == ["parent-1"]
+    assert {record["status"] for record in records} == {"AMBIGUOUS"}
+    assert summary.still_ambiguous == 1
+
+
+@pytest.mark.parametrize("container_status", ["ERROR", "EXPIRED"])
+def test_authoritative_non_publication_status_releases_whole_unit(
+    monkeypatch, container_status
+):
+    records = _carousel("AMBIGUOUS")
+    _backend(monkeypatch, records)
+    monkeypatch.setattr(
+        publication_reconciliation.instagram_poster,
+        "get_container_status",
+        lambda *args: container_status,
+    )
+
+    summary = publication_reconciliation.reconcile_publications(
+        access_token="token", now=NOW
+    )
+
+    assert {record["status"] for record in records} == {"EXPIRED"}
+    assert summary.confirmed_not_published == 1
+
+
+def test_reconciliation_error_preserves_safe_state_and_scan_continues(monkeypatch):
+    first = _single(publication_id="single-1", artwork_id="aic_1", container_id="bad")
+    second = _single(publication_id="single-2", artwork_id="aic_2", container_id="good")
+    _backend(monkeypatch, [first, second])
+
+    def status(container_id, token):
+        if container_id == "bad":
+            raise OSError("network")
+        return "PUBLISHED"
+
+    monkeypatch.setattr(
+        publication_reconciliation.instagram_poster, "get_container_status", status
+    )
+
+    summary = publication_reconciliation.reconcile_publications(
+        access_token="token", now=NOW
+    )
+
+    assert first["status"] == "PUBLISHING"
+    assert second["status"] == "PUBLISHED"
+    assert summary.errors == 1
+    assert summary.confirmed_published == 1
+
+
+def test_inconsistent_carousel_container_metadata_is_not_reconciled(monkeypatch):
+    records = _carousel()
+    records[-1]["container_id"] = "different-parent"
+    _backend(monkeypatch, records)
+    monkeypatch.setattr(
+        publication_reconciliation.instagram_poster,
+        "get_container_status",
+        lambda *args: pytest.fail("inconsistent publication must not query Instagram"),
+    )
+
+    summary = publication_reconciliation.reconcile_publications(
+        access_token="token", now=NOW
+    )
+
+    assert {record["status"] for record in records} == {"PUBLISHING"}
+    assert summary.errors == 1
+
+
+def test_durable_publish_response_confirms_without_network_call(monkeypatch):
+    record = _single(published_media_id="media-1")
+    history, uploads = _backend(monkeypatch, [record])
+    monkeypatch.setattr(
+        publication_reconciliation.instagram_poster,
+        "get_container_status",
+        lambda *args: pytest.fail("durable media response is already authoritative"),
+    )
+
+    summary = publication_reconciliation.reconcile_publications(
+        access_token="token", now=NOW
+    )
+
+    assert record["status"] == "PUBLISHED"
+    assert record["media_id"] == "media-1"
+    assert history["publications"][0]["media_id"] == "media-1"
+    assert history["publications"][0]["artwork_ids"] == ["aic_1"]
+    assert history["grid_publication_count"] == 1
+    assert len(uploads) == 1
+    assert summary.confirmed_published == 1
+
+
+def test_status_only_reconciliation_remains_readable_without_inventing_media_id(
+    monkeypatch,
+):
+    existing = {
+        "id": "aic_existing",
+        "publication_id": "existing-publication",
+        "publication_type": "single",
+        "status": "PUBLISHED",
+        "media_id": "media-existing",
+    }
+    reconciled = _single()
+    history = {
+        "posted_artworks": [existing, reconciled],
+        "publications": [
+            {
+                "id": "existing-publication",
+                "type": "single",
+                "media_id": "media-existing",
+                "artwork_ids": ["aic_existing"],
+                "posted_at": "2026-08-25T12:00:00Z",
+            }
+        ],
+        "grid_publication_count": 1,
+    }
+    monkeypatch.setattr(
+        history_tracker, "load_history_with_etag", lambda: (history, '"etag"')
+    )
+    monkeypatch.setattr(history_tracker, "_upload_history", lambda *args: None)
+    monkeypatch.setattr(
+        publication_reconciliation.instagram_poster,
+        "get_container_status",
+        lambda *args: "PUBLISHED",
+    )
+
+    summary = publication_reconciliation.reconcile_publications(
+        access_token="token", now=NOW
+    )
+
+    assert summary.confirmed_published == 1
+    assert reconciled["status"] == "PUBLISHED"
+    assert "media_id" not in reconciled
+    assert [item["id"] for item in history_tracker.get_recent_history()] == [
+        "aic_1",
+        "aic_existing",
+    ]
+    assert len(history["publications"]) == 1
+    assert history["grid_publication_count"] == 1
+
+
+def test_publish_response_survives_final_confirmation_failure(monkeypatch):
+    record = _single()
+    history = {"posted_artworks": [record]}
+    uploads = 0
+    monkeypatch.setattr(history_tracker, "load_history_with_etag", lambda: (history, "etag"))
+
+    def upload(value, etag):
+        nonlocal uploads
+        uploads += 1
+        if uploads == 2:
+            raise OSError("R2 confirmation failed")
+
+    monkeypatch.setattr(history_tracker, "_upload_history", upload)
+
+    assert history_tracker.record_publish_response(["aic_1"], "media-1") == 1
+    with pytest.raises(OSError, match="confirmation failed"):
+        history_tracker.confirm_artwork("aic_1", "media-1")
+
+    assert record["status"] == "PUBLISHING"
+    assert record["publish_response_media_id"] == "media-1"
+
+
+def test_reconciliation_is_bounded_and_unrelated_ambiguous_art_stays_quarantined(monkeypatch):
+    records = [
+        _single(
+            "AMBIGUOUS",
+            publication_id=f"single-{index}",
+            artwork_id=f"aic_{index}",
+            container_id=f"container-{index}",
+        )
+        for index in range(6)
+    ]
+    _backend(monkeypatch, records)
+    calls = []
+    monkeypatch.setattr(
+        publication_reconciliation.instagram_poster,
+        "get_container_status",
+        lambda container_id, token: calls.append(container_id) or "FINISHED",
+    )
+
+    summary = publication_reconciliation.reconcile_publications(
+        access_token="token", now=NOW, limit=3
+    )
+
+    assert summary.inspected == 3
+    assert len(calls) == 3
+    assert history_tracker.get_posted_ids() == {f"aic_{index}" for index in range(6)}
+
+
+def test_conditional_conflict_reloads_and_re_evaluates_boundary_write(monkeypatch):
+    first = {"posted_artworks": [_single("PENDING", container_id=None, started_at=None)]}
+    second = {"posted_artworks": [_single("PENDING", container_id=None, started_at=None)]}
+    loads = iter([(first, "etag-1"), (second, "etag-2")])
+    uploads = []
+    monkeypatch.setattr(history_tracker, "load_history_with_etag", lambda: next(loads))
+
+    def upload(history, etag):
+        uploads.append(etag)
+        if etag == "etag-1":
+            raise history_tracker.ConcurrentWriteError("conflict")
+
+    monkeypatch.setattr(history_tracker, "_upload_history", upload)
+
+    assert history_tracker.start_publication_attempt(
+        ["aic_1"], "container-1"
+    ) == 1
+
+    assert first["posted_artworks"][0]["status"] == "PENDING"
+    assert second["posted_artworks"][0]["status"] == "PUBLISHING"
+    assert second["posted_artworks"][0]["container_id"] == "container-1"
+    assert uploads == ["etag-1", "etag-2"]
+
+
+def test_public_lifecycle_api_rejects_partial_carousel_transition(monkeypatch):
+    records = _carousel("PENDING")
+    _backend(monkeypatch, records)
+
+    with pytest.raises(RuntimeError, match="whole publication unit"):
+        history_tracker.start_publication_attempt(
+            [record["id"] for record in records[:-1]], "parent-1"
+        )
+
+    assert {record["status"] for record in records} == {"PENDING"}
+
+
+@pytest.mark.parametrize(
+    ("status", "operation"),
+    [
+        (
+            "PUBLISHED",
+            lambda: history_tracker.mark_publication_not_published(
+                ["aic_1"], "invalid", authoritative=True
+            ),
+        ),
+        (
+            "PUBLISHED",
+            lambda: history_tracker.start_publication_attempt(
+                ["aic_1"], "container-2"
+            ),
+        ),
+        (
+            "EXPIRED",
+            lambda: history_tracker.confirm_publication(
+                ["aic_1"], "media-1", authoritative=True
+            ),
+        ),
+    ],
+)
+def test_terminal_lifecycle_transitions_are_rejected(monkeypatch, status, operation):
+    record = _single(status)
+    _backend(monkeypatch, [record])
+
+    with pytest.raises(RuntimeError, match="Illegal|Cannot confirm"):
+        operation()
+
+    assert record["status"] == status
+
+
+def test_reconcile_only_cli_performs_no_acquisition_or_publish(monkeypatch):
+    monkeypatch.setattr(main, "validate_reconciliation_configuration", lambda: None)
+    monkeypatch.setattr(
+        main.publication_reconciliation,
+        "reconcile_publications",
+        lambda **kwargs: SimpleNamespace(
+            inspected=1,
+            confirmed_published=0,
+            confirmed_not_published=0,
+            still_ambiguous=1,
+            errors=0,
+        ),
+    )
+    monkeypatch.setattr(
+        main,
+        "run_single_post",
+        lambda args: pytest.fail("reconcile-only acquired single artwork"),
+    )
+    monkeypatch.setattr(
+        main,
+        "run_carousel_post",
+        lambda args: pytest.fail("reconcile-only acquired carousel artworks"),
+    )
+
+    assert main.main(["--reconcile-publications"]) == 0
+
+
+def test_startup_reconciliation_runs_before_new_acquisition(monkeypatch):
+    events = []
+    monkeypatch.setattr(main, "validate_production_configuration", lambda: {})
+    monkeypatch.setattr(
+        main.publication_reconciliation,
+        "reconcile_publications",
+        lambda **kwargs: events.append("reconcile")
+        or SimpleNamespace(
+            inspected=0,
+            confirmed_published=0,
+            confirmed_not_published=0,
+            still_ambiguous=1,
+            errors=0,
+        ),
+    )
+    monkeypatch.setattr(
+        main,
+        "run_single_post",
+        lambda args: events.append("acquire")
+        or main.SinglePostResolution(
+            result=main.SinglePostResolutionCode.READY,
+            attempted=0,
+            zero_touch=0,
+            compatibility_processed=0,
+            single_ineligible=0,
+            fatal_failures=0,
+            diagnostics=(),
+        ),
+    )
+
+    assert main.main(["--mode", "single"]) == 0
+    assert events == ["reconcile", "acquire"]

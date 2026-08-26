@@ -1,0 +1,11 @@
+# Human-maintained development dependency intent.
+# The generated development lock includes the complete production environment.
+-r requirements.in
+
+pytest==9.0.2
+PyYAML==6.0.3
+ruff==0.14.13
+pip-tools==7.5.2
+# pip 26 removed an internal compatibility symbol still used by pip-tools 7.5.2.
+# Keep lock regeneration self-hosting until pip-tools is deliberately upgraded.
+pip==25.3

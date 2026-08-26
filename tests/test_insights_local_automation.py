@@ -35,7 +35,7 @@ def test_launchd_plist_is_hourly_absolute_and_contains_no_secret_values(tmp_path
 
 
 def test_authoritative_default_repository_paths_are_absolute():
-    assert ROOT.name == "instagram-art-bot-final"
+    assert ROOT == Path(__file__).resolve().parents[1]
     assert DEFAULT_REELS_ROOT == ROOT.parent / "Remotion İnstagram Reels" / "artfolio-reels"
     assert _default_reels_root() == DEFAULT_REELS_ROOT
     assert ROOT.is_absolute() and DEFAULT_REELS_ROOT.is_absolute()

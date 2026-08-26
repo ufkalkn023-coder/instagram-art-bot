@@ -1,9 +1,17 @@
 from abc import ABC, abstractmethod
 import random
 from typing import List
-
 from src.models import NormalizedArtwork
 from src.source_health import normalize_source_failure_category
+
+
+class AdapterHTTPError(RuntimeError):
+    """Structured adapter HTTP failure used by run-local acquisition backoff."""
+
+    def __init__(self, source_id: str, status_code: int):
+        self.source_id = source_id
+        self.status_code = status_code
+        super().__init__(f"{source_id} API returned HTTP {status_code}")
 
 class MuseumAdapter(ABC):
     """
@@ -25,6 +33,10 @@ class MuseumAdapter(ABC):
     def source_id(self) -> str:
         """The internal string identifier for this museum (e.g. 'aic', 'met')"""
         pass
+
+    def unavailable_reason(self) -> str | None:
+        """Return a run-stable configuration reason without making a request."""
+        return None
         
     @abstractmethod
     def fetch_candidates(

@@ -214,7 +214,14 @@ def _media_from_payload(value: Any) -> InstagramMedia | None:
     try:
         parsed_timestamp = datetime.fromisoformat(timestamp.replace("Z", "+00:00"))
     except ValueError:
-        return None
+        # Meta commonly emits +0000. Python 3.11 accepts it in fromisoformat,
+        # while the production Python 3.10 runtime requires explicit %z parsing.
+        try:
+            parsed_timestamp = datetime.strptime(
+                timestamp, "%Y-%m-%dT%H:%M:%S%z"
+            )
+        except ValueError:
+            return None
     if parsed_timestamp.tzinfo is None or parsed_timestamp.utcoffset() is None:
         return None
     product_type = value.get("media_product_type")

@@ -1,4 +1,9 @@
-"""Deterministic regional normalization for structured artwork metadata."""
+"""Deterministic regional normalization for artwork metadata.
+
+This intentionally uses only structured museum metadata.  Artwork titles are
+not accepted as an inference source because they are too ambiguous for a
+selection policy.
+"""
 
 from collections.abc import Iterable
 import re
@@ -7,14 +12,25 @@ from typing import Any
 
 REGION_UNKNOWN = "unknown"
 REGION_VOCABULARY = frozenset({
-    "europe", "east_asia", "south_southeast_asia", "middle_east_north_africa",
-    "sub_saharan_africa", "north_america", "latin_america_caribbean", "oceania",
-    "other", REGION_UNKNOWN,
+    "europe",
+    "east_asia",
+    "south_southeast_asia",
+    "middle_east_north_africa",
+    "sub_saharan_africa",
+    "north_america",
+    "latin_america_caribbean",
+    "oceania",
+    "other",
+    REGION_UNKNOWN,
 })
 
-# Strong cultural/geographic signals only. Titles are deliberately excluded.
+# These are intentionally conservative, strong cultural/geographic signals.
+# The same controlled mapping is used for culture, place, nationality, and
+# reliable department/style metadata; inference order is handled separately.
 _REGION_SIGNALS = (
-    ("east_asia", ("east asian", "japan", "japanese", "china", "chinese", "korea", "korean", "edo period")),
+    ("east_asia", (
+        "east asian", "japan", "japanese", "china", "chinese", "korea", "korean", "edo period",
+    )),
     ("south_southeast_asia", (
         "south asian", "south asia", "southeast asia", "south east asia", "india", "indian", "pakistan",
         "pakistani", "bangladesh", "bangladeshi", "nepal", "nepalese", "sri lanka", "sri lankan",
@@ -42,18 +58,23 @@ _REGION_SIGNALS = (
         "denmark", "danish", "finland", "finnish", "iceland", "hungary", "hungarian", "czech", "romania",
         "romanian", "balkan", "croatia", "croatian", "serbia", "serbian",
     )),
-    ("north_america", ("north america", "united states", "american", "canada", "canadian")),
+    ("north_america", (
+        "north america", "united states", "american", "canada", "canadian",
+    )),
     ("latin_america_caribbean", (
         "latin america", "caribbean", "mexico", "mexican", "brazil", "brazilian", "argentina", "argentine",
         "chile", "chilean", "peru", "peruvian", "colombia", "colombian", "cuba", "cuban", "haiti", "haitian",
         "jamaica", "jamaican", "puerto rico", "venezuelan", "uruguay", "uruguayan", "bolivia", "bolivian",
     )),
-    ("oceania", ("oceania", "australia", "australian", "new zealand", "maori", "melanesia", "micronesia", "polynesia", "papua new guinea", "fiji", "fijian", "samoa", "samoan", "tonga", "tongan")),
+    ("oceania", (
+        "oceania", "australia", "australian", "new zealand", "maori", "melanesia", "micronesia", "polynesia",
+        "papua new guinea", "fiji", "fijian", "samoa", "samoan", "tonga", "tongan",
+    )),
 )
 
 
 def metadata_text(value: Any) -> str | None:
-    """Safely flatten string/list API metadata into displayable text."""
+    """Safely flatten API metadata into a displayable text value."""
     if isinstance(value, str):
         normalized = " ".join(value.split())
         return normalized or None
@@ -63,23 +84,26 @@ def metadata_text(value: Any) -> str | None:
     return None
 
 
-def normalize_region(value: object) -> str:
-    """Return a controlled region value; missing or invalid means unknown."""
-    if not isinstance(value, str):
-        return REGION_UNKNOWN
-    normalized = value.strip().casefold()
-    return normalized if normalized in REGION_VOCABULARY else REGION_UNKNOWN
-
-
 def _region_from_metadata(value: Any) -> str | None:
     text = metadata_text(value)
     if not text:
         return None
     normalized = text.casefold()
     for region, signals in _REGION_SIGNALS:
-        if any(re.search(rf"(?<!\w){re.escape(signal)}(?!\w)", normalized) for signal in signals):
+        if any(
+            re.search(rf"(?<!\w){re.escape(signal)}(?!\w)", normalized)
+            for signal in signals
+        ):
             return region
     return None
+
+
+def normalize_region(value: object) -> str:
+    """Return a valid region value, treating absent or invalid values as unknown."""
+    if not isinstance(value, str):
+        return REGION_UNKNOWN
+    normalized = value.strip().casefold()
+    return normalized if normalized in REGION_VOCABULARY else REGION_UNKNOWN
 
 
 def infer_region(
@@ -90,7 +114,7 @@ def infer_region(
     department: Any = None,
     style_or_period: Any = None,
 ) -> str:
-    """Apply the explicit culture/place/nationality/style hierarchy."""
+    """Infer one controlled region using the documented metadata hierarchy."""
     for metadata in (culture, geography, artist_nationality, style_or_period, department):
         if region := _region_from_metadata(metadata):
             return region

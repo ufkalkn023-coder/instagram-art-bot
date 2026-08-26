@@ -2,9 +2,9 @@ name: Instagram Art Bot Scheduler
 
 on:
   schedule:
-    # Runs 4 times daily at 06:00, 10:00, 14:00, and 18:00 UTC
-    # (09:00, 13:00, 17:00, and 21:00 Europe/Istanbul, UTC+3).
-    - cron: "0 6,10,14,18 * * *"
+    # Split by publish mode so delayed scheduled jobs do not depend on wall-clock time.
+    - cron: "0 0,3,6,9,15,18 * * *"
+    - cron: "0 12,21 * * *"
   workflow_dispatch: # Allows manual trigger from GitHub Actions tab
     inputs:
       force_carousel:
@@ -23,7 +23,8 @@ concurrency:
 jobs:
   post-to-instagram:
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    # Up to nine carousel children (cover plus featured works) and the parent can require polling.
+    timeout-minutes: 45
 
     steps:
       - name: Checkout repository
@@ -36,14 +37,38 @@ jobs:
         with:
           python-version: "3.10"
           cache: "pip"
+          cache-dependency-path: requirements-dev.lock
 
       - name: Install dependencies
+        run: python -m pip install --require-hashes -r requirements-dev.lock
+
+      - name: Check dependency lock drift
         run: |
-          python -m pip install --upgrade pip
-          python -m pip install -r requirements.txt
+          ./scripts/compile_requirements.sh
+          git diff --exit-code -- requirements.lock requirements-dev.lock
+
+      - name: Compile validation
+        run: python -m compileall -q main.py src scripts tests
+
+      - name: Run test suite
+        run: pytest -q
+
+      - name: Validate production configuration
+        env:
+          INSTAGRAM_ACCOUNT_ID: ${{ secrets.INSTAGRAM_ACCOUNT_ID }}
+          INSTAGRAM_ACCESS_TOKEN: ${{ secrets.INSTAGRAM_ACCESS_TOKEN }}
+          CLOUDFLARE_R2_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_R2_ACCOUNT_ID }}
+          CLOUDFLARE_R2_ACCESS_KEY_ID: ${{ secrets.CLOUDFLARE_R2_ACCESS_KEY_ID }}
+          CLOUDFLARE_R2_SECRET_ACCESS_KEY: ${{ secrets.CLOUDFLARE_R2_SECRET_ACCESS_KEY }}
+          CLOUDFLARE_R2_BUCKET_NAME: ${{ secrets.CLOUDFLARE_R2_BUCKET_NAME }}
+          CLOUDFLARE_R2_PUBLIC_URL: ${{ secrets.CLOUDFLARE_R2_PUBLIC_URL }}
+        run: python main.py --validate-production-config
 
       - name: Fetch artwork, process image, and post to Instagram
         env:
+          EVENT_NAME: ${{ github.event_name }}
+          SCHEDULE_EXPRESSION: ${{ github.event.schedule }}
+          FORCE_CAROUSEL: ${{ github.event.inputs.force_carousel }}
           INSTAGRAM_ACCOUNT_ID: ${{ secrets.INSTAGRAM_ACCOUNT_ID }}
           INSTAGRAM_ACCESS_TOKEN: ${{ secrets.INSTAGRAM_ACCESS_TOKEN }}
           GOOGLE_GEMINI_API_KEY: ${{ secrets.GOOGLE_GEMINI_API_KEY }}
@@ -60,7 +85,14 @@ jobs:
           PINTEREST_REFRESH_TOKEN: ${{ secrets.PINTEREST_REFRESH_TOKEN }}
           PINTEREST_BOARD_ID: ${{ secrets.PINTEREST_BOARD_ID }}
         run: |
-          if [ "${{ github.event.inputs.force_carousel }}" = "true" ]; then
+          set -euo pipefail
+          if [ "$EVENT_NAME" = "schedule" ]; then
+            case "$SCHEDULE_EXPRESSION" in
+              "0 12,21 * * *") python main.py --mode carousel ;;
+              "0 0,3,6,9,15,18 * * *") python main.py --mode single ;;
+              *) echo "Unsupported production schedule: $SCHEDULE_EXPRESSION" >&2; exit 2 ;;
+            esac
+          elif [ "$FORCE_CAROUSEL" = "true" ]; then
             python main.py --force-carousel
           else
             python main.py

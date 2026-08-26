@@ -1,0 +1,220 @@
+from datetime import datetime, timezone
+
+import pytest
+
+from src import history_tracker
+from src.carousel_themes import CarouselFormat, ThemeFamily
+
+
+def _artwork(identifier):
+    return {
+        "id": identifier,
+        "title": f"Title {identifier}",
+        "artist": f"Artist {identifier}",
+        "museum": "Museum",
+        "medium": "Oil on canvas",
+        "period": "modern",
+        "region": "europe",
+    }
+
+
+def _publication():
+    return _artwork("met_cover"), [_artwork(f"aic_{index}") for index in range(1, 9)]
+
+
+def _history_backend(monkeypatch, initial=None):
+    history = initial or {"posted_artworks": []}
+    uploads = []
+    monkeypatch.setattr(history_tracker, "load_history_with_etag", lambda: (history, "etag"))
+    monkeypatch.setattr(history_tracker, "_upload_history", lambda value, etag: uploads.append((value, etag)))
+    return history, uploads
+
+
+def test_carousel_reservation_atomically_records_cover_and_featured_roles(monkeypatch):
+    history, uploads = _history_backend(monkeypatch)
+    cover, featured = _publication()
+
+    publication_id = history_tracker.reserve_carousel(cover, featured)
+
+    records = history["posted_artworks"]
+    assert len(uploads) == 1
+    assert len(records) == 9
+    assert [record["id"] for record in records] == [cover["id"], *[art["id"] for art in featured]]
+    assert records[0]["publication_role"] == "COVER"
+    assert [record["publication_role"] for record in records[1:]] == ["FEATURED"] * 8
+    assert [record["featured_position"] for record in records[1:]] == list(range(1, 9))
+    assert {record["publication_id"] for record in records} == {publication_id}
+    assert {record["cover_artwork_id"] for record in records} == {cover["id"]}
+    assert all(record["featured_artwork_ids"] == [art["id"] for art in featured] for record in records)
+    assert history_tracker.get_posted_ids() == {cover["id"], *[art["id"] for art in featured]}
+
+
+@pytest.mark.parametrize("featured_count", [3, 5, 8])
+def test_variable_length_carousel_history_transitions_atomically(
+    monkeypatch, featured_count
+):
+    history, uploads = _history_backend(monkeypatch)
+    cover = _artwork("met_cover")
+    featured = [
+        _artwork(f"aic_{index}") for index in range(1, featured_count + 1)
+    ]
+
+    publication_id = history_tracker.reserve_carousel(cover, featured)
+    ids = [cover["id"], *[artwork["id"] for artwork in featured]]
+    children = tuple(f"child-{index}" for index in range(featured_count + 1))
+
+    assert history_tracker.start_publication_attempt(ids, "parent", children) == featured_count + 1
+    assert history_tracker.confirm_carousel_publication(
+        cover["id"], [artwork["id"] for artwork in featured], "media"
+    ) == featured_count + 1
+    records = history["posted_artworks"]
+    assert {record["publication_id"] for record in records} == {publication_id}
+    assert {record["status"] for record in records} == {"PUBLISHED"}
+    assert {record["container_id"] for record in records} == {"parent"}
+    assert [record["featured_position"] for record in records[1:]] == list(
+        range(1, featured_count + 1)
+    )
+    assert len(uploads) == 3
+
+
+def test_carousel_reservation_persists_theme_metadata_on_all_publication_records(monkeypatch):
+    history, _ = _history_backend(monkeypatch)
+    cover, featured = _publication()
+
+    history_tracker.reserve_carousel(
+        cover,
+        featured,
+        theme_id="winter_light",
+        theme_family="season",
+        carousel_format="LIGHT_STUDY",
+    )
+
+    assert {record["theme_id"] for record in history["posted_artworks"]} == {"winter_light"}
+    assert {record["theme_family"] for record in history["posted_artworks"]} == {"season"}
+    assert {record["carousel_format"] for record in history["posted_artworks"]} == {"LIGHT_STUDY"}
+
+
+def test_theme_history_collapses_nine_artwork_rows_into_one_publication_slot(monkeypatch):
+    history, _ = _history_backend(monkeypatch)
+    cover, featured = _publication()
+    history_tracker.reserve_carousel(
+        cover,
+        featured,
+        theme_id="winter_light",
+        theme_family="season",
+        carousel_format="LIGHT_STUDY",
+    )
+    for record in history["posted_artworks"]:
+        record["status"] = "PUBLISHED"
+
+    slots = history_tracker.get_recent_carousel_theme_history()
+
+    assert len(slots) == 1
+    assert slots[0].theme_id == "winter_light"
+    assert slots[0].theme_family is ThemeFamily.SEASON
+    assert slots[0].carousel_format is CarouselFormat.LIGHT_STUDY
+
+
+def test_single_publications_do_not_contaminate_carousel_theme_fatigue(monkeypatch):
+    history = {
+        "posted_artworks": [
+            {
+                "id": "aic_single",
+                "status": "PUBLISHED",
+                "publication_type": "SINGLE",
+                "content_type": "SINGLE_ARTWORK",
+                "theme_id": "cats_in_art",
+                "theme_family": "animals",
+                "carousel_format": "THEMATIC_COLLECTION",
+            },
+            {
+                "id": "aic_cover",
+                "status": "PUBLISHED",
+                "publication_type": "CAROUSEL",
+                "publication_id": "carousel-1",
+                "theme_id": "winter_light",
+                "theme_family": "season",
+                "carousel_format": "LIGHT_STUDY",
+            },
+        ]
+    }
+    _history_backend(monkeypatch, history)
+
+    slots = history_tracker.get_recent_carousel_theme_history()
+
+    assert [slot.theme_id for slot in slots] == ["winter_light"]
+
+
+def test_legacy_theme_history_remains_loadable_without_invented_taxonomy(monkeypatch):
+    history = {"posted_artworks": [{"theme": "winter", "status": "PUBLISHED"}]}
+    _history_backend(monkeypatch, history)
+
+    slots = history_tracker.get_recent_carousel_theme_history()
+
+    assert len(slots) == 1
+    assert slots[0].theme_id == "winter"
+    assert slots[0].theme_family is None
+    assert slots[0].carousel_format is None
+
+
+def test_ambiguous_and_definite_failure_transitions_apply_to_all_nine(monkeypatch):
+    history, _ = _history_backend(monkeypatch)
+    cover, featured = _publication()
+    ids = [cover["id"], *[art["id"] for art in featured]]
+    history_tracker.reserve_carousel(cover, featured)
+
+    assert history_tracker.mark_artworks_publishing(ids) == 9
+    assert {record["status"] for record in history["posted_artworks"]} == {"PUBLISHING"}
+    assert history_tracker.mark_artworks_pending(ids) == 9
+    assert {record["status"] for record in history["posted_artworks"]} == {"PENDING"}
+
+    history_tracker.mark_artworks_publishing(ids)
+    assert history_tracker.mark_artworks_ambiguous(ids) == 9
+    assert {record["status"] for record in history["posted_artworks"]} == {"AMBIGUOUS"}
+    assert history_tracker.get_posted_ids() == set(ids)
+    assert history_tracker.recover_stale_reservations(datetime(2030, 1, 1, tzinfo=timezone.utc)) == 0
+
+
+def test_successful_finalization_preserves_cover_and_featured_roles(monkeypatch):
+    history, _ = _history_backend(monkeypatch)
+    cover, featured = _publication()
+    ids = [cover["id"], *[art["id"] for art in featured]]
+    history_tracker.reserve_carousel(cover, featured)
+    history_tracker.mark_artworks_publishing(ids)
+
+    assert history_tracker.confirm_carousel_publication(
+        cover["id"],
+        [art["id"] for art in featured],
+        "instagram-media-1",
+    ) == 9
+
+    records = history["posted_artworks"]
+    assert {record["status"] for record in records} == {"PUBLISHED"}
+    assert {record["media_id"] for record in records} == {"instagram-media-1"}
+    assert records[0]["publication_role"] == "COVER"
+    assert [record["featured_position"] for record in records[1:]] == list(range(1, 9))
+
+
+def test_legacy_history_records_continue_loading_without_role_reinterpretation(monkeypatch):
+    legacy = {
+        "posted_artworks": [
+            {"id": "artic_84774", "title": "Legacy", "status": "PUBLISHED"},
+            {"id": "met_legacy", "title": "Older schema"},
+        ]
+    }
+    _history_backend(monkeypatch, legacy)
+
+    assert history_tracker.get_posted_ids() == {"aic_84774", "met_legacy"}
+    assert history_tracker.get_recent_history() == legacy["posted_artworks"]
+    assert all("publication_role" not in record for record in legacy["posted_artworks"])
+
+
+def test_carousel_reservation_rejects_cover_featured_identity_collision_before_write(monkeypatch):
+    _, uploads = _history_backend(monkeypatch)
+    cover, featured = _publication()
+    featured[0]["id"] = cover["id"]
+
+    with pytest.raises(ValueError, match="all be distinct"):
+        history_tracker.reserve_carousel(cover, featured)
+
+    assert uploads == []

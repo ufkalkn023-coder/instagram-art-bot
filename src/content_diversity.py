@@ -3,10 +3,16 @@ from typing import Dict, Any, List
 import random
 import re
 from src.region import normalize_region
+from src.artwork_metadata import normalize_artist_identity
 
 logger = logging.getLogger(__name__)
 
-REGIONAL_DIVERSITY_ADJUSTMENTS = {0: 2.0, 1: 0.0, 2: -8.0, 3: -18.0}
+REGIONAL_DIVERSITY_ADJUSTMENTS = {
+    0: 2.0,
+    1: 0.0,
+    2: -8.0,
+    3: -18.0,
+}
 
 CONTENT_TYPES = [
     "SINGLE_ARTWORK",
@@ -19,8 +25,10 @@ CONTENT_TYPES = [
 ]
 
 
-def _publication_groups(recent_history: List[Dict[str, Any]]) -> List[List[Dict[str, Any]]]:
-    """Group new records by publication while keeping each legacy record as one slot."""
+def _publication_groups(
+    recent_history: List[Dict[str, Any]],
+) -> List[List[Dict[str, Any]]]:
+    """Group new rows by publication while keeping legacy rows as slots."""
     groups: List[List[Dict[str, Any]]] = []
     groups_by_id: Dict[str, List[Dict[str, Any]]] = {}
     for artwork in recent_history:
@@ -47,7 +55,6 @@ def _artworks_from_recent_publications(
         for group in _publication_groups(recent_history)[-publication_limit:]
         for artwork in group
     ]
-
 
 def _extract_century(date_str: str) -> str:
     """Attempts to extract a century string (e.g. '1800s') from a date string."""
@@ -128,7 +135,7 @@ def analyze_museum_diversity(candidate_museum: str, recent_history: List[Dict[st
     recent_artworks = _artworks_from_recent_publications(recent_history, 10)
     if not recent_artworks:
         return 0.0
-        
+
     recent_museums = [post.get("museum_name", "") for post in recent_artworks]
     count = recent_museums.count(candidate_museum)
     
@@ -145,7 +152,7 @@ def analyze_museum_diversity(candidate_museum: str, recent_history: List[Dict[st
 
 
 def analyze_regional_diversity(candidate_region: str, recent_history: List[Dict[str, Any]]) -> float:
-    """Apply region-agnostic fatigue using the six most recent publications."""
+    """Apply region-agnostic fatigue using the six latest publications."""
     candidate_region = normalize_region(candidate_region)
     if candidate_region == "unknown":
         return 0.0
@@ -220,12 +227,7 @@ def analyze_visual_diversity(candidate_features: Dict[str, str], recent_history:
     return score
 
 def _normalized_artist_key(value: object) -> str | None:
-    if not isinstance(value, str):
-        return None
-    normalized = " ".join(value.split()).casefold()
-    if normalized in {"", "unknown", "unknown artist"}:
-        return None
-    return normalized
+    return normalize_artist_identity(value)
 
 
 def analyze_discovery_score(
@@ -253,11 +255,17 @@ def select_content_type(recent_history: List[Dict[str, Any]]) -> str:
     if not recent_history:
         return random.choice(CONTENT_TYPES)
         
-    recent_types = []
-    for publication_group in _publication_groups(recent_history)[-3:]:
-        recent_types.append(
-            next((post.get("content_type") for post in publication_group if post.get("content_type")), "")
+    recent_types = [
+        next(
+            (
+                post.get("content_type")
+                for post in publication_group
+                if post.get("content_type")
+            ),
+            "",
         )
+        for publication_group in _publication_groups(recent_history)[-3:]
+    ]
     
     available_types = [t for t in CONTENT_TYPES if t not in recent_types]
     if not available_types:

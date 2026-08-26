@@ -1,4 +1,4 @@
-from .base import MuseumAdapter
+from .base import AdapterHTTPError, MuseumAdapter
 from .aic import AICAdapter
 from .cleveland import ClevelandAdapter
 from .met import MetAdapter
@@ -8,6 +8,7 @@ from .europeana import EuropeanaAdapter
 
 __all__ = [
     "MuseumAdapter",
+    "AdapterHTTPError",
     "AICAdapter",
     "ClevelandAdapter",
     "MetAdapter",

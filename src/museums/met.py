@@ -3,7 +3,7 @@ import random
 import requests
 import re
 from typing import List
-from .base import MuseumAdapter
+from .base import AdapterHTTPError, MuseumAdapter
 from src.models import NormalizedArtwork
 from src.region import infer_region, metadata_text
 import config
@@ -51,6 +51,8 @@ class MetAdapter(MuseumAdapter):
             headers = {"User-Agent": "InstagramArtBot/1.0"}
             res = requests.get(search_url, headers=headers, timeout=20)
             if res.status_code != 200:
+                if res.status_code in {403, 429}:
+                    raise AdapterHTTPError(self.source_id, res.status_code)
                 logger.warning(f"[Met] API returned {res.status_code}")
                 return candidates
 
@@ -65,11 +67,13 @@ class MetAdapter(MuseumAdapter):
                 detail_url = f"{config.MET_API_BASE}/objects/{obj_id}"
                 d_res = requests.get(detail_url, headers=headers, timeout=15)
                 if d_res.status_code != 200:
+                    if d_res.status_code in {403, 429}:
+                        raise AdapterHTTPError(self.source_id, d_res.status_code)
                     continue
 
                 detail = d_res.json()
                 if detail.get("isPublicDomain") is not True:
-                    logger.info(f"[Met] Rejected {obj_id}: rights not confirmed.")
+                    logger.debug(f"[Met] Rejected {obj_id}: rights not confirmed.")
                     continue
 
                 title = detail.get("title") or "Untitled"
@@ -119,6 +123,8 @@ class MetAdapter(MuseumAdapter):
                 )
                 candidates.append(artwork)
 
+        except AdapterHTTPError:
+            raise
         except Exception as e:
             logger.error(f"[Met] Error fetching candidates: {e}")
 

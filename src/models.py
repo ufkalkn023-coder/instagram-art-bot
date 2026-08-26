@@ -120,7 +120,8 @@ class NormalizedArtwork(BaseModel):
     dimensions: Optional[str] = None
     
     # Classification & Context
-    # culture remains raw source metadata; region is the controlled selection key.
+    # culture is preserved as source metadata; region is the controlled value
+    # used by selection diversity policy.
     culture: Optional[str] = None
     geographic_origin: Optional[str] = None
     artist_nationality: Optional[str] = None

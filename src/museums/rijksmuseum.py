@@ -3,7 +3,7 @@ import random
 import requests
 import os
 from typing import List
-from .base import MuseumAdapter
+from .base import AdapterHTTPError, MuseumAdapter
 from src.models import NormalizedArtwork
 from src.region import infer_region, metadata_text
 from src.source_health import classify_exception, classify_http_failure
@@ -29,6 +29,12 @@ class RijksmuseumAdapter(MuseumAdapter):
     @property
     def source_id(self) -> str:
         return "rijksmuseum"
+
+    def unavailable_reason(self) -> str | None:
+        api_key = os.environ.get(
+            "RIJKSMUSEUM_API_KEY", getattr(config, "RIJKSMUSEUM_API_KEY", "")
+        )
+        return None if api_key else "missing_api_key"
 
     def fetch_candidates(
         self,
@@ -58,8 +64,10 @@ class RijksmuseumAdapter(MuseumAdapter):
             headers = {"User-Agent": "InstagramArtBot/1.0"}
             res = requests.get(url, headers=headers, timeout=20)
             if res.status_code != 200:
-                logger.warning(f"[Rijksmuseum] API returned {res.status_code}")
                 self._record_source_failure(classify_http_failure(res.status_code, res.headers))
+                if res.status_code in {403, 429}:
+                    raise AdapterHTTPError(self.source_id, res.status_code)
+                logger.warning(f"[Rijksmuseum] API returned {res.status_code}")
                 return candidates
 
             try:
@@ -78,7 +86,7 @@ class RijksmuseumAdapter(MuseumAdapter):
                 rights_text = item.get("copyrightHolder")
                 rights_status = get_rights_status(rights_text)
                 if rights_status is None:
-                    logger.info(f"[Rijksmuseum] Rejected {item.get('objectNumber')}: rights not confirmed.")
+                    logger.debug(f"[Rijksmuseum] Rejected {item.get('objectNumber')}: rights not confirmed.")
                     continue
 
                 obj_number = item.get("objectNumber")
@@ -104,7 +112,10 @@ class RijksmuseumAdapter(MuseumAdapter):
                     creation_date=date,
                     medium="painting",
                     geographic_origin=geographic_origin,
-                    region=infer_region(geography=geographic_origin, style_or_period=style_or_period),
+                    region=infer_region(
+                        geography=geographic_origin,
+                        style_or_period=style_or_period,
+                    ),
                     classification=metadata_text(item.get("objectTypes")),
                     style_or_period=style_or_period,
                     museum_name="Rijksmuseum, Amsterdam",
@@ -116,6 +127,8 @@ class RijksmuseumAdapter(MuseumAdapter):
                 )
                 candidates.append(artwork)
 
+        except AdapterHTTPError:
+            raise
         except Exception as e:
             logger.error("[Rijksmuseum] Error fetching candidates (%s).", type(e).__name__)
             self._record_source_failure(classify_exception(e))

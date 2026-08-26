@@ -2,7 +2,8 @@ import logging
 import random
 import requests
 from typing import List
-from .base import MuseumAdapter
+from .base import AdapterHTTPError, MuseumAdapter
+from src.aic_image_policy import aic_request_headers
 from src.models import NormalizedArtwork
 from src.region import infer_region, metadata_text
 from src.source_health import classify_exception, classify_http_failure
@@ -39,11 +40,15 @@ class AICAdapter(MuseumAdapter):
                 f"&limit={limit}&page={page}"
             )
             
-            headers = {"User-Agent": "InstagramArtBot/1.0"}
+            headers = aic_request_headers(
+                url, {"User-Agent": "InstagramArtBot/1.0"}
+            )
             res = requests.get(url, headers=headers, timeout=15)
             if res.status_code != 200:
-                logger.warning(f"[AIC] API returned {res.status_code}")
                 self._record_source_failure(classify_http_failure(res.status_code, res.headers))
+                if res.status_code in {403, 429}:
+                    raise AdapterHTTPError(self.source_id, res.status_code)
+                logger.warning(f"[AIC] API returned {res.status_code}")
                 return candidates
 
             try:
@@ -60,7 +65,7 @@ class AICAdapter(MuseumAdapter):
             
             for item in artworks:
                 if item.get("is_public_domain") is not True:
-                    logger.info(f"[AIC] Rejected {item.get('id')}: rights not confirmed.")
+                    logger.debug(f"[AIC] Rejected {item.get('id')}: rights not confirmed.")
                     continue
 
                 image_id = item.get("image_id")
@@ -103,6 +108,8 @@ class AICAdapter(MuseumAdapter):
                 )
                 candidates.append(artwork)
                 
+        except AdapterHTTPError:
+            raise
         except Exception as e:
             logger.error("[AIC] Error fetching candidates (%s).", type(e).__name__)
             self._record_source_failure(classify_exception(e))

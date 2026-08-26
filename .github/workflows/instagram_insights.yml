@@ -25,11 +25,10 @@ jobs:
         with:
           python-version: "3.10"
           cache: "pip"
+          cache-dependency-path: requirements.lock
 
       - name: Install dependencies
-        run: |
-          python -m pip install --upgrade pip
-          python -m pip install -r requirements.txt
+        run: python -m pip install --require-hashes -r requirements.lock
 
       - name: Collect Instagram Insights
         env:
