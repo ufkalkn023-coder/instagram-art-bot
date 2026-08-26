@@ -68,9 +68,9 @@ carousel: 0 12,21 * * *
 
 GitHub Actions cron ifadeleri UTC’dir. Türkiye saati UTC+3 kabul edildiğinde koşular 03:00, 06:00, 09:00, 12:00, 15:00, 18:00, 21:00 ve ertesi gün 00:00 TSİ’ye karşılık gelir.
 
-Scheduled invocation `--mode single` veya `--mode carousel` değerini cron lane’inden açıkça geçirir. Böylece GitHub’ın geciktirdiği bir job, başladığı wall-clock saatine bakarak yanlış moda geçmez. Yerel ve varsayılan manuel çağrılardaki legacy `auto` davranışı UTC 12:00/21:00 için carousel seçmeye devam eder.
+Scheduled invocation `--mode single` veya `--mode carousel` değerini cron lane’inden açıkça geçirir. Böylece GitHub’ın geciktirdiği bir job, başladığı wall-clock saatine bakarak yanlış moda geçmez. Scheduled production varsayılan olarak kapalıdır; yalnız repository Actions variable `ARTFOLIO_PRODUCTION_SCHEDULE_ENABLED` tam olarak `true` olduğunda publish job’ı çalışır. Değişkenin eksik olması veya farklı bir değer taşıması fail-closed davranır. Yerel ve varsayılan manuel çağrılardaki legacy `auto` davranışı UTC 12:00/21:00 için carousel seçmeye devam eder.
 
-Workflow manuel olarak da **Actions → Instagram Art Bot Scheduler → Run workflow** üzerinden başlatılabilir. `force_carousel` girdisi `--force-carousel` olarak iletilir. Yalnız bu production workflow’una ait `instagram-bot` concurrency grubu aynı anda tek publish job’ına izin verir; `cancel-in-progress: false` aktif publish’i yarıda kesmez ve yeni koşuyu bekletir (GitHub birden fazla pending koşudan en yenisini tutabilir).
+Workflow manuel olarak da **Actions → Instagram Art Bot Scheduler → Run workflow** üzerinden başlatılabilir. Bu yol `publish_mode` seçimini (`single` veya `carousel`) ve gerçek Instagram paylaşımını onaylamak için `confirm_publish` alanına tam olarak `PUBLISH_TO_INSTAGRAM` yazılmasını gerektirir. Manuel çalıştırma scheduled-production variable’ından bağımsızdır ve AUTO mode kullanmaz. Yalnız bu production workflow’una ait `instagram-bot` concurrency grubu aynı anda tek publish job’ına izin verir; `cancel-in-progress: false` aktif publish’i yarıda kesmez ve yeni koşuyu bekletir (GitHub birden fazla pending koşudan en yenisini tutabilir).
 
 Job timeout’u **45 dakika**dır. Dokuz child ve bir parent container’lı carousel’in bounded Instagram status polling süresine acquisition/render payı bırakır; 2 saatlik stale `PENDING` eşiğinin altında kalır.
 

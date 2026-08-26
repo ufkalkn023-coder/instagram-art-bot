@@ -1,17 +1,23 @@
 name: Instagram Art Bot Scheduler
 
-on:
+"on":
   schedule:
     # Split by publish mode so delayed scheduled jobs do not depend on wall-clock time.
     - cron: "0 0,3,6,9,15,18 * * *"
     - cron: "0 12,21 * * *"
   workflow_dispatch: # Allows manual trigger from GitHub Actions tab
     inputs:
-      force_carousel:
-        description: 'Force a Carousel post (Ignore schedule)'
-        required: false
-        type: boolean
-        default: false
+      publish_mode:
+        description: "Select the type of REAL Instagram post to create"
+        required: true
+        type: choice
+        options:
+          - single
+          - carousel
+      confirm_publish:
+        description: "Type PUBLISH_TO_INSTAGRAM to create a REAL Instagram post"
+        required: true
+        type: string
 
 permissions:
   contents: read
@@ -22,6 +28,11 @@ concurrency:
 
 jobs:
   post-to-instagram:
+    if: >-
+      (github.event_name == 'schedule' &&
+       vars.ARTFOLIO_PRODUCTION_SCHEDULE_ENABLED == 'true') ||
+      (github.event_name == 'workflow_dispatch' &&
+       github.event.inputs.confirm_publish == 'PUBLISH_TO_INSTAGRAM')
     runs-on: ubuntu-latest
     # Up to nine carousel children (cover plus featured works) and the parent can require polling.
     timeout-minutes: 45
@@ -68,7 +79,7 @@ jobs:
         env:
           EVENT_NAME: ${{ github.event_name }}
           SCHEDULE_EXPRESSION: ${{ github.event.schedule }}
-          FORCE_CAROUSEL: ${{ github.event.inputs.force_carousel }}
+          PUBLISH_MODE: ${{ github.event.inputs.publish_mode }}
           INSTAGRAM_ACCOUNT_ID: ${{ secrets.INSTAGRAM_ACCOUNT_ID }}
           INSTAGRAM_ACCESS_TOKEN: ${{ secrets.INSTAGRAM_ACCESS_TOKEN }}
           GOOGLE_GEMINI_API_KEY: ${{ secrets.GOOGLE_GEMINI_API_KEY }}
@@ -92,8 +103,13 @@ jobs:
               "0 0,3,6,9,15,18 * * *") python main.py --mode single ;;
               *) echo "Unsupported production schedule: $SCHEDULE_EXPRESSION" >&2; exit 2 ;;
             esac
-          elif [ "$FORCE_CAROUSEL" = "true" ]; then
-            python main.py --force-carousel
+          elif [ "$EVENT_NAME" = "workflow_dispatch" ]; then
+            case "$PUBLISH_MODE" in
+              "single") python main.py --mode single ;;
+              "carousel") python main.py --mode carousel ;;
+              *) echo "Unsupported manual publish mode: $PUBLISH_MODE" >&2; exit 2 ;;
+            esac
           else
-            python main.py
+            echo "Unsupported production event: $EVENT_NAME" >&2
+            exit 2
           fi
