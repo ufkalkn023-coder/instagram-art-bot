@@ -1,7 +1,7 @@
 import pytest
 from PIL import Image
 
-from src import image_processor, instagram_image
+from src import image_processor, instagram_image, r2_media
 from src.instagram_image import (
     JPEG_QUALITY_SEARCH_ATTEMPT_LIMIT,
     MINIMUM_JPEG_COMPATIBILITY_QUALITY,
@@ -293,15 +293,18 @@ def test_r2_upload_uses_decoded_content_type_and_does_not_rewrite_source(
             "Content-Length": str(len(original_bytes)),
         }
 
-    monkeypatch.setattr(image_processor.boto3, "client", lambda *args, **kwargs: FakeS3Client())
-    monkeypatch.setattr(image_processor.requests, "head", lambda *args, **kwargs: HeadResponse())
-    monkeypatch.setattr(image_processor.time, "sleep", lambda _seconds: None)
+    monkeypatch.setattr(r2_media.boto3, "client", lambda *args, **kwargs: FakeS3Client())
+    monkeypatch.setattr(r2_media.requests, "head", lambda *args, **kwargs: HeadResponse())
+    monkeypatch.setattr(r2_media.time, "sleep", lambda _seconds: None)
 
-    public_url = image_processor.upload_temp_media(str(source))
+    upload = image_processor.upload_temp_media(str(source), "publication-1")
 
     assert uploads[0][0] == str(source)
     assert uploads[0][1] == "configured"
     assert uploads[0][2].endswith(".jpg")
     assert uploads[0][3] == {"ContentType": "image/jpeg"}
-    assert public_url.endswith(uploads[0][2])
+    assert upload.public_url.endswith(uploads[0][2])
+    assert upload.object_key == uploads[0][2]
+    assert upload.publication_id == "publication-1"
+    assert upload.object_key.startswith("images/publications/publication-1/")
     assert source.read_bytes() == original_bytes

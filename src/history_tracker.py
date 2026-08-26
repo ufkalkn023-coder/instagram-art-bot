@@ -20,6 +20,7 @@ from src.carousel_policy import (
     MIN_TOTAL_SLIDES,
 )
 from src.models import PublicationRecord, normalize_artwork_id
+from src import r2_media
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -28,6 +29,7 @@ HISTORY_OBJECT_KEY = "posted_history.json"
 # Must exceed the workflow's 45-minute hard timeout and normal publish duration.
 PENDING_RESERVATION_TTL = timedelta(hours=2)
 HISTORY_CONDITIONAL_WRITE_ATTEMPTS = 3
+STAGING_MEDIA_CLEANUP_QUEUE_KEY = "staging_media_cleanup_queue"
 GRID_COLOR_TONES = [
     "red", "blue", "green", "yellow", "purple", "brown",
     "monochrome", "warm", "cool",
@@ -268,6 +270,73 @@ def _utc_timestamp(now: datetime | None = None) -> str:
     return value.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
+def _validated_staging_media_cleanup_queue(
+    history: Dict[str, Any],
+) -> list[Dict[str, str]]:
+    value = history.get(STAGING_MEDIA_CLEANUP_QUEUE_KEY, [])
+    if not isinstance(value, list):
+        raise CorruptedHistoryError("Staging-media cleanup queue must be a list")
+    validated: list[Dict[str, str]] = []
+    seen: set[str] = set()
+    for index, entry in enumerate(value):
+        if not isinstance(entry, dict):
+            raise CorruptedHistoryError(
+                f"Staging-media cleanup entry {index} must be an object"
+            )
+        publication_id = entry.get("publication_id")
+        eligible_at = entry.get("eligible_at")
+        reason = entry.get("reason")
+        if (
+            not r2_media.is_valid_publication_id(publication_id)
+            or _parse_reserved_at(eligible_at) is None
+            or not isinstance(reason, str)
+            or not reason
+        ):
+            raise CorruptedHistoryError(
+                f"Malformed staging-media cleanup entry at index {index}"
+            )
+        if publication_id in seen:
+            raise CorruptedHistoryError(
+                f"Duplicate staging-media cleanup publication: {publication_id}"
+            )
+        seen.add(publication_id)
+        validated.append(entry)
+    return validated
+
+
+def _enqueue_staging_media_cleanup(
+    history: Dict[str, Any],
+    publication_id: str,
+    records: Sequence[Dict[str, Any]],
+    *,
+    eligible_at: str,
+    reason: str,
+) -> bool:
+    """Durably queue only an explicit, application-owned publication ID."""
+    if (
+        not r2_media.is_valid_publication_id(publication_id)
+        or not records
+        or any(record.get("publication_id") != publication_id for record in records)
+    ):
+        logger.warning(
+            "staging_media_cleanup_not_queued publication_id=%s "
+            "reason=legacy_or_malformed_ownership",
+            publication_id,
+        )
+        return False
+    queue = _validated_staging_media_cleanup_queue(history)
+    if any(entry["publication_id"] == publication_id for entry in queue):
+        return False
+    history.setdefault(STAGING_MEDIA_CLEANUP_QUEUE_KEY, []).append(
+        {
+            "publication_id": publication_id,
+            "eligible_at": eligible_at,
+            "reason": reason,
+        }
+    )
+    return True
+
+
 def _publication_key(item: Dict[str, Any]) -> str:
     publication_id = item.get("publication_id")
     if isinstance(publication_id, str) and publication_id:
@@ -319,14 +388,6 @@ def _publication_records(
     return publication_key, grouped
 
 
-def _restore_records(
-    records: Sequence[Dict[str, Any]], snapshots: Sequence[Dict[str, Any]]
-) -> None:
-    for record, snapshot in zip(records, snapshots):
-        record.clear()
-        record.update(snapshot)
-
-
 def _restore_history_snapshot_in_place(
     history: Dict[str, Any], snapshot: Dict[str, Any]
 ) -> None:
@@ -345,20 +406,31 @@ def _restore_history_snapshot_in_place(
 def _conditional_publication_update(
     artwork_ids: Iterable[str],
     mutation: Callable[[str, list[Dict[str, Any]]], tuple[_MutationResult, bool]],
+    *,
+    history_mutation: Callable[
+        [Dict[str, Any], str, list[Dict[str, Any]]], None
+    ]
+    | None = None,
 ) -> _MutationResult:
     """Reload and re-evaluate bounded lifecycle writes after an ETag conflict."""
     canonical_ids = tuple(normalize_artwork_id(value) for value in artwork_ids)
     for attempt in range(1, HISTORY_CONDITIONAL_WRITE_ATTEMPTS + 1):
         history, etag = load_history_with_etag()
+        original_history = copy.deepcopy(history)
         publication_id, records = _publication_records(history, canonical_ids)
-        snapshots = [dict(record) for record in records]
-        result, changed = mutation(publication_id, records)
+        try:
+            result, changed = mutation(publication_id, records)
+            if changed and history_mutation is not None:
+                history_mutation(history, publication_id, records)
+        except Exception:
+            _restore_history_snapshot_in_place(history, original_history)
+            raise
         if not changed:
             return result
         try:
             _upload_history(history, etag)
         except ConcurrentWriteError:
-            _restore_records(records, snapshots)
+            _restore_history_snapshot_in_place(history, original_history)
             if attempt == HISTORY_CONDITIONAL_WRITE_ATTEMPTS:
                 raise
             logger.warning(
@@ -369,7 +441,7 @@ def _conditional_publication_update(
             )
             continue
         except Exception:
-            _restore_records(records, snapshots)
+            _restore_history_snapshot_in_place(history, original_history)
             raise
         return result
     raise AssertionError("unreachable")
@@ -443,6 +515,7 @@ def recover_stale_reservations(now: datetime | None = None) -> int:
     conditional write protects recovery from concurrent reservations.
     """
     history, etag = load_history_with_etag()
+    original_history = copy.deepcopy(history)
     recovery_time = now or datetime.now(timezone.utc)
     if recovery_time.tzinfo is None or recovery_time.utcoffset() is None:
         raise ValueError("Recovery time must be timezone-aware")
@@ -455,16 +528,36 @@ def recover_stale_reservations(now: datetime | None = None) -> int:
 
     recovered = 0
     expired_at = _utc_timestamp(recovery_time)
-    for records in groups.values():
-        if records and all(_is_stale_pending(item, recovery_time) for item in records):
-            _set_status(records, PublicationStatus.EXPIRED, authoritative=True)
-            for item in records:
-                item["expired_at"] = expired_at
-                item["expiration_reason"] = "pending_ttl_expired_before_publish_boundary"
-            recovered += len(records)
+    try:
+        for records in groups.values():
+            if records and all(
+                _is_stale_pending(item, recovery_time) for item in records
+            ):
+                _set_status(records, PublicationStatus.EXPIRED, authoritative=True)
+                publication_id = _publication_key(records[0])
+                for item in records:
+                    item["expired_at"] = expired_at
+                    item["expiration_reason"] = (
+                        "pending_ttl_expired_before_publish_boundary"
+                    )
+                _enqueue_staging_media_cleanup(
+                    history,
+                    publication_id,
+                    records,
+                    eligible_at=expired_at,
+                    reason="pending_ttl_expired_before_publish_boundary",
+                )
+                recovered += len(records)
+    except Exception:
+        _restore_history_snapshot_in_place(history, original_history)
+        raise
 
     if recovered:
-        _upload_history(history, etag)
+        try:
+            _upload_history(history, etag)
+        except Exception:
+            _restore_history_snapshot_in_place(history, original_history)
+            raise
         logger.info(f"Marked {recovered} stale reservation(s) as EXPIRED.")
 
     return recovered
@@ -1102,7 +1195,19 @@ def mark_publication_not_published(
         )
         return len(records), True
 
-    return _conditional_publication_update(artwork_ids, mutation)
+    def queue_cleanup(history, publication_id, records):
+        if authoritative:
+            _enqueue_staging_media_cleanup(
+                history,
+                publication_id,
+                records,
+                eligible_at=expired_at,
+                reason=reason,
+            )
+
+    return _conditional_publication_update(
+        artwork_ids, mutation, history_mutation=queue_cleanup
+    )
 
 
 def record_publish_response(artwork_ids: Iterable[str], media_id: str) -> int:
@@ -1608,6 +1713,84 @@ def list_unresolved_publication_units(
     return units
 
 
+def list_staging_media_cleanup_publication_ids(*, limit: int) -> list[str]:
+    """Return a bounded queue of authoritatively expired publication prefixes.
+
+    Active or published state always wins over a stale queue entry. Malformed queue
+    state fails closed and yields no destructive work.
+    """
+    if limit < 1:
+        raise ValueError("Staging-media cleanup limit must be positive")
+    history, _ = load_history_with_etag()
+    try:
+        queue = _validated_staging_media_cleanup_queue(history)
+    except CorruptedHistoryError:
+        logger.exception("staging_media_cleanup_queue_invalid result=keep_all")
+        return []
+
+    blocked_publication_ids = {
+        item["publication_id"]
+        for item in history.get("posted_artworks", [])
+        if isinstance(item, dict)
+        and r2_media.is_valid_publication_id(item.get("publication_id"))
+        and str(item.get("status", "")).upper()
+        != PublicationStatus.EXPIRED.value
+    }
+    for publication in history.get("publications", []):
+        if isinstance(publication, dict) and r2_media.is_valid_publication_id(
+            publication.get("id")
+        ):
+            blocked_publication_ids.add(publication["id"])
+
+    selected: list[str] = []
+    for entry in queue:
+        publication_id = entry["publication_id"]
+        if publication_id in blocked_publication_ids:
+            logger.warning(
+                "staging_media_cleanup_skipped publication_id=%s "
+                "reason=active_or_published_state",
+                publication_id,
+            )
+            continue
+        selected.append(publication_id)
+        if len(selected) == limit:
+            break
+    return selected
+
+
+def acknowledge_staging_media_cleanup(publication_id: str) -> bool:
+    """Remove one cleanup queue entry after idempotent R2 cleanup succeeds."""
+    normalized = r2_media.validate_publication_id(publication_id)
+    for attempt in range(1, HISTORY_CONDITIONAL_WRITE_ATTEMPTS + 1):
+        history, etag = load_history_with_etag()
+        original_history = copy.deepcopy(history)
+        queue = _validated_staging_media_cleanup_queue(history)
+        retained = [
+            entry for entry in queue if entry["publication_id"] != normalized
+        ]
+        if len(retained) == len(queue):
+            return False
+        history[STAGING_MEDIA_CLEANUP_QUEUE_KEY] = retained
+        try:
+            _upload_history(history, etag)
+        except ConcurrentWriteError:
+            _restore_history_snapshot_in_place(history, original_history)
+            if attempt == HISTORY_CONDITIONAL_WRITE_ATTEMPTS:
+                raise
+            logger.warning(
+                "staging_media_cleanup_ack_conflict publication_id=%s retry=%s/%s",
+                normalized,
+                attempt + 1,
+                HISTORY_CONDITIONAL_WRITE_ATTEMPTS,
+            )
+            continue
+        except Exception:
+            _restore_history_snapshot_in_place(history, original_history)
+            raise
+        return True
+    raise AssertionError("unreachable")
+
+
 def record_reconciliation_result(
     artwork_ids: Iterable[str],
     *,
@@ -1726,7 +1909,19 @@ def record_reconciliation_result(
                 record["expiration_reason"] = evidence
         return len(records), True
 
-    return _conditional_publication_update(artwork_ids, mutation)
+    def queue_cleanup(history, publication_id, records):
+        if target_status is PublicationStatus.EXPIRED and authoritative:
+            _enqueue_staging_media_cleanup(
+                history,
+                publication_id,
+                records,
+                eligible_at=reconciled_at,
+                reason=evidence,
+            )
+
+    return _conditional_publication_update(
+        artwork_ids, mutation, history_mutation=queue_cleanup
+    )
 
 def get_grid_color_tone(read_only: bool = False) -> str:
     """Return the persisted tone; successful finalization advances rows."""

@@ -165,4 +165,4 @@ def test_live_module_is_skipped_without_explicit_opt_in():
     )
 
     assert result.returncode == 0, result.stdout + result.stderr
-    assert "6 skipped" in result.stdout
+    assert "8 skipped" in result.stdout

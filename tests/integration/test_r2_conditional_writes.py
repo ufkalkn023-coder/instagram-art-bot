@@ -11,7 +11,9 @@ import pytest
 from src import history_tracker
 from tests.integration.r2_test_support import (
     R2IntegrationContext,
+    assert_integration_test_key,
     integration_enabled,
+    is_missing_object_error,
     make_run_prefix,
     missing_r2_configuration,
 )
@@ -62,6 +64,20 @@ def r2_context() -> R2IntegrationContext:
         else:
             print("Cleanup ................ PASS")
             print(f"Objects remaining: {remaining}")
+
+
+@pytest.fixture
+def r2_object_semantics_context(r2_context) -> R2IntegrationContext:
+    """Use a separate UUID namespace for destructive object-semantics checks."""
+    context = R2IntegrationContext(
+        client=r2_context.client,
+        bucket=r2_context.bucket,
+        prefix=make_run_prefix(),
+    )
+    try:
+        yield context
+    finally:
+        assert context.cleanup() == 0
 
 
 def _put(
@@ -258,3 +274,90 @@ def test_repeated_conditional_json_writes_remain_complete(r2_context):
         )
         assert json.loads(_get_bytes(r2_context, key)) == expected
     print("JSON integrity .......... PASS")
+
+
+def test_exact_delete_is_idempotent_and_object_becomes_absent(
+    r2_object_semantics_context,
+):
+    context = r2_object_semantics_context
+    key = context.key("delete-semantics/exact-object.bin")
+    context.client.put_object(
+        Bucket=context.bucket,
+        Key=key,
+        Body=b"isolated-delete-semantics",
+        ContentType="application/octet-stream",
+    )
+
+    context.client.delete_object(Bucket=context.bucket, Key=key)
+    with pytest.raises(ClientError) as first_absent:
+        context.client.head_object(Bucket=context.bucket, Key=key)
+    assert is_missing_object_error(first_absent.value)
+
+    context.client.delete_object(Bucket=context.bucket, Key=key)
+    with pytest.raises(ClientError) as still_absent:
+        context.client.head_object(Bucket=context.bucket, Key=key)
+    assert is_missing_object_error(still_absent.value)
+    print("Exact DELETE ............ PASS")
+    print("Absent DELETE idempotent  PASS")
+
+
+def test_exact_prefix_list_delete_preserves_neighbor_and_finishes_empty(
+    r2_object_semantics_context,
+):
+    context = r2_object_semantics_context
+    target_prefix = f"{context.prefix}objects/current/"
+    assert_integration_test_key(target_prefix, context.prefix)
+    target_keys = {
+        context.key(f"objects/current/item-{index}.bin")
+        for index in range(3)
+    }
+    neighbor_key = context.key("objects/current-neighbor/keep.bin")
+    for key in sorted((*target_keys, neighbor_key)):
+        context.client.put_object(
+            Bucket=context.bucket,
+            Key=key,
+            Body=b"isolated-list-delete-semantics",
+            ContentType="application/octet-stream",
+        )
+
+    listed: list[str] = []
+    continuation_token: str | None = None
+    pages = 0
+    while True:
+        request = {
+            "Bucket": context.bucket,
+            "Prefix": target_prefix,
+            "MaxKeys": 2,
+        }
+        if continuation_token is not None:
+            request["ContinuationToken"] = continuation_token
+        response = context.client.list_objects_v2(**request)
+        pages += 1
+        for item in response.get("Contents", []):
+            key = item["Key"]
+            assert_integration_test_key(key, context.prefix)
+            assert key.startswith(target_prefix)
+            listed.append(key)
+        if not response.get("IsTruncated"):
+            break
+        continuation_token = response.get("NextContinuationToken")
+        assert continuation_token
+
+    assert set(listed) == target_keys
+    assert pages >= 2
+    for key in listed:
+        context.client.delete_object(Bucket=context.bucket, Key=key)
+
+    assert context.client.head_object(
+        Bucket=context.bucket, Key=neighbor_key
+    )["ContentLength"] > 0
+    assert context.client.list_objects_v2(
+        Bucket=context.bucket, Prefix=target_prefix
+    ).get("Contents", []) == []
+
+    context.client.delete_object(Bucket=context.bucket, Key=neighbor_key)
+    assert context.list_run_keys() == []
+    print("Exact prefix LIST ....... PASS")
+    print("Small-page pagination ... PASS")
+    print("Neighbor preserved ...... PASS")
+    print("Final namespace empty ... PASS")

@@ -4,6 +4,7 @@ from types import SimpleNamespace
 import pytest
 
 import main
+from src import r2_media
 from src.instagram_image import (
     InstagramImagePublishability,
     InstagramImagePublishabilityReason,
@@ -60,6 +61,15 @@ def _prepared(reason, *, path=None):
     )
 
 
+def _owned_upload(path, publication_id):
+    return r2_media.TempMediaUpload(
+        f"images/publications/{publication_id}/"
+        "20260826120000_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.jpg",
+        "https://example.test/validated.jpg",
+        publication_id,
+    )
+
+
 def _install_publish_pipeline(monkeypatch, candidates, prepared_by_path):
     events = []
     monkeypatch.setattr(main.history_tracker, "get_posted_ids", lambda: set())
@@ -80,7 +90,7 @@ def _install_publish_pipeline(monkeypatch, candidates, prepared_by_path):
     monkeypatch.setattr(
         main.history_tracker,
         "reserve_artwork",
-        lambda artwork: events.append(("reserve", artwork["id"])),
+        lambda artwork: events.append(("reserve", artwork["id"])) or "publication-1",
     )
     monkeypatch.setattr(
         main.history_tracker,
@@ -104,8 +114,8 @@ def _install_publish_pipeline(monkeypatch, candidates, prepared_by_path):
     monkeypatch.setattr(
         main.image_processor,
         "upload_temp_media",
-        lambda path: events.append(("upload", path))
-        or "https://example.test/validated.jpg",
+        lambda path, publication_id: events.append(("upload", path))
+        or _owned_upload(path, publication_id),
     )
     def publish(**kwargs):
         kwargs["before_publish"]("container-1", ())

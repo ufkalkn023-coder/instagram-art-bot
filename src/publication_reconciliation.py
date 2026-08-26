@@ -5,7 +5,7 @@ from datetime import datetime, timedelta, timezone
 from enum import Enum
 import logging
 
-from src import history_tracker, instagram_poster
+from src import history_tracker, instagram_poster, r2_media
 
 
 logger = logging.getLogger(__name__)
@@ -39,6 +39,9 @@ class ReconciliationSummary:
     confirmed_not_published: int
     still_ambiguous: int
     errors: int
+    cleanup_inspected: int
+    cleanup_deleted: int
+    cleanup_failures: int
     results: tuple[PublicationReconciliationResult, ...]
 
 
@@ -240,6 +243,41 @@ def reconcile_publications(
         if result is not None:
             results.append(result)
 
+    cleanup_inspected = 0
+    cleanup_deleted = 0
+    cleanup_failures = 0
+    try:
+        cleanup_publication_ids = (
+            history_tracker.list_staging_media_cleanup_publication_ids(limit=limit)
+        )
+    except Exception as error:
+        cleanup_publication_ids = []
+        cleanup_failures = 1
+        logger.exception(
+            "r2_publication_cleanup_summary result=queue_read_failed error=%s",
+            type(error).__name__,
+        )
+    for publication_id in cleanup_publication_ids:
+        cleanup_inspected += 1
+        cleanup = r2_media.cleanup_publication_media(
+            publication_id,
+            reason="authoritative_expired_recovery",
+        )
+        cleanup_deleted += cleanup.deleted
+        if not cleanup.complete:
+            cleanup_failures += 1
+            continue
+        try:
+            history_tracker.acknowledge_staging_media_cleanup(publication_id)
+        except Exception as error:
+            cleanup_failures += 1
+            logger.exception(
+                "r2_publication_cleanup_summary publication_id=%s "
+                "result=ack_failed error=%s",
+                publication_id,
+                type(error).__name__,
+            )
+
     return ReconciliationSummary(
         inspected=len(units),
         confirmed_published=sum(
@@ -258,5 +296,8 @@ def reconcile_publications(
             result.outcome is ReconciliationOutcome.RECONCILIATION_ERROR
             for result in results
         ),
+        cleanup_inspected=cleanup_inspected,
+        cleanup_deleted=cleanup_deleted,
+        cleanup_failures=cleanup_failures,
         results=tuple(results),
     )

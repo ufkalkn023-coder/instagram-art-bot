@@ -154,6 +154,10 @@ PENDING → EXPIRED
 
 `PENDING`, hiçbir irreversible `media_publish` isteğinin gönderilmediği anlamına gelir. Tek eser creation container ID'si veya carousel parent + child container ID'leri hazır olduktan sonra, `media_publish` çağrısından hemen önce bütün publication unit tek conditional R2 yazısıyla `PUBLISHING` olur. Bu yazı başarısızsa publish isteği gönderilmez. `media_publish` timeout, connection reset, malformed response veya 5xx sonucu otomatik tekrar edilmez; unit `AMBIGUOUS` kalır. Kesin 4xx reddi `EXPIRED`, başarılı response media ID'si ise önce durable receipt, ardından `PUBLISHED` olarak yazılır.
 
+Yeni staging media objeleri yalnız `images/publications/<publication_id>/<timestamp>_<uuid>.<suffix>` altında oluşturulur. Tek eser ve carousel, history reservation'ın döndürdüğü aynı durable `publication_id` değerini kullanır. Upload sonucu exact object key + public URL taşıyan immutable bir handle olarak korunur. Public HEAD doğrulaması başarısızsa yalnız o exact obje silinmeye çalışılır; Meta çağrılmadan önce yarım kalan carousel staging'i yalnız o invocation'ın tamamlanmış handle'larını geri alır.
+
+Crash recovery için authoritative `EXPIRED` geçişi aynı history CAS yazısında additive `staging_media_cleanup_queue` kaydı oluşturur. Cleanup önce lifecycle kararının durable olmasını bekler, sonra yalnız exact publication prefix'ini bounded olarak listeler (en fazla 100 obje, 25 objelik sayfalar) ve yeniden ownership validation'dan geçen key'leri siler. Başarısız cleanup state'i geri açmaz; queue sonraki startup veya manuel reconciliation koşusunda tekrar denenir. Policy fail-closed'dur: `PENDING`, `PUBLISHING`, `AMBIGUOUS` ve `PUBLISHED` media tutulur; yalnız authoritative `EXPIRED` cleanup-eligible'dır. Başarılı media Pinterest'in aynı public URL'yi kullanabilmesi için bu görevde tutulur. Eski `images/<timestamp>_<uuid>.<suffix>` objeleri publication ownership kanıtı taşımadığından otomatik cleanup kapsamı dışındadır.
+
 History iki additive görünümü birlikte korur:
 
 ```json
@@ -266,6 +270,7 @@ Dry-run şunları yapmaz:
 
 - R2 history mutate/reserve/confirm etmez veya publication reconciliation yazısı yapmaz.
 - Production media’yı R2’ye yüklemez.
+- R2 staging media objesi silmez veya cleanup queue çalıştırmaz.
 - Instagram container oluşturmaz ya da publish etmez.
 - Pinterest’e publish etmez.
 

@@ -9,10 +9,21 @@ from datetime import datetime, timezone
 from enum import Enum
 from itertools import islice
 from pathlib import Path
+from typing import Sequence
 
 import config
 from src.aic_image_policy import get_aic_image_request_policy
-from src import art_fetcher, image_processor, instagram_poster, history_tracker, pinterest_poster, gemini_ai, content_diversity, publication_reconciliation
+from src import (
+    art_fetcher,
+    content_diversity,
+    gemini_ai,
+    history_tracker,
+    image_processor,
+    instagram_poster,
+    pinterest_poster,
+    publication_reconciliation,
+    r2_media,
+)
 from src.carousel_caption import format_carousel_caption
 from src.carousel_featured import (
     derive_carousel_featured_presentation,
@@ -138,6 +149,73 @@ def _log_dry_run_success(mode: str, artworks: list[dict], artifact_paths: list[s
         ",".join(artifact_paths),
         quality_summary,
     )
+
+
+def _cleanup_authoritatively_expired_media(
+    publication_id: str, *, reason: str
+) -> None:
+    """Best-effort cleanup after the EXPIRED transition is durably persisted."""
+    cleanup = r2_media.cleanup_publication_media(publication_id, reason=reason)
+    if not cleanup.complete:
+        return
+    try:
+        history_tracker.acknowledge_staging_media_cleanup(publication_id)
+    except Exception as error:
+        logger.exception(
+            "r2_publication_cleanup_summary publication_id=%s "
+            "result=ack_failed error=%s",
+            publication_id,
+            type(error).__name__,
+        )
+
+
+def _handle_pre_meta_staging_failure(
+    artwork_ids: Sequence[str],
+    publication_id: str,
+    uploads: Sequence[r2_media.TempMediaUpload],
+) -> None:
+    """Expire and roll back media that this invocation never supplied to Meta."""
+    expiration_persisted = False
+    try:
+        history_tracker.mark_publication_not_published(
+            artwork_ids,
+            "pre_meta_staging_failure",
+            authoritative=True,
+        )
+        expiration_persisted = True
+    except Exception as error:
+        logger.exception(
+            "pre_meta_staging_expiration_failed publication_id=%s error=%s",
+            publication_id,
+            type(error).__name__,
+        )
+
+    try:
+        r2_media.rollback_temp_media_uploads(publication_id, uploads)
+        if not expiration_persisted:
+            return
+        cleanup = r2_media.cleanup_publication_media(
+            publication_id,
+            reason="pre_meta_staging_failure",
+        )
+    except Exception as error:
+        logger.exception(
+            "r2_publication_cleanup_summary publication_id=%s "
+            "result=failed reason=pre_meta_staging_failure error=%s",
+            publication_id,
+            type(error).__name__,
+        )
+        return
+    if cleanup.complete and expiration_persisted:
+        try:
+            history_tracker.acknowledge_staging_media_cleanup(publication_id)
+        except Exception as error:
+            logger.exception(
+                "r2_publication_cleanup_summary publication_id=%s "
+                "result=ack_failed error=%s",
+                publication_id,
+                type(error).__name__,
+            )
 
 
 def _log_carousel_dry_run_success(plan: CarouselPlan, artifact_paths: list[str]) -> None:
@@ -431,9 +509,10 @@ def run_single_post(args) -> SinglePostResolution:
 
     if args.dry_run:
         logger.info("[DRY-RUN MODE] Skipping history reservation.")
+        publication_id = None
     else:
         logger.info("Reserving artwork in history (PRE-WRITE)...")
-        history_tracker.reserve_artwork(artwork)
+        publication_id = history_tracker.reserve_artwork(artwork)
         logger.info("reservation_complete mode=single count=1")
 
     output_media_path = prepared_image.path
@@ -501,7 +580,18 @@ def run_single_post(args) -> SinglePostResolution:
             "External single-image publishing override ignored; uploading the "
             "securely validated selected artwork."
         )
-    public_media_url = image_processor.upload_temp_media(output_media_path)
+    if publication_id is None:
+        raise RuntimeError("Single publication reservation returned no publication ID")
+    try:
+        media_upload = image_processor.upload_temp_media(
+            output_media_path, publication_id
+        )
+    except Exception:
+        _handle_pre_meta_staging_failure(
+            [artwork["id"]], publication_id, ()
+        )
+        raise
+    public_media_url = media_upload.public_url
     logger.info("upload_complete mode=single count=1")
 
     publish_attempt_started = False
@@ -543,6 +633,10 @@ def run_single_post(args) -> SinglePostResolution:
                 [artwork["id"]],
                 f"definitive_media_publish_rejection:{type(error).__name__}",
                 authoritative=True,
+            )
+            _cleanup_authoritatively_expired_media(
+                publication_id,
+                reason="definitive_media_publish_rejection",
             )
         raise
     except Exception as error:
@@ -835,7 +929,7 @@ def run_carousel_post(args):
 
     # All selection, copy, validation, and rendering has succeeded. Reserve the
     # all variable-length canonical IDs together before any Instagram media operation.
-    history_tracker.reserve_carousel(
+    publication_id = history_tracker.reserve_carousel(
         dict(plan.cover.artwork),
         [dict(art) for art in plan.featured_artworks],
         theme_id=plan.theme.id,
@@ -843,7 +937,18 @@ def run_carousel_post(args):
         carousel_format=plan.theme.format.value,
     )
     logger.info("reservation_complete mode=carousel count=%s", len(plan.publication_ids))
-    public_urls = [image_processor.upload_temp_media(path) for path in output_media_paths]
+    media_uploads: list[r2_media.TempMediaUpload] = []
+    try:
+        for path in output_media_paths:
+            media_uploads.append(
+                image_processor.upload_temp_media(path, publication_id)
+            )
+    except Exception:
+        _handle_pre_meta_staging_failure(
+            plan.publication_ids, publication_id, media_uploads
+        )
+        raise
+    public_urls = [upload.public_url for upload in media_uploads]
     logger.info("upload_complete mode=carousel count=%s", len(public_urls))
 
     account_id = os.environ.get("INSTAGRAM_ACCOUNT_ID")
@@ -887,6 +992,10 @@ def run_carousel_post(args):
                 plan.publication_ids,
                 f"definitive_media_publish_rejection:{type(error).__name__}",
                 authoritative=True,
+            )
+            _cleanup_authoritatively_expired_media(
+                publication_id,
+                reason="definitive_media_publish_rejection",
             )
         raise
     except Exception as error:
@@ -967,14 +1076,20 @@ def main(argv: list[str] | None = None) -> int:
             )
             logger.info(
                 "reconciliation_complete manual=true inspected=%s published=%s "
-                "not_published=%s ambiguous=%s errors=%s",
+                "not_published=%s ambiguous=%s errors=%s cleanup_inspected=%s "
+                "cleanup_deleted=%s cleanup_failures=%s",
                 summary.inspected,
                 summary.confirmed_published,
                 summary.confirmed_not_published,
                 summary.still_ambiguous,
                 summary.errors,
+                getattr(summary, "cleanup_inspected", 0),
+                getattr(summary, "cleanup_deleted", 0),
+                getattr(summary, "cleanup_failures", 0),
             )
-            return 1 if summary.errors else 0
+            return 1 if (
+                summary.errors or getattr(summary, "cleanup_failures", 0)
+            ) else 0
 
         mode = _resolve_production_mode(args)
         if not args.dry_run:
@@ -997,12 +1112,16 @@ def main(argv: list[str] | None = None) -> int:
             )
             logger.info(
                 "reconciliation_complete manual=false inspected=%s published=%s "
-                "not_published=%s ambiguous=%s errors=%s",
+                "not_published=%s ambiguous=%s errors=%s cleanup_inspected=%s "
+                "cleanup_deleted=%s cleanup_failures=%s",
                 summary.inspected,
                 summary.confirmed_published,
                 summary.confirmed_not_published,
                 summary.still_ambiguous,
                 summary.errors,
+                getattr(summary, "cleanup_inspected", 0),
+                getattr(summary, "cleanup_deleted", 0),
+                getattr(summary, "cleanup_failures", 0),
             )
 
         if mode is ProductionMode.CAROUSEL:

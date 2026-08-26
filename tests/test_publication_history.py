@@ -903,3 +903,85 @@ def test_legacy_history_reads_never_generate_publication_uuid(monkeypatch):
     assert history_tracker.get_posted_ids() == {"met_legacy"}
     assert history_tracker.get_grid_color_tone() == "warm"
     uuid4.assert_not_called()
+
+
+def test_cleanup_queue_survives_expired_artwork_rereservation(monkeypatch):
+    history = {
+        "posted_artworks": [
+            {
+                "id": "aic_1",
+                "publication_id": "expired-publication",
+                "publication_type": "single",
+                "status": "EXPIRED",
+                "reserved_at": "2026-08-26T09:00:00Z",
+                "expired_at": "2026-08-26T11:00:00Z",
+            }
+        ],
+        history_tracker.STAGING_MEDIA_CLEANUP_QUEUE_KEY: [
+            {
+                "publication_id": "expired-publication",
+                "eligible_at": "2026-08-26T11:00:00Z",
+                "reason": "pre_meta_staging_failure",
+            }
+        ],
+    }
+    monkeypatch.setattr(
+        history_tracker, "load_history_with_etag", lambda: (history, "etag")
+    )
+    monkeypatch.setattr(history_tracker, "_upload_history", lambda *args: None)
+
+    new_publication_id = history_tracker.reserve_artwork(_artwork("aic_1"))
+
+    assert new_publication_id != "expired-publication"
+    assert history["posted_artworks"][0]["publication_id"] == new_publication_id
+    assert history_tracker.list_staging_media_cleanup_publication_ids(
+        limit=10
+    ) == ["expired-publication"]
+
+
+def test_cleanup_queue_skips_active_publication_ids(monkeypatch):
+    history = {
+        "posted_artworks": [
+            {
+                "id": "aic_1",
+                "publication_id": "publication-active",
+                "publication_type": "single",
+                "status": "PUBLISHING",
+                "reserved_at": "2026-08-26T09:00:00Z",
+            }
+        ],
+        history_tracker.STAGING_MEDIA_CLEANUP_QUEUE_KEY: [
+            {
+                "publication_id": "publication-active",
+                "eligible_at": "2026-08-26T11:00:00Z",
+                "reason": "stale_entry",
+            }
+        ],
+    }
+    monkeypatch.setattr(
+        history_tracker, "load_history_with_etag", lambda: (history, "etag")
+    )
+
+    assert history_tracker.list_staging_media_cleanup_publication_ids(
+        limit=10
+    ) == []
+
+
+def test_malformed_cleanup_queue_fails_closed(monkeypatch):
+    history = {
+        "posted_artworks": [],
+        history_tracker.STAGING_MEDIA_CLEANUP_QUEUE_KEY: [
+            {
+                "publication_id": "../posted_history",
+                "eligible_at": "2026-08-26T11:00:00Z",
+                "reason": "unsafe",
+            }
+        ],
+    }
+    monkeypatch.setattr(
+        history_tracker, "load_history_with_etag", lambda: (history, "etag")
+    )
+
+    assert history_tracker.list_staging_media_cleanup_publication_ids(
+        limit=10
+    ) == []

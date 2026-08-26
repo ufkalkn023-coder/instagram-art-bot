@@ -4,7 +4,7 @@ from types import SimpleNamespace
 import pytest
 
 import main
-from src import history_tracker, instagram_poster
+from src import history_tracker, instagram_poster, r2_media
 from src.carousel_plan import CoverAsset, CoverMode, CoverScoreBreakdown
 from src.instagram_image import (
     InstagramImagePublishability,
@@ -29,6 +29,15 @@ def _cover(artwork_id="met_cover"):
     artwork = _artwork(artwork_id)
     breakdown = CoverScoreBreakdown(20, 30, 12, 9, 9, 4, 4)
     return CoverAsset(artwork, artwork["local_image_path"], CoverMode.FULL_ARTWORK, breakdown.total, breakdown)
+
+
+def _owned_upload(path, publication_id):
+    return r2_media.TempMediaUpload(
+        f"images/publications/{publication_id}/"
+        "20260826120000_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.jpg",
+        f"https://example.test/{path}",
+        publication_id,
+    )
 
 
 def test_ambiguous_reservation_is_a_permanent_canonical_duplicate_lock(monkeypatch):
@@ -96,7 +105,7 @@ def _mock_single_post_dependencies(monkeypatch, post_result):
     monkeypatch.setattr(main.history_tracker, "get_posted_ids", lambda: set())
     monkeypatch.setattr(main.history_tracker, "get_grid_color_tone", lambda: "warm")
     monkeypatch.setattr(main.history_tracker, "get_recent_history", lambda: [])
-    monkeypatch.setattr(main.history_tracker, "reserve_artwork", lambda value: None)
+    monkeypatch.setattr(main.history_tracker, "reserve_artwork", lambda value: "publication-1")
     monkeypatch.setattr(main.history_tracker, "start_publication_attempt", lambda *args: 1)
     monkeypatch.setattr(main.history_tracker, "mark_publication_not_published", lambda *args, **kwargs: 1)
     monkeypatch.setattr(main.history_tracker, "record_publish_response", lambda *args: 1)
@@ -134,7 +143,9 @@ def _mock_single_post_dependencies(monkeypatch, post_result):
     monkeypatch.setattr(
         main.image_processor,
         "upload_temp_media",
-        lambda path: "https://example.test/validated-artwork.jpg",
+        lambda path, publication_id: _owned_upload(
+            "validated-artwork.jpg", publication_id
+        ),
     )
     def publish_with_boundary(**kwargs):
         kwargs["before_publish"]("container-1", ())
@@ -154,6 +165,11 @@ def test_single_ambiguous_publish_marks_history_and_reraises(monkeypatch):
     artwork = _mock_single_post_dependencies(monkeypatch, publish)
     monkeypatch.setattr(main.history_tracker, "mark_artwork_ambiguous", lambda artwork_id: marked.append(artwork_id))
     monkeypatch.setattr(main.history_tracker, "confirm_artwork", lambda *args: confirmed.append(args))
+    monkeypatch.setattr(
+        main.r2_media,
+        "cleanup_publication_media",
+        lambda *args, **kwargs: pytest.fail("ambiguous media was cleaned"),
+    )
 
     with pytest.raises(instagram_poster.InstagramPublishAmbiguousError):
         main.run_single_post(SimpleNamespace(dry_run=False, image_url="https://example.test/image.jpg", pinterest=False))
@@ -164,17 +180,32 @@ def test_single_ambiguous_publish_marks_history_and_reraises(monkeypatch):
 
 def test_single_permanent_instagram_error_does_not_mark_ambiguous(monkeypatch):
     marked = []
+    cleaned = []
 
     def publish(**kwargs):
         raise instagram_poster.InstagramAPIError("invalid image")
 
     _mock_single_post_dependencies(monkeypatch, publish)
     monkeypatch.setattr(main.history_tracker, "mark_artwork_ambiguous", lambda artwork_id: marked.append(artwork_id))
+    monkeypatch.setattr(
+        main.r2_media,
+        "cleanup_publication_media",
+        lambda publication_id, **kwargs: cleaned.append(publication_id)
+        or r2_media.MediaCleanupSummary(
+            publication_id, 1, 1, 0, True, kwargs["reason"]
+        ),
+    )
+    monkeypatch.setattr(
+        main.history_tracker,
+        "acknowledge_staging_media_cleanup",
+        lambda publication_id: True,
+    )
 
     with pytest.raises(instagram_poster.InstagramAPIError):
         main.run_single_post(SimpleNamespace(dry_run=False, image_url="https://example.test/image.jpg", pinterest=False))
 
     assert marked == []
+    assert cleaned == ["publication-1"]
 
 
 def test_successful_single_publish_uploads_validated_asset_and_confirms_history(monkeypatch):
@@ -185,11 +216,24 @@ def test_successful_single_publish_uploads_validated_asset_and_confirms_history(
         lambda **kwargs: published.append(kwargs) or "media-123",
     )
     monkeypatch.setattr(main.history_tracker, "confirm_artwork", lambda *args: confirmed.append(args))
+    pins = []
+    monkeypatch.setattr(
+        main.pinterest_poster,
+        "post_to_pinterest",
+        lambda **kwargs: pins.append(kwargs) or True,
+    )
+    monkeypatch.setattr(
+        main.r2_media,
+        "cleanup_publication_media",
+        lambda *args, **kwargs: pytest.fail("successful media was cleaned"),
+    )
 
-    main.run_single_post(SimpleNamespace(dry_run=False, image_url="https://example.test/image.jpg", pinterest=False))
+    main.run_single_post(SimpleNamespace(dry_run=False, image_url="https://example.test/image.jpg", pinterest=True))
 
     assert published[0]["media_url"] == "https://example.test/validated-artwork.jpg"
     assert confirmed == [(artwork["id"], "media-123")]
+    assert pins[0]["image_url"] == "https://example.test/validated-artwork.jpg"
+    assert pins[0]["link"] == "https://example.test/validated-artwork.jpg"
 
 
 def test_single_publish_boundary_write_failure_does_not_call_instagram(monkeypatch):
@@ -200,6 +244,11 @@ def test_single_publish_boundary_write_failure_does_not_call_instagram(monkeypat
         "start_publication_attempt",
         lambda *args: (_ for _ in ()).throw(OSError("R2 unavailable")),
     )
+    monkeypatch.setattr(
+        main.r2_media,
+        "cleanup_publication_media",
+        lambda *args, **kwargs: pytest.fail("uncertain media was cleaned"),
+    )
 
     with pytest.raises(OSError, match="R2 unavailable"):
         main.run_single_post(
@@ -207,6 +256,78 @@ def test_single_publish_boundary_write_failure_does_not_call_instagram(monkeypat
         )
 
     assert calls == []
+
+
+def test_single_pre_meta_staging_failure_expires_and_cleans_owned_prefix(monkeypatch):
+    _mock_single_post_dependencies(
+        monkeypatch, lambda **kwargs: pytest.fail("Meta was called")
+    )
+    monkeypatch.setattr(
+        main.image_processor,
+        "upload_temp_media",
+        lambda *args: (_ for _ in ()).throw(RuntimeError("staging failed")),
+    )
+    expired = []
+    monkeypatch.setattr(
+        main.history_tracker,
+        "mark_publication_not_published",
+        lambda ids, reason, **kwargs: expired.append((tuple(ids), reason, kwargs))
+        or 1,
+    )
+    cleaned = []
+    monkeypatch.setattr(
+        main.r2_media,
+        "cleanup_publication_media",
+        lambda publication_id, **kwargs: cleaned.append(publication_id)
+        or r2_media.MediaCleanupSummary(
+            publication_id, 0, 0, 0, True, kwargs["reason"]
+        ),
+    )
+    monkeypatch.setattr(
+        main.history_tracker,
+        "acknowledge_staging_media_cleanup",
+        lambda publication_id: True,
+    )
+
+    with pytest.raises(RuntimeError, match="staging failed"):
+        main.run_single_post(
+            SimpleNamespace(dry_run=False, image_url=None, pinterest=False)
+        )
+
+    assert expired == [
+        (("aic_84774",), "pre_meta_staging_failure", {"authoritative": True})
+    ]
+    assert cleaned == ["publication-1"]
+
+
+def test_pre_meta_prefix_cleanup_waits_for_durable_expiration(monkeypatch):
+    upload = _owned_upload("validated-artwork.jpg", "publication-1")
+    monkeypatch.setattr(
+        main.history_tracker,
+        "mark_publication_not_published",
+        lambda *args, **kwargs: (_ for _ in ()).throw(OSError("CAS failed")),
+    )
+    rolled_back = []
+    monkeypatch.setattr(
+        main.r2_media,
+        "rollback_temp_media_uploads",
+        lambda publication_id, uploads: rolled_back.append(
+            (publication_id, tuple(uploads))
+        ),
+    )
+    monkeypatch.setattr(
+        main.r2_media,
+        "cleanup_publication_media",
+        lambda *args, **kwargs: pytest.fail(
+            "prefix cleanup ran before durable EXPIRED"
+        ),
+    )
+
+    main._handle_pre_meta_staging_failure(
+        ["aic_84774"], "publication-1", [upload]
+    )
+
+    assert rolled_back == [("publication-1", (upload,))]
 
 
 def test_ambiguous_carousel_marks_every_reservation_and_reraises(monkeypatch):
@@ -228,7 +349,11 @@ def test_ambiguous_carousel_marks_every_reservation_and_reraises(monkeypatch):
         "render_carousel_featured_artwork",
         lambda *args, **kwargs: SimpleNamespace(output_path="post.jpg"),
     )
-    monkeypatch.setattr(main.image_processor, "upload_temp_media", lambda path: f"https://example.test/{path}")
+    monkeypatch.setattr(
+        main.image_processor,
+        "upload_temp_media",
+        lambda path, publication_id: _owned_upload(path, publication_id),
+    )
 
     def publish(**kwargs):
         kwargs["before_publish"]("parent-container", tuple(f"child-{index}" for index in range(9)))

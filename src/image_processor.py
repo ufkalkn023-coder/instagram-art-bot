@@ -1,70 +1,21 @@
-import os
 import random
 import logging
-import requests
-import time
-import uuid
-import boto3
-from datetime import datetime
-from botocore.config import Config
-from botocore.exceptions import (
-    ClientError,
-    ConnectTimeoutError,
-    ConnectionClosedError,
-    EndpointConnectionError,
-    ReadTimeoutError,
-)
 from typing import Tuple
 
 from PIL import Image, ImageDraw
 
 import config
+from src import r2_media
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
+# Backward-compatible observability aliases; R2 media operations live in r2_media.
+R2_CLIENT_CONFIG = r2_media.R2_CLIENT_CONFIG
+_is_transient_r2_upload_error = r2_media._is_transient_r2_error
+
 # Available frame styles
 FRAME_STYLES = ["palette_border", "gradient_border", "clean"]
-R2_CLIENT_CONFIG = Config(
-    connect_timeout=10,
-    read_timeout=30,
-    # upload_temp_media owns the three logged application-level attempts.
-    retries={"total_max_attempts": 1, "mode": "standard"},
-)
-_TRANSIENT_R2_HTTP_STATUSES = {408, 429, 500, 502, 503, 504}
-_TRANSIENT_R2_ERROR_CODES = {
-    "InternalError",
-    "RequestTimeout",
-    "ServiceUnavailable",
-    "SlowDown",
-    "Throttling",
-    "ThrottlingException",
-}
-_TRANSIENT_R2_EXCEPTIONS = (
-    ConnectTimeoutError,
-    ConnectionClosedError,
-    EndpointConnectionError,
-    ReadTimeoutError,
-)
-
-
-def _is_transient_r2_upload_error(error: BaseException) -> bool:
-    """Classify retryable R2 failures, including boto3 wrapper chains."""
-    current: BaseException | None = error
-    seen: set[int] = set()
-    while current is not None and id(current) not in seen:
-        seen.add(id(current))
-        if isinstance(current, _TRANSIENT_R2_EXCEPTIONS):
-            return True
-        if isinstance(current, ClientError):
-            response = current.response
-            status = response.get("ResponseMetadata", {}).get("HTTPStatusCode")
-            code = response.get("Error", {}).get("Code")
-            return status in _TRANSIENT_R2_HTTP_STATUSES or code in _TRANSIENT_R2_ERROR_CODES
-        current = current.__cause__ or current.__context__
-    return False
-
-
 def _get_dominant_colors(img: Image.Image, num_colors: int = 5) -> list:
     """Extracts dominant colors from an image using color quantization."""
     small = img.copy()
@@ -188,99 +139,14 @@ def _upload_image_metadata(file_path: str) -> tuple[str, str]:
 
 
 
-def upload_temp_media(file_path: str) -> str:
-    """
-    Uploads processed image to Cloudflare R2.
-    Returns the public HTTP URL of the uploaded image.
-    """
-    logger.info("Uploading image to Cloudflare R2...")
-    
-    account_id = os.environ.get("CLOUDFLARE_R2_ACCOUNT_ID", "").strip()
-    access_key = os.environ.get("CLOUDFLARE_R2_ACCESS_KEY_ID", "").strip()
-    secret_key = os.environ.get("CLOUDFLARE_R2_SECRET_ACCESS_KEY", "").strip()
-    bucket_name = os.environ.get("CLOUDFLARE_R2_BUCKET_NAME", "").strip()
-    public_url_base = os.environ.get("CLOUDFLARE_R2_PUBLIC_URL", "").strip()
-    
-    if not all([account_id, access_key, secret_key, bucket_name, public_url_base]):
-        raise ValueError("Missing one or more CLOUDFLARE_R2_* environment variables!")
-        
-    public_url_base = public_url_base.rstrip('/')
-    
-    # Generate unique object key
-    timestamp = datetime.now().strftime("%Y%m%d%H%M%S")
-    unique_id = str(uuid.uuid4())[:8]
-    
+def upload_temp_media(
+    file_path: str, publication_id: str
+) -> r2_media.TempMediaUpload:
+    """Upload a decoded image into one publication-owned R2 namespace."""
     content_type, file_suffix = _upload_image_metadata(file_path)
-    object_key = f"images/{timestamp}_{unique_id}{file_suffix}"
-        
-    endpoint_url = f"https://{account_id}.r2.cloudflarestorage.com"
-    
-    # Initialize boto3 S3 client
-    s3_client = boto3.client(
-        "s3",
-        endpoint_url=endpoint_url,
-        aws_access_key_id=access_key,
-        aws_secret_access_key=secret_key,
-        region_name="auto",
-        config=R2_CLIENT_CONFIG,
-    )
-    
-    # Upload with 3 retries
-    upload_success = False
-    for attempt in range(1, 4):
-        try:
-            logger.info(f"R2 upload attempt {attempt}/3...")
-            s3_client.upload_file(
-                file_path, 
-                bucket_name, 
-                object_key,
-                ExtraArgs={"ContentType": content_type}
-            )
-            upload_success = True
-            break
-        except Exception as e:
-            retryable = _is_transient_r2_upload_error(e)
-            logger.warning(
-                "R2 upload failed attempt=%s/3 error=%s retryable=%s",
-                attempt,
-                type(e).__name__,
-                retryable,
-            )
-            if retryable and attempt < 3:
-                time.sleep(2)
-                continue
-            break
-                
-    if not upload_success:
-        raise RuntimeError("Failed to upload media to Cloudflare R2 after 3 attempts.")
-        
-    # Construct public URL
-    final_url = f"{public_url_base}/{object_key}"
-    logger.info("File uploaded to R2. Validating public object: %s", object_key)
-    
-    # HEAD check to ensure Instagram can reach it
-    for head_attempt in range(1, 4):
-        try:
-            head_res = requests.head(final_url, allow_redirects=True, timeout=10)
-            if head_res.status_code == 200:
-                res_content_type = head_res.headers.get("Content-Type", "")
-                res_content_length = int(head_res.headers.get("Content-Length", 0))
-                
-                # Verify length and type
-                response_media_type = res_content_type.split(";", 1)[0].strip().casefold()
-                if res_content_length > 0 and response_media_type == content_type:
-                    logger.info("Public URL health check passed!")
-                    return final_url
-                else:
-                    logger.warning(f"Health check warning: type={res_content_type}, length={res_content_length}")
-            else:
-                logger.warning(f"Health check failed with HTTP {head_res.status_code}")
-                
-        except Exception as e:
-            logger.warning(f"Health check error: {e}")
-            
-        time.sleep(2)
-        
-    raise RuntimeError(
-        f"R2 object {object_key} uploaded successfully, but its public health check failed."
+    return r2_media.stage_temp_media(
+        file_path,
+        publication_id=publication_id,
+        content_type=content_type,
+        file_suffix=file_suffix,
     )

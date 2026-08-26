@@ -5,7 +5,7 @@ from types import SimpleNamespace
 import pytest
 
 import main
-from src import instagram_poster
+from src import instagram_poster, r2_media
 from src.art_fetcher import SelectionRunSeed
 from src.carousel_cover import EditorialCoverSelectionError
 from src.carousel_plan import CoverAsset, CoverMode, CoverScoreBreakdown
@@ -42,6 +42,16 @@ def _cover():
     }
     breakdown = CoverScoreBreakdown(20, 30, 12, 9, 9, 4, 4)
     return CoverAsset(artwork, "raw-cover.jpg", CoverMode.DETAIL_CROP, breakdown.total, breakdown)
+
+
+def _owned_upload(path, publication_id):
+    suffix = os.path.basename(path)
+    nonce = f"{abs(hash(suffix)):032x}"[-32:]
+    return r2_media.TempMediaUpload(
+        f"images/publications/{publication_id}/20260826120000_{nonce}.jpg",
+        f"https://media.example/{suffix}",
+        publication_id,
+    )
 
 
 def _install_reads_and_selection(monkeypatch, calls, featured=None, cover=None):
@@ -107,12 +117,13 @@ def test_carousel_media_and_caption_order_are_cover_then_featured_one_through_ei
         main.history_tracker,
         "reserve_carousel",
         lambda cover_artwork, featured_artworks, **theme_metadata: calls.append("reserve")
-        or reserved.append((cover_artwork, featured_artworks, theme_metadata)),
+        or reserved.append((cover_artwork, featured_artworks, theme_metadata))
+        or "publication-1",
     )
     monkeypatch.setattr(
         main.image_processor,
         "upload_temp_media",
-        lambda path: f"https://media.example/{os.path.basename(path)}",
+        lambda path, publication_id: _owned_upload(path, publication_id),
     )
     monkeypatch.setattr(
         main.history_tracker,
@@ -135,6 +146,11 @@ def test_carousel_media_and_caption_order_are_cover_then_featured_one_through_ei
         main.history_tracker,
         "confirm_carousel_publication",
         lambda *args: confirmed.append(args) or 9,
+    )
+    monkeypatch.setattr(
+        main.r2_media,
+        "cleanup_publication_media",
+        lambda *args, **kwargs: pytest.fail("successful carousel media was cleaned"),
     )
 
     main.run_carousel_post(SimpleNamespace(dry_run=False, image_url=None, pinterest=False))
@@ -162,6 +178,77 @@ def test_carousel_media_and_caption_order_are_cover_then_featured_one_through_ei
     assert confirmed == [(cover.canonical_id, tuple(art["id"] for art in featured), "media-1")]
 
 
+@pytest.mark.parametrize(("failure_attempt", "expected_rollbacks"), ((1, 0), (4, 3)))
+def test_carousel_staging_failure_rolls_back_only_completed_owned_uploads(
+    monkeypatch, failure_attempt, expected_rollbacks
+):
+    calls = []
+    featured, cover = _install_reads_and_selection(monkeypatch, calls)
+    _install_copy_and_render(monkeypatch, calls)
+    monkeypatch.setattr(
+        main.history_tracker,
+        "reserve_carousel",
+        lambda *args, **kwargs: "publication-1",
+    )
+    uploaded = []
+
+    def upload(path, publication_id):
+        if len(uploaded) + 1 == failure_attempt:
+            raise RuntimeError("staging failed")
+        handle = _owned_upload(path, publication_id)
+        uploaded.append(handle)
+        return handle
+
+    monkeypatch.setattr(main.image_processor, "upload_temp_media", upload)
+    expired = []
+    monkeypatch.setattr(
+        main.history_tracker,
+        "mark_publication_not_published",
+        lambda ids, *args, **kwargs: expired.append(tuple(ids)) or len(ids),
+    )
+    exact_deletes = []
+    monkeypatch.setattr(
+        main.r2_media,
+        "cleanup_temp_media_upload",
+        lambda handle, **kwargs: exact_deletes.append(handle.object_key) or True,
+    )
+    prefix_cleanups = []
+    monkeypatch.setattr(
+        main.r2_media,
+        "cleanup_publication_media",
+        lambda publication_id, **kwargs: prefix_cleanups.append(publication_id)
+        or r2_media.MediaCleanupSummary(
+            publication_id, 0, 0, 0, True, kwargs["reason"]
+        ),
+    )
+    acknowledged = []
+    monkeypatch.setattr(
+        main.history_tracker,
+        "acknowledge_staging_media_cleanup",
+        lambda publication_id: acknowledged.append(publication_id) or True,
+    )
+    monkeypatch.setattr(
+        main.instagram_poster,
+        "post_carousel_to_instagram_graph_api",
+        lambda **kwargs: pytest.fail("Meta was called after staging failure"),
+    )
+
+    with pytest.raises(RuntimeError, match="staging failed"):
+        main.run_carousel_post(
+            SimpleNamespace(dry_run=False, image_url=None, pinterest=False)
+        )
+
+    assert len(uploaded) == expected_rollbacks
+    assert exact_deletes == [
+        handle.object_key for handle in reversed(uploaded)
+    ]
+    assert prefix_cleanups == ["publication-1"]
+    assert acknowledged == ["publication-1"]
+    assert expired == [
+        (cover.canonical_id, *[art["id"] for art in featured])
+    ]
+
+
 def test_final_sequence_controls_artifacts_caption_reservation_and_history_positions(monkeypatch):
     calls = []
     featured, cover = _install_reads_and_selection(monkeypatch, calls)
@@ -187,12 +274,13 @@ def test_final_sequence_controls_artifacts_caption_reservation_and_history_posit
     monkeypatch.setattr(
         main.history_tracker,
         "reserve_carousel",
-        lambda cover_artwork, featured_artworks, **metadata: reserved.extend(featured_artworks),
+        lambda cover_artwork, featured_artworks, **metadata: reserved.extend(featured_artworks)
+        or "publication-1",
     )
     monkeypatch.setattr(
         main.image_processor,
         "upload_temp_media",
-        lambda path: f"https://media.example/{os.path.basename(path)}",
+        lambda path, publication_id: _owned_upload(path, publication_id),
     )
     monkeypatch.setattr(main.history_tracker, "start_publication_attempt", lambda *args: 9)
     monkeypatch.setattr(main.history_tracker, "record_publish_response", lambda *args: 9)
@@ -328,7 +416,11 @@ def test_definite_publish_failure_expires_all_nine_ids(monkeypatch):
     publishing = []
     expired = []
     monkeypatch.setattr(main.history_tracker, "reserve_carousel", lambda *args, **kwargs: "publication-1")
-    monkeypatch.setattr(main.image_processor, "upload_temp_media", lambda path: f"https://media/{path}")
+    monkeypatch.setattr(
+        main.image_processor,
+        "upload_temp_media",
+        lambda path, publication_id: _owned_upload(path, publication_id),
+    )
     monkeypatch.setattr(
         main.history_tracker,
         "start_publication_attempt",
@@ -338,6 +430,20 @@ def test_definite_publish_failure_expires_all_nine_ids(monkeypatch):
         main.history_tracker,
         "mark_publication_not_published",
         lambda ids, *args, **kwargs: expired.extend(ids) or 9,
+    )
+    cleaned = []
+    monkeypatch.setattr(
+        main.r2_media,
+        "cleanup_publication_media",
+        lambda publication_id, **kwargs: cleaned.append(publication_id)
+        or r2_media.MediaCleanupSummary(
+            publication_id, 9, 9, 0, True, kwargs["reason"]
+        ),
+    )
+    monkeypatch.setattr(
+        main.history_tracker,
+        "acknowledge_staging_media_cleanup",
+        lambda publication_id: True,
     )
 
     def reject(**kwargs):
@@ -356,3 +462,4 @@ def test_definite_publish_failure_expires_all_nine_ids(monkeypatch):
     expected = [cover.canonical_id, *[art["id"] for art in featured]]
     assert publishing == expected
     assert expired == expected
+    assert cleaned == ["publication-1"]

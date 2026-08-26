@@ -3,7 +3,7 @@ from types import SimpleNamespace
 import pytest
 
 import main
-from src import art_fetcher
+from src import art_fetcher, r2_media
 from src.art_fetcher import SelectionRunSeed
 from src.carousel_cover import EditorialCoverSelectionError
 from src.carousel_plan import CoverAsset, CoverMode, CoverScoreBreakdown
@@ -37,6 +37,15 @@ def _cover(identifier="met_cover"):
     }
     breakdown = CoverScoreBreakdown(20, 30, 12, 9, 9, 4, 4)
     return CoverAsset(artwork, "raw-cover.jpg", CoverMode.FULL_ARTWORK, breakdown.total, breakdown)
+
+
+def _owned_upload(path, publication_id):
+    return r2_media.TempMediaUpload(
+        f"images/publications/{publication_id}/"
+        "20260826120000_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.jpg",
+        f"https://media/{path}",
+        publication_id,
+    )
 
 
 class PlannerOrder:
@@ -185,9 +194,14 @@ def test_only_successful_fallback_theme_is_reserved_in_history(monkeypatch):
     monkeypatch.setattr(
         main.history_tracker,
         "reserve_carousel",
-        lambda cover_artwork, featured_artworks, **metadata: reservations.append(metadata),
+        lambda cover_artwork, featured_artworks, **metadata: reservations.append(metadata)
+        or "publication-1",
     )
-    monkeypatch.setattr(main.image_processor, "upload_temp_media", lambda path: f"https://media/{path}")
+    monkeypatch.setattr(
+        main.image_processor,
+        "upload_temp_media",
+        lambda path, publication_id: _owned_upload(path, publication_id),
+    )
     monkeypatch.setattr(main.history_tracker, "start_publication_attempt", lambda *args: None)
     monkeypatch.setattr(main.history_tracker, "record_publish_response", lambda *args: None)
 
