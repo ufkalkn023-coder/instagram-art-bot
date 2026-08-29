@@ -219,11 +219,7 @@ def test_publication_minimum_is_separate_from_preferred_headroom(monkeypatch):
             monkeypatch=monkeypatch,
         )
 
-    five = acquire_count(5)
-    assert not five.availability.sufficient
-    assert five.availability.failure_reason == "insufficient_unique_pool"
-
-    for count in range(6, 12):
+    for count in range(5, 12):
         narrow = acquire_count(count)
         assert narrow.availability.sufficient
         assert narrow.availability.narrow_pool
@@ -418,6 +414,45 @@ def test_raw_abundance_does_not_make_rights_or_relevance_pool_viable(monkeypatch
     assert rights_result.availability.failure_reason == "insufficient_rights_policy_pool"
     assert not relevance_result.availability.sufficient
     assert relevance_result.availability.failure_reason == "insufficient_relevance_pool"
+
+
+def test_smithsonian_search_provenance_cannot_replace_metadata_theme_evidence(monkeypatch):
+    theme = _theme(
+        id="candlelight_metadata_test",
+        title="Candlelight Metadata Test",
+        description="Candlelit works grounded by explicit catalog metadata.",
+        primary_queries=["candlelight painting"],
+        secondary_queries=[],
+        required_terms=["candlelight", "candle"],
+        required_term_groups=[],
+        preferred_terms=["interior", "darkness"],
+        excluded_terms=[],
+    )
+    decorative_objects = [
+        _candidate(
+            f"decorative-object-{index}",
+            title=f"Decorative Porcelain Vessel {index}",
+            description="An ornamental vessel with floral decoration.",
+        ).model_copy(
+            update={
+                "source": "smithsonian",
+                "medium": "Porcelain with enamel decoration",
+                "classification": "Decorative Arts",
+            }
+        )
+        for index in range(5)
+    ]
+    adapter = QueryAdapter({"candlelight painting": decorative_objects})
+    adapter.source_id = "smithsonian"
+
+    result = _acquire(theme, [adapter], monkeypatch=monkeypatch)
+    evidence = result.all_candidates[0].evidence
+
+    assert evidence.relevance_breakdown.primary_query > 0
+    assert not evidence.metadata_matches
+    assert not evidence.semantic_grounded
+    assert not result.candidates
+    assert result.availability.failure_reason == "insufficient_relevance_pool"
 
 
 def test_low_quality_pool_and_fully_posted_pool_have_distinct_reasons(monkeypatch):

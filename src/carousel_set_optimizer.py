@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import logging
-from collections import Counter
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
@@ -170,14 +169,6 @@ class CarouselSizeDiagnostic:
     hard_constraint_profile: str
     accepted: bool
     reason: str
-
-
-@dataclass(frozen=True)
-class _HardCaps:
-    name: str
-    artist: int | None
-    museum: int | None
-    region: int | None
 
 
 def normalize_known_identity(value: object) -> str | None:
@@ -453,23 +444,11 @@ def score_carousel_set(
     )
 
 
-def _within_caps(features: Sequence[ArtworkSelectionFeatures], caps: _HardCaps) -> bool:
-    artist_counts = Counter(feature.artist_key for feature in features if feature.artist_key)
-    museum_counts = Counter(feature.museum_key for feature in features if feature.museum_key)
-    region_counts = Counter(feature.region for feature in features if feature.region)
-    return (
-        (caps.artist is None or max(artist_counts.values(), default=0) <= caps.artist)
-        and (caps.museum is None or max(museum_counts.values(), default=0) <= caps.museum)
-        and (caps.region is None or max(region_counts.values(), default=0) <= caps.region)
-    )
-
-
 def _beam_construct(
     finalists: Sequence[ArtworkSelectionFeatures],
     *,
     count: int,
     theme: CarouselThemeDefinition,
-    caps: _HardCaps,
     cover_candidate_ids: frozenset[str],
     engagement_model: "EngagementModel | None" = None,
     engagement_context: Mapping[str, object] | None = None,
@@ -483,8 +462,6 @@ def _beam_construct(
                 if candidate.canonical_id in current_ids:
                     continue
                 proposed = (*current, candidate)
-                if not _within_caps(proposed, caps):
-                    continue
                 if cover_candidate_ids and not cover_candidate_ids.difference(
                     feature.canonical_id for feature in proposed
                 ):
@@ -508,34 +485,6 @@ def _beam_construct(
     return beam[0] if beam else None
 
 
-def _profiles_for_size(
-    theme: CarouselThemeDefinition, count: int
-) -> tuple[_HardCaps, _HardCaps]:
-    policy = FORMAT_POLICIES[theme.format]
-    return (
-        _HardCaps(
-            "strict",
-            artist=policy.strict_artist_cap,
-            museum=(
-                min(policy.strict_museum_cap, count)
-                if policy.strict_museum_cap is not None
-                else None
-            ),
-            region=policy.strict_region_cap,
-        ),
-        _HardCaps(
-            "relaxed",
-            artist=policy.relaxed_artist_cap,
-            museum=(
-                min(policy.relaxed_museum_cap, count)
-                if policy.relaxed_museum_cap is not None
-                else None
-            ),
-            region=policy.relaxed_region_cap,
-        ),
-    )
-
-
 def _optimize_for_size(
     finalists: Sequence[ArtworkSelectionFeatures],
     *,
@@ -547,25 +496,17 @@ def _optimize_for_size(
 ) -> tuple[
     tuple[ArtworkSelectionFeatures, ...],
     CarouselSetScoreBreakdown,
-    _HardCaps,
     int,
 ] | None:
-    selected = None
-    active_caps = None
-    for caps in _profiles_for_size(theme, count):
-        selected = _beam_construct(
-            finalists,
-            count=count,
-            theme=theme,
-            caps=caps,
-            cover_candidate_ids=cover_candidate_ids,
-            engagement_model=engagement_model,
-            engagement_context=engagement_context,
-        )
-        if selected is not None:
-            active_caps = caps
-            break
-    if selected is None or active_caps is None:
+    selected = _beam_construct(
+        finalists,
+        count=count,
+        theme=theme,
+        cover_candidate_ids=cover_candidate_ids,
+        engagement_model=engagement_model,
+        engagement_context=engagement_context,
+    )
+    if selected is None:
         return None
 
     swap_iterations = 0
@@ -583,8 +524,6 @@ def _optimize_for_size(
                 if candidate.canonical_id in selected_ids:
                     continue
                 proposed = (*selected[:index], candidate, *selected[index + 1 :])
-                if not _within_caps(proposed, active_caps):
-                    continue
                 if cover_candidate_ids and not cover_candidate_ids.difference(
                     feature.canonical_id for feature in proposed
                 ):
@@ -626,7 +565,6 @@ def _optimize_for_size(
             engagement_model=engagement_model,
             engagement_context=engagement_context,
         ),
-        active_caps,
         swap_iterations,
     )
 
@@ -635,7 +573,6 @@ def _marginal_inclusion_utility(
     selected: Sequence[ArtworkSelectionFeatures],
     *,
     theme: CarouselThemeDefinition,
-    profile_name: str,
     size_policy: CarouselSizePolicy,
     engagement_model: "EngagementModel | None" = None,
     engagement_context: Mapping[str, object] | None = None,
@@ -661,8 +598,6 @@ def _marginal_inclusion_utility(
             min(size_policy.max_set_effect, set_effect),
         )
         utility = feature.individual_strength + size_policy.set_effect_weight * bounded_effect
-        if profile_name == "relaxed":
-            utility -= size_policy.relaxed_constraint_penalty
         candidate = (round(utility, 4), feature.canonical_id)
         if weakest is None or candidate < weakest:
             weakest = candidate
@@ -715,7 +650,6 @@ def optimize_carousel_set(
         tuple[
             tuple[ArtworkSelectionFeatures, ...],
             CarouselSetScoreBreakdown,
-            _HardCaps,
             int,
         ],
     ] = {}
@@ -736,7 +670,7 @@ def optimize_carousel_set(
                 featured_count,
             )
             continue
-        selected_for_size, breakdown_for_size, caps_for_size, iterations_for_size = optimized
+        selected_for_size, breakdown_for_size, iterations_for_size = optimized
         optimized_by_size[featured_count] = optimized
         viable_sizes.append(featured_count)
         marginal = marginal_id = None
@@ -746,7 +680,6 @@ def optimize_carousel_set(
             marginal, marginal_id = _marginal_inclusion_utility(
                 selected_for_size,
                 theme=theme,
-                profile_name=caps_for_size.name,
                 size_policy=size_policy,
                 engagement_model=engagement_model,
                 engagement_context=engagement_context,
@@ -758,7 +691,7 @@ def optimize_carousel_set(
                 normalized_editorial_utility=breakdown_for_size.total,
                 marginal_inclusion_utility=marginal,
                 marginal_artwork_id=marginal_id,
-                hard_constraint_profile=caps_for_size.name,
+                hard_constraint_profile="intrinsic_only",
                 accepted=accepted,
                 reason=decision_reason,
             )
@@ -771,12 +704,12 @@ def optimize_carousel_set(
             breakdown_for_size.total,
             marginal,
             size_policy.marginal_inclusion_threshold,
-            caps_for_size.name,
+            "intrinsic_only",
             accepted,
         )
     chosen = optimized_by_size.get(MIN_FEATURED_WORKS)
     if chosen is None:
-        raise ValueError("Hard artist/museum/region/cover constraints prevent a minimum carousel set")
+        raise ValueError("Cover distinctness prevents a minimum carousel set")
     reason = "no_feasible_larger_set"
     diagnostics_by_size = {item.featured_count: item for item in diagnostics}
     for featured_count in range(MIN_FEATURED_WORKS + 1, maximum + 1):
@@ -795,7 +728,7 @@ def optimize_carousel_set(
             else "marginal_utility_threshold"
         )
 
-    selected, breakdown, active_caps, swap_iterations = chosen
+    selected, breakdown, swap_iterations = chosen
     artists = len({feature.artist_key for feature in selected if feature.artist_key})
     museums = len({feature.museum_key for feature in selected if feature.museum_key})
     regions = len({feature.region for feature in selected if feature.region})
@@ -858,7 +791,7 @@ def optimize_carousel_set(
         set_score=breakdown.total,
         breakdown=breakdown,
         finalist_count=len(finalists),
-        hard_constraint_profile=active_caps.name,
+        hard_constraint_profile="intrinsic_only",
         beam_width=SET_BEAM_WIDTH,
         swap_iterations=swap_iterations,
         optimizer_size_decision=reason,

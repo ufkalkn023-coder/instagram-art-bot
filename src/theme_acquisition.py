@@ -27,12 +27,12 @@ from src.models import NormalizedArtwork
 from src.museums.base import AdapterHTTPError
 from src.quality_filter import calculate_measurement_coverage, calculate_quality_score
 from src.rights_policy import is_rights_eligible
-from src.carousel_policy import MIN_TOTAL_SLIDES
+from src.carousel_policy import MIN_FEATURED_WORKS
 
 logger = logging.getLogger(__name__)
 
 DEFAULT_MIN_THEME_RELEVANCE = 60.0
-ABSOLUTE_MINIMUM_RELEVANT_POOL = MIN_TOTAL_SLIDES
+ABSOLUTE_MINIMUM_RELEVANT_POOL = MIN_FEATURED_WORKS
 PREFERRED_HEADROOM = 12
 # Compatibility names retained for existing callers and manifests.
 ABSOLUTE_MINIMUM = ABSOLUTE_MINIMUM_RELEVANT_POOL
@@ -770,15 +770,13 @@ def acquire_theme_candidates(
             )
     format_policy = get_format_policy(theme.format)
     logger.info(
-        "format_policy theme=%s format=%s required_target=%s artist_cap=%s museum_cap=%s "
+        "format_policy theme=%s format=%s required_target=%s general_diversity=soft "
         "same_artist_redundancy=%s same_museum_redundancy=%s sources=%s",
         theme.id,
         theme.format.value,
         format_policy.required_target_dimension.value
         if format_policy.required_target_dimension
         else "none",
-        format_policy.strict_artist_cap,
-        format_policy.strict_museum_cap,
         "penalized" if format_policy.penalize_artist_similarity else "ignored",
         "penalized" if format_policy.penalize_museum_similarity else "ignored",
         ",".join(sorted(source_constraint)) or "all",

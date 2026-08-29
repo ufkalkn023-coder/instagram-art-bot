@@ -1390,7 +1390,7 @@ def _select_acquired_theme_artworks(
                 pass
         raise CarouselSelectionError(
             f"Unable to build themed carousel: theme={acquisition.theme.id} reason={error}",
-            reason="diversity_constraints",
+            reason="insufficient_eligible_featured_pool",
             availability=acquisition.availability,
         ) from error
 

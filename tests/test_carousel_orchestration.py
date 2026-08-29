@@ -57,7 +57,7 @@ def _owned_upload(path, publication_id):
 def _install_reads_and_selection(monkeypatch, calls, featured=None, cover=None):
     featured = featured or _featured()
     cover = cover or _cover()
-    theme = get_default_theme_registry().by_id("winter_light")
+    theme = get_default_theme_registry().by_id("women_reading")
     monkeypatch.setattr(main.history_tracker, "get_posted_ids", lambda: set())
     monkeypatch.setattr(main.history_tracker, "get_grid_color_tone", lambda **kwargs: "cool")
     monkeypatch.setattr(main.history_tracker, "get_recent_carousel_theme_history", lambda: [])
@@ -159,9 +159,9 @@ def test_carousel_media_and_caption_order_are_cover_then_featured_one_through_ei
     assert calls.index("reserve") > calls.index("featured_render:carousel_08.jpg")
     assert reserved[0][0]["id"] == cover.canonical_id
     assert [art["id"] for art in reserved[0][1]] == [art["id"] for art in featured]
-    assert reserved[0][2]["theme_id"] == "winter_light"
-    assert reserved[0][2]["theme_family"] == "season"
-    assert reserved[0][2]["carousel_format"] == "LIGHT_STUDY"
+    assert reserved[0][2]["theme_id"] == "women_reading"
+    assert reserved[0][2]["theme_family"] == "human_activity"
+    assert reserved[0][2]["carousel_format"] == "THEMATIC_COLLECTION"
     assert reserved[0][2]["publication_metadata"]["featured_count"] == 8
     assert reserved[0][2]["publication_metadata"]["publish_slot"] in {
         "slot_1",
@@ -179,7 +179,7 @@ def test_carousel_media_and_caption_order_are_cover_then_featured_one_through_ei
     assert "1. Featured Title 1" in caption
     assert "8. Featured Title 8" in caption
     assert "COVER IDENTITY" not in caption
-    assert caption.startswith("Winter Light\n")
+    assert caption.startswith("Women Reading\n")
     assert confirmed == [(cover.canonical_id, tuple(art["id"] for art in featured), "media-1")]
 
 
@@ -357,11 +357,11 @@ def test_registry_title_and_explicit_query_flow_through_carousel_boundaries(monk
     main.run_carousel_post(SimpleNamespace(dry_run=True, image_url=None, pinterest=False))
 
     assert observed == {
-        "search_query": "winter light painting",
-        "cover_query": "winter light painting",
-        "gemini_title": "Winter Light",
-        "caption_title": "Winter Light",
-        "cover_title": "Winter Light",
+        "search_query": "woman reading",
+        "cover_query": "woman reading",
+        "gemini_title": "Women Reading",
+        "caption_title": "Women Reading",
+        "cover_title": "Women Reading",
     }
 
 

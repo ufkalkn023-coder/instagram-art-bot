@@ -338,10 +338,8 @@ def run_carousel_post(args):
     )
     initial_attempt_plan = attempt_planner.preview()
     logger.info(
-        "theme_attempt_plan themes=%s formats=%s families=%s evidence_modes=%s",
+        "theme_attempt_plan themes=%s evidence_modes=%s",
         ",".join(theme.id for theme in initial_attempt_plan),
-        ",".join(theme.format.value for theme in initial_attempt_plan),
-        ",".join(theme.family.value for theme in initial_attempt_plan),
         ",".join(theme.evidence_mode.value for theme in initial_attempt_plan),
     )
     artworks = None
@@ -367,22 +365,11 @@ def run_carousel_post(args):
         if attempted_themes:
             previous_failure = attempt_planner.failures[-1]
             logger.info(
-                "theme_fallback from=%s to=%s attempt=%s previous_reason=%s "
-                "format_changed=%s family_changed=%s evidence_mode_changed=%s",
+                "theme_fallback from=%s to=%s attempt=%s previous_reason=%s",
                 attempted_themes[-1][0],
                 candidate_theme.id,
                 attempt,
                 previous_failure.reason,
-                str(
-                    previous_failure.theme.format is not candidate_theme.format
-                ).lower(),
-                str(
-                    previous_failure.theme.family is not candidate_theme.family
-                ).lower(),
-                str(
-                    previous_failure.theme.evidence_mode
-                    is not candidate_theme.evidence_mode
-                ).lower(),
             )
         logger.info(
             "carousel_theme_attempt theme=%s title=%r attempt=%s compatibility_query=%r",

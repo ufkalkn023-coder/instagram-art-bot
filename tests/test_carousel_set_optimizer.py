@@ -18,7 +18,12 @@ from src.carousel_set_optimizer import (
     pairwise_redundancy,
     score_carousel_set,
 )
-from src.carousel_themes import CarouselFormat, CarouselThemeDefinition, ThemeFamily
+from src.carousel_themes import (
+    CarouselFormat,
+    CarouselThemeDefinition,
+    ThemeFamily,
+    get_default_theme_registry,
+)
 from src.engagement_learning import EngagementModel, FeatureEstimate
 from src.models import NormalizedArtwork
 from src.quality_filter import ImageValidationResult
@@ -183,7 +188,17 @@ def test_optimizer_preserves_floors_uniqueness_caps_and_determinism():
 def test_adaptive_optimizer_accepts_five_excellent_works_with_distinct_cover():
     theme = _theme()
     artworks = [
-        _artwork(index, relevance=score, quality=score, selection=score)
+        _artwork(
+            index,
+            artist="Repeated Artist",
+            museum="Single Museum",
+            region="europe",
+            date="1880",
+            medium="Watercolor on paper",
+            relevance=score,
+            quality=score,
+            selection=score,
+        )
         for index, score in enumerate((96.0, 94.0, 92.0, 90.0, 88.0))
     ]
 
@@ -192,6 +207,8 @@ def test_adaptive_optimizer_accepts_five_excellent_works_with_distinct_cover():
     )
 
     assert len(result.artworks) == 5
+    assert {artwork["museum"] for artwork in result.artworks} == {"Single Museum"}
+    assert {artwork["artist"] for artwork in result.artworks} == {"Repeated Artist"}
     assert result.optimizer_size_decision == "no_feasible_larger_set"
 
 
@@ -233,7 +250,7 @@ def test_adaptive_optimizer_rejects_a_weak_tail_instead_of_filling_to_eight():
     assert rejected.marginal_inclusion_utility is not None
 
 
-def test_strict_six_work_set_can_beat_relaxed_eight_work_fill():
+def test_soft_diversity_does_not_apply_strict_or_relaxed_profiles():
     theme = _theme()
     artworks = [
         _artwork(
@@ -257,10 +274,9 @@ def test_strict_six_work_set_can_beat_relaxed_eight_work_fill():
     )
 
     assert len(result.artworks) == 6
-    assert result.hard_constraint_profile == "strict"
+    assert result.hard_constraint_profile == "intrinsic_only"
     eight = next(item for item in result.marginal_diagnostics if item.featured_count == 8)
-    assert eight.hard_constraint_profile == "relaxed"
-    assert not eight.accepted
+    assert eight.hard_constraint_profile == "intrinsic_only"
 
 
 def test_cover_aware_optimizer_uses_seven_when_eight_consumes_only_cover_option():
@@ -423,3 +439,65 @@ def test_structured_fetch_validates_a_finalist_pool_then_returns_typed_set_resul
     assert result.set_optimization is not None
     assert result.set_optimization.finalist_count == 12
     assert all(Path(artwork["local_image_path"]).exists() for artwork in result.artworks)
+
+
+def test_twelve_valid_watercolors_cannot_fail_on_general_diversity(monkeypatch, tmp_path):
+    theme = get_default_theme_registry().by_id("what_watercolor_can_do")
+    candidates = [
+        NormalizedArtwork(
+            source="aic",
+            source_id=str(index),
+            title=f"Watercolor Study {index}",
+            artist_name="Repeated Artist",
+            creation_date="1880",
+            medium="Watercolor on paper",
+            classification="Drawing",
+            museum_name="Single Museum",
+            image_url=f"https://images.example/watercolor-{index}.jpg",
+            image_width=1600,
+            image_height=1200,
+            region="europe",
+            is_public_domain=True,
+            rights_status="CONFIRMED_PUBLIC_DOMAIN",
+        )
+        for index in range(12)
+    ]
+
+    class Adapter:
+        source_id = "test"
+
+        def fetch_candidates(self, **kwargs):
+            return candidates
+
+    monkeypatch.setattr(art_fetcher, "get_museum_adapters", lambda: [Adapter()])
+    monkeypatch.setattr(art_fetcher.config, "DATA_DIR", str(tmp_path))
+    monkeypatch.setattr(art_fetcher, "calculate_quality_score", lambda *args: 90.0)
+    monkeypatch.setattr("src.theme_acquisition.calculate_quality_score", lambda *args: 90.0)
+
+    def download(url, output_path, **kwargs):
+        Path(output_path).write_bytes(b"validated test double")
+        return ImageValidationResult(
+            True,
+            width=1600,
+            height=1200,
+            image_format="JPEG",
+            reason="ok",
+        )
+
+    monkeypatch.setattr(art_fetcher, "validate_and_download_image_with_metadata", download)
+
+    result = art_fetcher.fetch_themed_artworks(
+        set(),
+        "watercolor painting",
+        count=8,
+        color_tone="warm",
+        selection_run_seed=SelectionRunSeed("fixed", "test"),
+        theme_definition=theme,
+        return_acquisition=True,
+    )
+
+    assert isinstance(result, ThemedArtworkSelection)
+    assert 5 <= len(result.artworks) <= 8
+    assert len({artwork["id"] for artwork in result.artworks}) == len(result.artworks)
+    assert {artwork["museum"] for artwork in result.artworks} == {"Single Museum"}
+    assert {artwork["artist"] for artwork in result.artworks} == {"Repeated Artist"}

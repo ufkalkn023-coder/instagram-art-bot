@@ -802,7 +802,7 @@ def test_metadata_finalist_gate_counts_five_featured_separately_from_cover(
         art_fetcher._select_acquired_theme_artworks(acquisition, count=8)
     )
 
-    assert acquisition.availability.absolute_minimum == 6
+    assert acquisition.availability.absolute_minimum == 5
     assert len(selected) == 5
     assert len(optimization.artworks) == 5
     assert final_acquisition.validated_artworks == ()
