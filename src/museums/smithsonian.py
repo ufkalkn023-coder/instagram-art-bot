@@ -75,6 +75,9 @@ class SmithsonianAdapter(MuseumAdapter):
     def source_id(self) -> str:
         return "smithsonian"
 
+    def unavailable_reason(self) -> str | None:
+        return None if os.environ.get("SMITHSONIAN_API_KEY", "").strip() else "missing_api_key"
+
     def fetch_candidates(
         self,
         limit: int = 20,

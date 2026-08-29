@@ -300,7 +300,11 @@ def test_pixel_limit_and_pillow_decompression_bomb_warning_are_hard_rejections(m
         "get",
         lambda *args, **kwargs: FakeResponse(headers={"Content-Type": "image/jpeg"}, chunks=[image_bytes]),
     )
-    assert not quality_filter.validate_and_download_image("https://museum.example/large.jpg", str(tmp_path / "large.jpg"))
+    pixel_result = quality_filter.validate_and_download_image_with_metadata(
+        "https://museum.example/large.jpg", str(tmp_path / "large.jpg")
+    )
+    assert not pixel_result.valid
+    assert pixel_result.reason == "too_many_pixels"
 
     monkeypatch.setattr(quality_filter, "MAX_IMAGE_PIXELS", 40_000_000)
     monkeypatch.setattr(quality_filter.Image, "MAX_IMAGE_PIXELS", 9_999)

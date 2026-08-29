@@ -131,7 +131,7 @@ def test_winter_semantics_and_measurable_light_both_contribute():
     unrelated = evaluate_theme_relevance(
         _artwork("bright", title="Portrait of a gentleman"),
         theme,
-        [_hit("winter light painting")],
+        [_hit("museum painting")],
         _visual(luminance=LuminanceBucket.LIGHT, contrast=ContrastBucket.MEDIUM),
     )
 
@@ -168,7 +168,7 @@ def test_winter_light_reachability_and_component_boundaries():
     unrelated_bright = evaluate_theme_relevance(
         _artwork("bright", title="Portrait of a gentleman"),
         theme,
-        [_hit("winter light painting")],
+        [_hit("museum painting")],
         _visual(luminance=LuminanceBucket.LIGHT, contrast=ContrastBucket.HIGH),
     )
     secondary_bright = evaluate_theme_relevance(
@@ -187,6 +187,181 @@ def test_winter_light_reachability_and_component_boundaries():
     assert not unrelated_bright.relevance_eligible
     assert not secondary_bright.semantic_grounded
     assert not secondary_bright.relevance_eligible
+
+
+@pytest.mark.parametrize(
+    ("theme_id", "visual", "primary_indexes"),
+    [
+        (
+            "winter_light",
+            _visual(
+                luminance=LuminanceBucket.LIGHT,
+                contrast=ContrastBucket.HIGH,
+            ),
+            (0, 1),
+        ),
+        (
+            "impressionist_light",
+            _visual(luminance=LuminanceBucket.LIGHT),
+            (0, 1),
+        ),
+        (
+            "autumn_light",
+            _visual(
+                color=DominantColorFamily.ORANGE,
+                luminance=LuminanceBucket.LIGHT,
+            ),
+            (0, 2),
+        ),
+        (
+            "candlelight",
+            _visual(
+                luminance=LuminanceBucket.DARK,
+                contrast=ContrastBucket.HIGH,
+            ),
+            (0, 2),
+        ),
+    ],
+)
+def test_light_study_primary_provenance_is_bounded_semantic_support(
+    theme_id, visual, primary_indexes
+):
+    theme = get_default_theme_registry().by_id(theme_id)
+    unrelated_metadata = _artwork("provenance", title="Untitled composition")
+    first_primary = evaluate_theme_relevance(
+        unrelated_metadata,
+        theme,
+        [_hit(theme.primary_queries[primary_indexes[0]])],
+        visual,
+    )
+    repeated_primary = evaluate_theme_relevance(
+        unrelated_metadata,
+        theme,
+        [
+            _hit(theme.primary_queries[index], rank)
+            for rank, index in enumerate(primary_indexes)
+        ],
+        visual,
+    )
+    arbitrary_primary = evaluate_theme_relevance(
+        unrelated_metadata,
+        theme,
+        [_hit("museum painting")],
+        visual,
+    )
+    missing_visual = evaluate_theme_relevance(
+        unrelated_metadata,
+        theme,
+        [_hit(theme.primary_queries[primary_indexes[0]])],
+    )
+
+    assert first_primary.semantic_grounded
+    assert first_primary.visual_grounded
+    assert first_primary.relevance_eligible
+    assert first_primary.theme_relevance_score >= DEFAULT_MIN_THEME_RELEVANCE
+    assert repeated_primary.relevance_eligible
+    assert repeated_primary.theme_relevance_score >= first_primary.theme_relevance_score
+    assert not arbitrary_primary.semantic_grounded
+    assert not arbitrary_primary.relevance_eligible
+    assert not missing_visual.visual_grounded
+    assert not missing_visual.semantic_grounded
+    assert not missing_visual.relevance_eligible
+
+
+@pytest.mark.parametrize(
+    ("theme_id", "required_term", "visual"),
+    [
+        (
+            "winter_light",
+            "winter",
+            _visual(
+                luminance=LuminanceBucket.LIGHT,
+                contrast=ContrastBucket.HIGH,
+            ),
+        ),
+        (
+            "impressionist_light",
+            "Impressionist",
+            _visual(luminance=LuminanceBucket.LIGHT),
+        ),
+        (
+            "autumn_light",
+            "autumn",
+            _visual(
+                color=DominantColorFamily.ORANGE,
+                luminance=LuminanceBucket.LIGHT,
+            ),
+        ),
+        (
+            "candlelight",
+            "candlelight",
+            _visual(
+                luminance=LuminanceBucket.DARK,
+                contrast=ContrastBucket.HIGH,
+            ),
+        ),
+    ],
+)
+def test_light_study_explicit_metadata_remains_independent_semantic_evidence(
+    theme_id, required_term, visual
+):
+    theme = get_default_theme_registry().by_id(theme_id)
+    evidence = evaluate_theme_relevance(
+        _artwork("metadata", title=f"Study of {required_term}"),
+        theme,
+        [],
+        visual,
+    )
+
+    assert evidence.required_matches
+    assert evidence.semantic_grounded
+    assert evidence.relevance_eligible
+    assert evidence.theme_relevance_score >= DEFAULT_MIN_THEME_RELEVANCE
+
+
+def test_light_study_provenance_never_overrides_visual_or_exclusion_failures():
+    theme = get_default_theme_registry().by_id("winter_light")
+    primary = [_hit(theme.primary_queries[0])]
+    non_matching_visual = evaluate_theme_relevance(
+        _artwork("dark", title="Untitled composition"),
+        theme,
+        primary,
+        _visual(luminance=LuminanceBucket.DARK, contrast=ContrastBucket.LOW),
+    )
+    excluded_theme = theme.model_copy(update={"excluded_terms": ("forbidden",)})
+    excluded = evaluate_theme_relevance(
+        _artwork("excluded", title="Forbidden winter scene"),
+        excluded_theme,
+        primary,
+        _visual(
+            luminance=LuminanceBucket.LIGHT,
+            contrast=ContrastBucket.HIGH,
+        ),
+    )
+
+    assert not non_matching_visual.visual_grounded
+    assert not non_matching_visual.semantic_grounded
+    assert not non_matching_visual.relevance_eligible
+    assert excluded.excluded_matches == ("forbidden",)
+    assert not excluded.relevance_eligible
+
+
+def test_candlelight_single_visual_dimension_explains_score_fifty_cluster():
+    theme = get_default_theme_registry().by_id("candlelight")
+    evidence = evaluate_theme_relevance(
+        _artwork("candle", title="Untitled composition"),
+        theme,
+        [_hit(theme.primary_queries[0])],
+        _visual(luminance=LuminanceBucket.DARK, contrast=ContrastBucket.LOW),
+    )
+
+    assert evidence.semantic_grounded
+    assert evidence.visual_grounded
+    assert evidence.relevance_breakdown.primary_query == 24.0
+    assert evidence.relevance_breakdown.visual_target == 14.0
+    assert evidence.relevance_breakdown.visual_support == 12.0
+    assert evidence.theme_relevance_score == 50.0
+    assert evidence.theme_relevance_score < DEFAULT_MIN_THEME_RELEVANCE
 
 
 def test_color_study_requires_actual_target_color_evidence():
@@ -344,7 +519,7 @@ def test_hybrid_aic_analysis_requests_843_directly(monkeypatch, tmp_path):
 
 
 def test_hybrid_diagnostics_separate_image_and_relevance_failures(
-    monkeypatch, tmp_path
+    monkeypatch, tmp_path, caplog
 ):
     theme = get_default_theme_registry().by_id("winter_light")
     source_artworks = [
@@ -354,6 +529,7 @@ def test_hybrid_diagnostics_separate_image_and_relevance_failures(
         _artwork("below-threshold", title="Untitled", description="Winter scene"),
         _artwork("qualified", title="Winter snow with shadows"),
     ]
+    source_artworks[0].source = "smithsonian"
 
     class Adapter:
         source_id = "test"
@@ -378,7 +554,10 @@ def test_hybrid_diagnostics_separate_image_and_relevance_failures(
     )
     one_hit = (_hit("winter light painting"),)
     secondary_hit = (ThemeQueryHit(QueryType.SECONDARY, 0, "winter sun art"),)
-    hits_by_id = {"below-threshold": secondary_hit}
+    hits_by_id = {
+        "below-threshold": secondary_hit,
+        "unrelated": (_hit("museum painting"),),
+    }
     acquisition = replace(
         acquisition,
         candidates=tuple(
@@ -420,6 +599,7 @@ def test_hybrid_diagnostics_separate_image_and_relevance_failures(
         art_fetcher, "validate_and_download_image_with_metadata", download
     )
     monkeypatch.setattr(art_fetcher, "extract_visual_features", visual_features)
+    caplog.set_level("INFO", logger="src.art_fetcher")
 
     with pytest.raises(art_fetcher.CarouselSelectionError) as error:
         art_fetcher._select_acquired_theme_artworks(acquisition, count=8)
@@ -472,6 +652,11 @@ def test_hybrid_diagnostics_separate_image_and_relevance_failures(
     assert diagnostics.final_score_median == _percentile(scores, 0.5)
     assert diagnostics.final_score_p75 == _percentile(scores, 0.75)
     assert diagnostics.final_score_max == max(scores)
+    assert (
+        "image_validation_failures theme=winter_light total=1 "
+        "reasons=http_status:1 sources=smithsonian:1 "
+        "source_reasons=smithsonian/http_status:1"
+    ) in caplog.text
 
 
 def test_hybrid_cover_reuses_final_relevant_validated_image(monkeypatch, tmp_path):
@@ -549,3 +734,76 @@ def test_hybrid_cover_reuses_final_relevant_validated_image(monkeypatch, tmp_pat
     assert cover.canonical_id not in {str(artwork["id"]) for artwork in featured}
     assert cover.artwork["theme_relevance_score"] >= DEFAULT_MIN_THEME_RELEVANCE
     assert not source_path.exists()
+
+
+def test_metadata_finalist_gate_counts_five_featured_separately_from_cover(
+    monkeypatch, tmp_path
+):
+    theme = get_default_theme_registry().by_id("landscape_across_centuries")
+    candidates = [
+        _artwork(str(index), title=f"Landscape study {index}")
+        for index in range(8)
+    ]
+    for index, candidate in enumerate(candidates):
+        candidate.artist_name = f"Artist {index}"
+        candidate.museum_name = f"Museum {index}"
+        candidate.creation_date = str(1500 + index * 60)
+
+    class Adapter:
+        source_id = "test"
+
+        def fetch_candidates(self, **kwargs):
+            return candidates
+
+    monkeypatch.setattr(
+        "src.theme_acquisition.calculate_quality_score",
+        lambda artwork, weights: 90.0,
+    )
+    monkeypatch.setattr(
+        "src.theme_acquisition.calculate_measurement_coverage",
+        lambda artwork: 1.0,
+    )
+    monkeypatch.setattr(art_fetcher, "calculate_quality_score", lambda *args: 90.0)
+    monkeypatch.setattr(
+        art_fetcher, "calculate_measurement_coverage", lambda artwork: 1.0
+    )
+    acquisition = acquire_theme_candidates(
+        theme,
+        posted_ids=set(),
+        adapters=[Adapter()],
+        run_seed="metadata-five",
+        museum_weights={},
+        min_quality=50,
+        policy=ThemeAcquisitionPolicy(candidates_per_adapter_query=20),
+    )
+    attempts = 0
+
+    def download(url, output_path, **kwargs):
+        nonlocal attempts
+        attempts += 1
+        if attempts > 5:
+            return ImageValidationResult(False, reason="http_status")
+        Image.new("RGB", (1600, 1200), "navy").save(output_path, "JPEG")
+        return ImageValidationResult(
+            True,
+            width=1600,
+            height=1200,
+            image_format="JPEG",
+            reason="ok",
+        )
+
+    monkeypatch.setattr(art_fetcher.config, "DATA_DIR", str(tmp_path))
+    monkeypatch.setattr(
+        art_fetcher, "validate_and_download_image_with_metadata", download
+    )
+    monkeypatch.setattr(art_fetcher, "extract_visual_features", lambda path: _visual())
+
+    selected, optimization, final_acquisition = (
+        art_fetcher._select_acquired_theme_artworks(acquisition, count=8)
+    )
+
+    assert acquisition.availability.absolute_minimum == 6
+    assert len(selected) == 5
+    assert len(optimization.artworks) == 5
+    assert final_acquisition.validated_artworks == ()
+    assert attempts == 8

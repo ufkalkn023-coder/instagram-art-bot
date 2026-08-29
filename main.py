@@ -54,6 +54,7 @@ from src.carousel_themes import (
     plan_carousel_theme,
     primary_search_query,
 )
+from src.theme_fallback import ThemeAttemptPlanner
 from src.production_config import (
     validate_production_configuration,
     validate_reconciliation_configuration,
@@ -67,6 +68,22 @@ CAROUSEL_THEME_ATTEMPT_LIMIT = 5
 
 class ProductionMode(str, Enum):
     CAROUSEL = "carousel"
+
+
+def _format_adapter_reasons(values: dict[str, str]) -> str:
+    return ",".join(
+        f"{source}:{reason}" for source, reason in sorted(values.items())
+    ) or "none"
+
+
+def _log_adapter_capacity(run_state: art_fetcher.AcquisitionRunState) -> None:
+    diagnostics = run_state.diagnostics()
+    logger.info(
+        "adapter_capacity active=%s unavailable=%s disabled_during_run=%s",
+        ",".join(diagnostics["active_adapters"]) or "none",
+        _format_adapter_reasons(diagnostics["unavailable_adapters"]),
+        _format_adapter_reasons(diagnostics["runtime_disabled_adapters"]),
+    )
 
 
 def _get_grid_color_tone_for_run(dry_run: bool) -> str:
@@ -315,16 +332,27 @@ def run_carousel_post(args):
 
     attempted_themes: list[tuple[str, str]] = []
     acquisition_run_state = art_fetcher.AcquisitionRunState()
+    attempt_planner = ThemeAttemptPlanner(
+        ordered_candidates,
+        attempt_limit=CAROUSEL_THEME_ATTEMPT_LIMIT,
+    )
+    initial_attempt_plan = attempt_planner.preview()
+    logger.info(
+        "theme_attempt_plan themes=%s formats=%s families=%s evidence_modes=%s",
+        ",".join(theme.id for theme in initial_attempt_plan),
+        ",".join(theme.format.value for theme in initial_attempt_plan),
+        ",".join(theme.family.value for theme in initial_attempt_plan),
+        ",".join(theme.evidence_mode.value for theme in initial_attempt_plan),
+    )
     artworks = None
     cover = None
     acquisition = None
     set_optimization = None
     theme_definition = None
     caption_hook_type: CaptionHookType | None = None
-    for attempt, candidate_theme in enumerate(
-        ordered_candidates[:CAROUSEL_THEME_ATTEMPT_LIMIT],
-        start=1,
-    ):
+    attempt = 0
+    while candidate_theme := attempt_planner.next_theme():
+        attempt += 1
         search_query = primary_search_query(candidate_theme)
         candidate_hook_type = select_caption_hook_type(
             candidate_theme,
@@ -337,11 +365,24 @@ def run_carousel_post(args):
             "caption_hook_type": candidate_hook_type.value,
         }
         if attempted_themes:
+            previous_failure = attempt_planner.failures[-1]
             logger.info(
-                "theme_fallback from=%s to=%s attempt=%s",
+                "theme_fallback from=%s to=%s attempt=%s previous_reason=%s "
+                "format_changed=%s family_changed=%s evidence_mode_changed=%s",
                 attempted_themes[-1][0],
                 candidate_theme.id,
                 attempt,
+                previous_failure.reason,
+                str(
+                    previous_failure.theme.format is not candidate_theme.format
+                ).lower(),
+                str(
+                    previous_failure.theme.family is not candidate_theme.family
+                ).lower(),
+                str(
+                    previous_failure.theme.evidence_mode
+                    is not candidate_theme.evidence_mode
+                ).lower(),
             )
         logger.info(
             "carousel_theme_attempt theme=%s title=%r attempt=%s compatibility_query=%r",
@@ -389,6 +430,7 @@ def run_carousel_post(args):
             _cleanup_failed_theme_artifacts(candidate_artworks)
             reason = getattr(error, "reason", type(error).__name__)
             attempted_themes.append((candidate_theme.id, reason))
+            attempt_planner.record_failure(candidate_theme, reason)
             availability = getattr(error, "availability", None) or getattr(
                 candidate_acquisition,
                 "availability",
@@ -410,6 +452,11 @@ def run_carousel_post(args):
         set_optimization = candidate_set_optimization
         theme_definition = candidate_theme
         caption_hook_type = candidate_hook_type
+        logger.info(
+            "theme_attempt_succeeded theme=%s attempt=%s",
+            candidate_theme.id,
+            attempt,
+        )
         break
 
     if (
@@ -418,7 +465,10 @@ def run_carousel_post(args):
         or cover is None
         or caption_hook_type is None
     ):
+        _log_adapter_capacity(acquisition_run_state)
         raise art_fetcher.CarouselThemeAvailabilityError(attempted_themes)
+
+    _log_adapter_capacity(acquisition_run_state)
 
     if not args.dry_run:
         logger.info(

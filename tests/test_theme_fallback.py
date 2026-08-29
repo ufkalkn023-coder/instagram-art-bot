@@ -8,6 +8,7 @@ from src.art_fetcher import SelectionRunSeed
 from src.carousel_cover import EditorialCoverSelectionError
 from src.carousel_plan import CoverAsset, CoverMode, CoverScoreBreakdown
 from src.carousel_themes import get_default_theme_registry
+from src.theme_fallback import ThemeAttemptPlanner
 
 
 def _artworks(prefix):
@@ -117,7 +118,14 @@ def test_unavailable_first_theme_falls_back_in_planner_order_before_mutation(mon
         ("cover", second.id),
     ]
     assert "reserve" not in calls
+    assert (
+        f"theme_attempt_plan themes={first.id},{second.id} "
+        f"formats={first.format.value},{second.format.value}"
+    ) in caplog.text
     assert f"theme_fallback from={first.id} to={second.id} attempt=2" in caplog.text
+    assert "previous_reason=insufficient_relevance_pool" in caplog.text
+    assert "format_changed=true" in caplog.text
+    assert f"theme_attempt_succeeded theme={second.id} attempt=2" in caplog.text
     assert f"carousel_theme_selected theme={second.id}" in caplog.text
 
 
@@ -248,7 +256,11 @@ def test_fallback_attempts_are_strictly_bounded_and_raise_specific_error(monkeyp
     with pytest.raises(art_fetcher.CarouselThemeAvailabilityError) as error:
         main.run_carousel_post(SimpleNamespace(dry_run=False, image_url=None, pinterest=False))
 
-    assert calls == [theme.id for theme in themes[:main.CAROUSEL_THEME_ATTEMPT_LIMIT]]
+    expected = ThemeAttemptPlanner(
+        themes,
+        attempt_limit=main.CAROUSEL_THEME_ATTEMPT_LIMIT,
+    ).preview()
+    assert calls == [theme.id for theme in expected]
     assert len(error.value.attempts) == main.CAROUSEL_THEME_ATTEMPT_LIMIT
     assert "reserve" not in calls
     assert "gemini" not in calls
@@ -275,3 +287,75 @@ def test_same_inputs_produce_the_same_fallback_sequence(monkeypatch):
         sequences.append([call for call in calls if isinstance(call, str)])
 
     assert sequences == [[theme.id for theme in themes], [theme.id for theme in themes]]
+
+
+def test_light_study_failure_reaches_ranked_metadata_alternative_next():
+    registry = get_default_theme_registry()
+    winter = registry.by_id("winter_light")
+    impressionist = registry.by_id("impressionist_light")
+    landscape = registry.by_id("landscape_across_centuries")
+    planner = ThemeAttemptPlanner(
+        [winter, impressionist, landscape],
+        attempt_limit=5,
+    )
+
+    assert planner.next_theme() is winter
+    planner.record_failure(winter, "insufficient_final_relevance_pool")
+
+    assert planner.next_theme() is landscape
+
+
+def test_repeated_fragile_format_failures_suppress_correlated_themes():
+    registry = get_default_theme_registry()
+    winter = registry.by_id("winter_light")
+    impressionist = registry.by_id("impressionist_light")
+    autumn = registry.by_id("autumn_light")
+    candlelight = registry.by_id("candlelight")
+    landscape = registry.by_id("landscape_across_centuries")
+    women_reading = registry.by_id("women_reading")
+    planner = ThemeAttemptPlanner(
+        [winter, impressionist, landscape, autumn, candlelight, women_reading],
+        attempt_limit=5,
+    )
+
+    assert planner.next_theme() is winter
+    planner.record_failure(winter, "insufficient_final_relevance_pool")
+    assert planner.next_theme() is landscape
+    planner.record_failure(landscape, "image_validation_exhausted")
+    assert planner.next_theme() is impressionist
+    planner.record_failure(impressionist, "insufficient_final_relevance_pool")
+
+    assert planner.next_theme() is women_reading
+
+
+def test_no_diverse_alternative_still_uses_same_format_fallback():
+    registry = get_default_theme_registry()
+    winter = registry.by_id("winter_light")
+    impressionist = registry.by_id("impressionist_light")
+    planner = ThemeAttemptPlanner(
+        [winter, impressionist],
+        attempt_limit=5,
+    )
+
+    assert planner.next_theme() is winter
+    planner.record_failure(winter, "insufficient_final_relevance_pool")
+    assert planner.next_theme() is impressionist
+
+
+def test_diversified_plan_is_deterministic_and_keeps_top_ranked_first():
+    registry = get_default_theme_registry()
+    ranked = [
+        registry.by_id("winter_light"),
+        registry.by_id("impressionist_light"),
+        registry.by_id("landscape_across_centuries"),
+        registry.by_id("autumn_light"),
+        registry.by_id("women_reading"),
+    ]
+
+    first = ThemeAttemptPlanner(ranked, attempt_limit=5).preview()
+    second = ThemeAttemptPlanner(ranked, attempt_limit=5).preview()
+
+    assert first == second
+    assert first[0] is ranked[0]
+    assert first[1].format is not first[0].format
+    assert any(theme.evidence_mode.value == "METADATA" for theme in first)

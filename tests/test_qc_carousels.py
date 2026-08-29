@@ -148,9 +148,12 @@ def test_cli_default_count_and_format_filtering_are_bounded(monkeypatch, tmp_pat
             "failed": 0,
             "circuit_open": False,
         },
+        "active_adapters": [],
         "adapter_calls": 0,
         "adapters_disabled_for_run": [],
+        "runtime_disabled_adapters": {},
         "themes_attempted": 0,
+        "unavailable_adapters": {},
     }
 
 

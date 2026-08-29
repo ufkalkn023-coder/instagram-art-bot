@@ -224,6 +224,9 @@ class SelectionObservability:
     aic_fallback_attempted: int = 0
     aic_fallback_recovered: int = 0
     rejections: Counter = field(default_factory=Counter)
+    image_validation_reasons: Counter = field(default_factory=Counter)
+    image_validation_sources: Counter = field(default_factory=Counter)
+    image_validation_source_reasons: Counter = field(default_factory=Counter)
 
     def reject(self, reason: str) -> None:
         self.rejections[reason] += 1
@@ -234,9 +237,20 @@ class SelectionObservability:
     def rejection_fields(self) -> str:
         return ",".join(f"{reason}:{count}" for reason, count in sorted(self.rejections.items())) or "none"
 
-    def record_image_validation(self, result: ImageValidationResult) -> None:
+    def record_image_validation(
+        self,
+        result: ImageValidationResult,
+        *,
+        source: str,
+    ) -> None:
         if result.valid:
             self.images_validated += 1
+        else:
+            reason = str(result.reason or "unknown")
+            normalized_source = source or "unknown"
+            self.image_validation_reasons[reason] += 1
+            self.image_validation_sources[normalized_source] += 1
+            self.image_validation_source_reasons[(normalized_source, reason)] += 1
         if result.aic_fallback_attempted:
             self.aic_fallback_attempted += 1
             if result.aic_fallback_recovered:
@@ -1100,7 +1114,7 @@ def _select_acquired_theme_artworks(
             candidate_path,
             purpose=ImageDownloadPurpose.IMAGE_ANALYSIS,
         )
-        observability.record_image_validation(validation)
+        observability.record_image_validation(validation, source=artwork.source)
         if not validation.valid:
             observability.reject("image_validation_failed")
             final_relevance_failures["image_validation_failure"] += 1
@@ -1283,6 +1297,31 @@ def _select_acquired_theme_artworks(
         acquisition.availability.absolute_minimum,
         acquisition.availability.target,
     )
+    if observability.image_validation_reasons:
+        logger.info(
+            "image_validation_failures theme=%s total=%s reasons=%s sources=%s "
+            "source_reasons=%s",
+            acquisition.theme.id,
+            sum(observability.image_validation_reasons.values()),
+            ",".join(
+                f"{reason}:{count}"
+                for reason, count in sorted(
+                    observability.image_validation_reasons.items()
+                )
+            ),
+            ",".join(
+                f"{source}:{count}"
+                for source, count in sorted(
+                    observability.image_validation_sources.items()
+                )
+            ),
+            ",".join(
+                f"{source}/{reason}:{count}"
+                for (source, reason), count in sorted(
+                    observability.image_validation_source_reasons.items()
+                )
+            ),
+        )
     if acquisition.theme.evidence_mode is not ThemeEvidenceMode.METADATA:
         logger.info(
             "theme_relevance_distribution theme=%s validated_images=%s "
@@ -1303,7 +1342,11 @@ def _select_acquired_theme_artworks(
             or "none",
         )
 
-    required_validated = MIN_TOTAL_SLIDES
+    required_validated = (
+        MIN_FEATURED_WORKS
+        if acquisition.theme.evidence_mode is ThemeEvidenceMode.METADATA
+        else MIN_TOTAL_SLIDES
+    )
     if len(validated_artworks) < required_validated:
         for candidate in validated_artworks:
             try:
@@ -1331,8 +1374,10 @@ def _select_acquired_theme_artworks(
             count=count,
             min_quality=min_score,
             min_relevance=acquisition.policy.minimum_relevance,
-            cover_candidate_ids=tuple(
-                str(artwork["id"]) for artwork in validated_artworks
+            cover_candidate_ids=(
+                tuple(str(artwork["id"]) for artwork in validated_artworks)
+                if acquisition.theme.evidence_mode is not ThemeEvidenceMode.METADATA
+                else ()
             ),
             engagement_model=engagement_model,
             engagement_context=engagement_context,

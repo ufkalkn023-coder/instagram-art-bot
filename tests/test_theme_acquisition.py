@@ -3,6 +3,8 @@ from __future__ import annotations
 from src.carousel_themes import CarouselFormat, CarouselThemeDefinition, ThemeFamily
 from src.models import NormalizedArtwork
 from src.museums.base import AdapterHTTPError
+from src.museums.europeana import EuropeanaAdapter
+from src.museums.smithsonian import SmithsonianAdapter
 from src.theme_acquisition import (
     ABSOLUTE_MINIMUM,
     PREFERRED_PREFLIGHT_TARGET,
@@ -295,6 +297,7 @@ def test_http_403_circuit_breaker_is_run_local(monkeypatch):
     assert shared_second.calls == 0
     assert state.http_403_failures == 2
     assert state.disabled_adapters == {"met": "HTTP403"}
+    assert state.diagnostics()["runtime_disabled_adapters"] == {"met": "HTTP403"}
 
     fresh_adapter = BackoffAdapter()
     fresh_state = AcquisitionRunState()
@@ -341,6 +344,20 @@ def test_missing_optional_adapter_is_logged_and_skipped_once(monkeypatch, caplog
 
     assert [adapter.calls for adapter in adapters] == [0, 0]
     assert caplog.text.count("reason=missing_api_key") == 1
+    diagnostics = state.diagnostics()
+    assert diagnostics["active_adapters"] == ()
+    assert diagnostics["unavailable_adapters"] == {
+        "rijksmuseum": "missing_api_key"
+    }
+    assert diagnostics["runtime_disabled_adapters"] == {}
+
+
+def test_keyed_adapters_report_missing_capacity_before_queries(monkeypatch):
+    monkeypatch.delenv("EUROPEANA_API_KEY", raising=False)
+    monkeypatch.delenv("SMITHSONIAN_API_KEY", raising=False)
+
+    assert EuropeanaAdapter().unavailable_reason() == "missing_api_key"
+    assert SmithsonianAdapter().unavailable_reason() == "missing_api_key"
 
 
 def test_query_budget_and_adapter_failure_isolation(monkeypatch):

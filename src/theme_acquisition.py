@@ -236,12 +236,28 @@ class AcquisitionRunState:
     adapter_calls: int = 0
     http_403_failures: int = 0
     themes_attempted: set[str] = field(default_factory=set)
+    seen_adapters: set[str] = field(default_factory=set)
+    unavailable_adapters: dict[str, str] = field(default_factory=dict)
+    runtime_disabled_adapters: dict[str, str] = field(default_factory=dict)
     disabled_adapters: dict[str, str] = field(default_factory=dict)
     consecutive_backoff_failures: dict[str, int] = field(default_factory=dict)
 
-    def disable(self, source_id: str, reason: str) -> bool:
+    def register(self, source_id: str) -> None:
+        self.seen_adapters.add(source_id)
+
+    def mark_unavailable(self, source_id: str, reason: str) -> bool:
+        self.register(source_id)
         if source_id in self.disabled_adapters:
             return False
+        self.unavailable_adapters[source_id] = reason
+        self.disabled_adapters[source_id] = reason
+        return True
+
+    def disable(self, source_id: str, reason: str) -> bool:
+        self.register(source_id)
+        if source_id in self.disabled_adapters:
+            return False
+        self.runtime_disabled_adapters[source_id] = reason
         self.disabled_adapters[source_id] = reason
         return True
 
@@ -249,10 +265,18 @@ class AcquisitionRunState:
         from src.aic_image_policy import get_aic_image_request_policy
 
         aic_images = get_aic_image_request_policy().diagnostics()
+        active_adapters = tuple(
+            sorted(self.seen_adapters - set(self.disabled_adapters))
+        )
         return {
             "themes_attempted": len(self.themes_attempted),
             "adapter_calls": self.adapter_calls,
             "adapters_disabled_for_run": tuple(sorted(self.disabled_adapters)),
+            "active_adapters": active_adapters,
+            "unavailable_adapters": dict(sorted(self.unavailable_adapters.items())),
+            "runtime_disabled_adapters": dict(
+                sorted(self.runtime_disabled_adapters.items())
+            ),
             "403_failures": self.http_403_failures,
             "aic_image_requests": {
                 "analysis_843": aic_images.analysis_843,
@@ -462,6 +486,9 @@ def evaluate_theme_relevance(
                 known_support += 1
             visual_support_score = VISUAL_SUPPORT_MAX * min(3, known_support) / 3
 
+    format_target_match, format_rejection_reason = qualify_normalized_artwork(
+        artwork, theme
+    )
     primary_semantic_hits = 0
     for hit in primary_hits:
         query_tokens = normalize_theme_text(hit.query)
@@ -476,7 +503,18 @@ def evaluate_theme_relevance(
         semantic_grounded = True
     else:
         # Pixel statistics cannot prove winter, candles, windows, dawn, or art periods.
-        semantic_grounded = not missing_groups or primary_semantic_hits >= 2
+        strongly_grounded_primary_provenance = (
+            theme.format is CarouselFormat.LIGHT_STUDY
+            and primary_semantic_hits >= 1
+            and visual_grounded
+            and not excluded_matches
+            and format_target_match
+        )
+        semantic_grounded = (
+            not missing_groups
+            or primary_semantic_hits >= 2
+            or strongly_grounded_primary_provenance
+        )
 
     breakdown = ThemeRelevanceBreakdown(
         **{
@@ -490,7 +528,6 @@ def evaluate_theme_relevance(
         visual_target=round(visual_target_score, 2),
         visual_support=round(visual_support_score, 2),
     )
-    format_target_match, format_rejection_reason = qualify_normalized_artwork(artwork, theme)
     return ThemeCandidateEvidence(
         canonical_id=artwork.canonical_id,
         matched_queries=hits,
@@ -721,8 +758,11 @@ def acquire_theme_candidates(
     )
     for adapter in constrained_adapters:
         source_id = str(getattr(adapter, "source_id", type(adapter).__name__))
+        run_state.register(source_id)
         unavailable_reason = getattr(adapter, "unavailable_reason", lambda: None)()
-        if unavailable_reason and run_state.disable(source_id, unavailable_reason):
+        if unavailable_reason and run_state.mark_unavailable(
+            source_id, unavailable_reason
+        ):
             logger.warning(
                 "theme_adapter_disabled_for_run source=%s reason=%s",
                 source_id,
