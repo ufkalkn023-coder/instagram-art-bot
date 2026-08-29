@@ -137,7 +137,7 @@ def test_comparative_sequence_increases_adjacent_metadata_contrast():
     assert final_period_changes > raw_period_changes
 
 
-@pytest.mark.parametrize("featured_count", [3, 5, 8])
+@pytest.mark.parametrize("featured_count", [5, 6, 8])
 def test_sequence_preserves_exact_adaptive_cardinality(featured_count):
     theme = _theme(CarouselFormat.THEMATIC_COLLECTION)
     artworks = [

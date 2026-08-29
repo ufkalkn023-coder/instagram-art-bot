@@ -6,6 +6,7 @@ from src import art_fetcher
 from src.quality_filter import ImageValidationResult
 from src.models import NormalizedArtwork
 from src.museums import aic, cleveland, met, rijksmuseum
+from src.rights_policy import RightsPolicyMode, is_rights_eligible
 
 
 class FakeResponse:
@@ -18,7 +19,7 @@ class FakeResponse:
         return self.payload
 
 
-def test_aic_requires_explicit_public_domain_flag(monkeypatch):
+def test_aic_preserves_rights_and_uses_public_domain_derivative_only_when_allowed(monkeypatch):
     payload = {
         "data": [
             {
@@ -40,13 +41,23 @@ def test_aic_requires_explicit_public_domain_flag(monkeypatch):
 
     candidates = aic.AICAdapter().fetch_candidates()
 
-    assert [candidate.canonical_id for candidate in candidates] == ["aic_1"]
+    assert [candidate.canonical_id for candidate in candidates] == [
+        "aic_1",
+        "aic_2",
+        "aic_3",
+    ]
     assert candidates[0].rights_status == "CONFIRMED_PUBLIC_DOMAIN"
     assert candidates[0].image_url == "https://www.artic.edu/iiif/2/image-1/full/1686,/0/default.jpg"
+    assert candidates[0].copyright_notice == "Public domain"
+    assert candidates[0].credit_line == "AIC"
+    assert candidates[1].rights_status == "KNOWN_RESTRICTED"
+    assert candidates[1].image_url == "https://www.artic.edu/iiif/2/image-2/full/843,/0/default.jpg"
+    assert candidates[2].image_url == "https://www.artic.edu/iiif/2/image-3/full/843,/0/default.jpg"
+    assert candidates[2].rights_status is None
 
 
 @pytest.mark.parametrize("is_public_domain", [True, False, None])
-def test_met_requires_explicit_public_domain_flag(monkeypatch, is_public_domain):
+def test_met_acquisition_is_not_gated_by_public_domain_flag(monkeypatch, is_public_domain):
     responses = iter(
         [
             FakeResponse({"objectIDs": [1]}),
@@ -64,12 +75,18 @@ def test_met_requires_explicit_public_domain_flag(monkeypatch, is_public_domain)
 
     candidates = met.MetAdapter().fetch_candidates(limit=1)
 
-    assert len(candidates) == (1 if is_public_domain is True else 0)
-    if candidates:
-        assert candidates[0].rights_status == "CONFIRMED_PUBLIC_DOMAIN"
+    assert len(candidates) == 1
+    expected_status = (
+        "CONFIRMED_PUBLIC_DOMAIN"
+        if is_public_domain is True
+        else "KNOWN_RESTRICTED"
+        if is_public_domain is False
+        else None
+    )
+    assert candidates[0].rights_status == expected_status
 
 
-def test_cleveland_accepts_only_cc0_images(monkeypatch):
+def test_cleveland_preserves_open_restricted_and_unknown_rights(monkeypatch):
     payload = {
         "data": [
             {
@@ -99,8 +116,14 @@ def test_cleveland_accepts_only_cc0_images(monkeypatch):
 
     candidates = cleveland.ClevelandAdapter().fetch_candidates()
 
-    assert [candidate.canonical_id for candidate in candidates] == ["cleveland_1"]
+    assert [candidate.canonical_id for candidate in candidates] == [
+        "cleveland_1",
+        "cleveland_2",
+        "cleveland_3",
+    ]
     assert candidates[0].rights_status == "CONFIRMED_OPEN_ACCESS"
+    assert candidates[1].rights_status == "KNOWN_RESTRICTED"
+    assert candidates[2].rights_status is None
     assert (candidates[0].image_width, candidates[0].image_height) == (956, 893)
 
 
@@ -124,7 +147,7 @@ def test_cleveland_rejects_invalid_image_dimensions(monkeypatch, width, height):
     assert (candidate.image_width, candidate.image_height) == (None, None)
 
 
-def test_rijksmuseum_requires_explicit_public_domain_or_cc0(monkeypatch):
+def test_rijksmuseum_acquires_candidates_and_preserves_rights_metadata(monkeypatch):
     payload = {
         "artObjects": [
             {
@@ -151,11 +174,43 @@ def test_rijksmuseum_requires_explicit_public_domain_or_cc0(monkeypatch):
 
     candidates = rijksmuseum.RijksmuseumAdapter().fetch_candidates()
 
-    assert [candidate.canonical_id for candidate in candidates] == ["rijksmuseum_SK-A-1"]
+    assert [candidate.canonical_id for candidate in candidates] == [
+        "rijksmuseum_SK-A-1",
+        "rijksmuseum_SK-A-2",
+        "rijksmuseum_SK-A-3",
+    ]
     assert candidates[0].rights_status == "CONFIRMED_PUBLIC_DOMAIN"
+    assert candidates[1].rights_status == "KNOWN_RESTRICTED"
+    assert candidates[1].rights_text == "Rijksmuseum"
+    assert candidates[2].rights_status is None
 
 
-def test_selection_filters_unconfirmed_rights_before_scoring_or_download(monkeypatch, tmp_path):
+def test_central_rights_policy_is_permissive_by_default_and_reversible():
+    confirmed = NormalizedArtwork(
+        source="aic",
+        source_id="confirmed",
+        museum_name="AIC",
+        is_public_domain=True,
+        rights_status="CONFIRMED_PUBLIC_DOMAIN",
+    )
+    restricted = confirmed.model_copy(
+        update={"source_id": "restricted", "is_public_domain": False, "rights_status": "KNOWN_RESTRICTED"}
+    )
+    unknown = confirmed.model_copy(
+        update={"source_id": "unknown", "is_public_domain": False, "rights_status": None}
+    )
+
+    assert all(
+        is_rights_eligible(artwork, RightsPolicyMode.PERMISSIVE)
+        for artwork in (confirmed, restricted, unknown)
+    )
+    assert is_rights_eligible(confirmed, RightsPolicyMode.STRICT_PUBLIC_DOMAIN)
+    assert not is_rights_eligible(restricted, RightsPolicyMode.STRICT_PUBLIC_DOMAIN)
+    assert not is_rights_eligible(unknown, RightsPolicyMode.STRICT_PUBLIC_DOMAIN)
+
+
+def test_strict_selection_filters_unconfirmed_rights_before_scoring_or_download(monkeypatch, tmp_path):
+    monkeypatch.setenv("ARTFOLIO_RIGHTS_POLICY", "strict_public_domain")
     restricted = NormalizedArtwork(
         source="aic",
         source_id="restricted",

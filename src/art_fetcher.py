@@ -6,7 +6,7 @@ import hashlib
 import secrets
 from collections import Counter
 from dataclasses import dataclass, field, replace
-from typing import Dict, Any, Iterator, List
+from typing import TYPE_CHECKING, Dict, Any, Iterator, List, Mapping
 from src.museums import (
     AICAdapter,
     ClevelandAdapter,
@@ -44,6 +44,7 @@ from src.carousel_set_optimizer import (
     optimize_carousel_set,
 )
 from src.carousel_policy import MAX_FEATURED_WORKS, MIN_FEATURED_WORKS, MIN_TOTAL_SLIDES
+from src.rights_policy import is_rights_eligible
 from src.theme_acquisition import (
     AcquisitionRunState,
     CarouselThemeAvailabilityError as BaseCarouselThemeAvailabilityError,
@@ -56,6 +57,9 @@ from src.theme_acquisition import (
     evaluate_theme_relevance,
 )
 import config
+
+if TYPE_CHECKING:
+    from src.engagement_learning import EngagementModel
 
 logger = logging.getLogger(__name__)
 
@@ -70,7 +74,7 @@ DEFAULT_WEIGHTS = {
 }
 
 # Legacy query-only selection remains a general helper. The structured editorial
-# carousel path below enforces the product's narrower 3–8 featured-work contract.
+# carousel path below enforces the product's narrower 5–8 featured-work contract.
 MIN_CAROUSEL_ITEMS = 2
 MAX_CAROUSEL_ITEMS = 10
 SINGLE_DIVERSITY_FINALIST_TARGET = 12
@@ -468,9 +472,9 @@ def iter_single_post_candidates(
     new_candidates = []
     seen_candidate_ids = set()
     for candidate in all_candidates:
-        if not candidate.has_confirmed_rights:
-            observability.reject("rights_unconfirmed")
-            logger.debug("single_candidate_rejected candidate=%s reason=rights_unconfirmed", candidate.canonical_id)
+        if not is_rights_eligible(candidate):
+            observability.reject("rights_policy")
+            logger.debug("single_candidate_rejected candidate=%s reason=rights_policy", candidate.canonical_id)
             continue
         observability.rights_safe += 1
         if candidate.canonical_id in posted_ids:
@@ -860,9 +864,9 @@ def _fetch_legacy_themed_artworks(
                     observability.reject("history_duplicate")
                     logger.debug("carousel_candidate_rejected candidate=%s reason=history_duplicate", candidate.canonical_id)
                     continue
-                if not candidate.has_confirmed_rights:
-                    observability.reject("rights_unconfirmed")
-                    logger.debug("carousel_candidate_rejected candidate=%s reason=rights_unconfirmed", candidate.canonical_id)
+                if not is_rights_eligible(candidate):
+                    observability.reject("rights_policy")
+                    logger.debug("carousel_candidate_rejected candidate=%s reason=rights_policy", candidate.canonical_id)
                     continue
                 observability.rights_safe += 1
                 if not candidate.image_url:
@@ -1050,6 +1054,14 @@ def _theme_artwork_dict(candidate, local_path: str) -> Dict[str, Any]:
         "visual_category": features["visual_category"],
         "period": features["period"],
         "region": normalize_region(candidate.artwork.region),
+        "source": candidate.artwork.source,
+        "artwork_url": candidate.artwork.artwork_url,
+        "credit_line": candidate.artwork.credit_line,
+        "license": candidate.artwork.license,
+        "is_public_domain": candidate.artwork.is_public_domain,
+        "rights_status": candidate.artwork.rights_status,
+        "rights_text": candidate.artwork.rights_text,
+        "copyright_notice": candidate.artwork.copyright_notice,
     }
 
 
@@ -1057,6 +1069,9 @@ def _select_acquired_theme_artworks(
     acquisition: ThemeAcquisitionResult,
     *,
     count: int,
+    engagement_model: "EngagementModel | None" = None,
+    engagement_context: Mapping[str, object] | None = None,
+    exploration_selected: bool = False,
 ) -> tuple[
     list[Dict[str, Any]],
     CarouselSetOptimizationResult,
@@ -1176,6 +1191,32 @@ def _select_acquired_theme_artworks(
             )
         candidate_dict = _theme_artwork_dict(final_candidate, candidate_path)
         candidate_dict["visual_features"] = visual_features
+        if engagement_model is not None:
+            prediction = engagement_model.score_candidate(
+                candidate_dict,
+                engagement_context or {},
+            )
+            quality_editorial = (
+                0.65 * float(candidate_dict.get("theme_relevance_score") or 0.0)
+                + 0.35 * float(candidate_dict.get("quality_score") or 0.0)
+            )
+            components = engagement_model.blend_candidate_score(
+                quality_editorial_score=quality_editorial,
+                prediction=prediction,
+                exploration_selected=exploration_selected,
+            )
+            candidate_dict.update(
+                {
+                    "selection_score": components.final_score,
+                    "learned_score": components.learned_score,
+                    "engagement_confidence": components.engagement_confidence,
+                    "quality_component": components.quality_component,
+                    "engagement_component": components.engagement_component,
+                    "diversity_component": components.diversity_component,
+                    "exploration_component": components.exploration_component,
+                    "exploration_selected": exploration_selected,
+                }
+            )
         validated_artworks.append(candidate_dict)
         if len(validated_artworks) == FINALIST_POOL_SIZE:
             break
@@ -1293,6 +1334,8 @@ def _select_acquired_theme_artworks(
             cover_candidate_ids=tuple(
                 str(artwork["id"]) for artwork in validated_artworks
             ),
+            engagement_model=engagement_model,
+            engagement_context=engagement_context,
         )
     except ValueError as error:
         for candidate in validated_artworks:
@@ -1368,6 +1411,9 @@ def fetch_themed_artworks(
     return_acquisition: bool = False,
     acquisition_policy: ThemeAcquisitionPolicy | None = None,
     acquisition_run_state: AcquisitionRunState | None = None,
+    engagement_model: "EngagementModel | None" = None,
+    engagement_context: Mapping[str, object] | None = None,
+    exploration_selected: bool = False,
 ) -> List[Dict[str, Any]] | ThemedArtworkSelection:
     """Select legacy query artwork or a structured, multi-query themed carousel."""
     if theme_definition is None:
@@ -1405,7 +1451,11 @@ def fetch_themed_artworks(
             availability=acquisition.availability,
         )
     artworks, optimization, acquisition = _select_acquired_theme_artworks(
-        acquisition, count=count
+        acquisition,
+        count=count,
+        engagement_model=engagement_model,
+        engagement_context=engagement_context,
+        exploration_selected=exploration_selected,
     )
     if return_acquisition:
         return ThemedArtworkSelection(tuple(artworks), acquisition, optimization)

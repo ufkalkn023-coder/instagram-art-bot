@@ -99,7 +99,7 @@ def test_stale_pending_expires_without_instagram_lookup(monkeypatch):
     assert cleaned == ["single-1"]
 
 
-@pytest.mark.parametrize("featured_count", [3, 5, 8])
+@pytest.mark.parametrize("featured_count", [5, 6, 8])
 def test_parent_published_status_atomically_confirms_whole_carousel(
     monkeypatch, featured_count
 ):
@@ -122,7 +122,7 @@ def test_parent_published_status_atomically_confirms_whole_carousel(
     assert summary.confirmed_published == 1
 
 
-@pytest.mark.parametrize("featured_count", [3, 5, 8])
+@pytest.mark.parametrize("featured_count", [5, 6, 8])
 def test_carousel_boundary_persists_parent_and_children_on_every_row(
     monkeypatch, featured_count
 ):
@@ -146,7 +146,7 @@ def test_carousel_boundary_persists_parent_and_children_on_every_row(
     assert all(record["publish_started_at"] for record in records)
 
 
-@pytest.mark.parametrize("featured_count", [3, 5, 8])
+@pytest.mark.parametrize("featured_count", [5, 6, 8])
 def test_child_finished_status_is_never_used_as_publication_evidence(
     monkeypatch, featured_count
 ):
@@ -620,11 +620,6 @@ def test_reconcile_only_cli_performs_no_acquisition_or_publish(monkeypatch):
     )
     monkeypatch.setattr(
         main,
-        "run_single_post",
-        lambda args: pytest.fail("reconcile-only acquired single artwork"),
-    )
-    monkeypatch.setattr(
-        main,
         "run_carousel_post",
         lambda args: pytest.fail("reconcile-only acquired carousel artworks"),
     )
@@ -669,18 +664,9 @@ def test_startup_reconciliation_runs_before_new_acquisition(monkeypatch):
     )
     monkeypatch.setattr(
         main,
-        "run_single_post",
-        lambda args: events.append("acquire")
-        or main.SinglePostResolution(
-            result=main.SinglePostResolutionCode.READY,
-            attempted=0,
-            zero_touch=0,
-            compatibility_processed=0,
-            single_ineligible=0,
-            fatal_failures=0,
-            diagnostics=(),
-        ),
+        "run_carousel_post",
+        lambda args: events.append("acquire"),
     )
 
-    assert main.main(["--mode", "single"]) == 0
+    assert main.main(["--mode", "carousel"]) == 0
     assert events == ["reconcile", "acquire"]

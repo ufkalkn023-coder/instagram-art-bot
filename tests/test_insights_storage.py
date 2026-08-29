@@ -48,6 +48,12 @@ class FakeS3:
         if self.conflict:
             raise _client_error("PreconditionFailed")
 
+    def list_objects_v2(self, **kwargs):
+        return {
+            "Contents": [{"Key": key} for key in sorted(self.objects)],
+            "IsTruncated": False,
+        }
+
 
 def test_missing_partition_initializes_and_uses_if_none_match():
     fake = FakeS3()
@@ -111,3 +117,19 @@ def test_conditional_write_conflict_and_malformed_object_fail_closed():
     malformed_storage = InsightsStorage(FakeS3({"insights/2026-08.json": "{\"schema_version\": 1, \"snapshots\": [{}}"}), "bucket")
     with pytest.raises(InsightsStorageError, match="malformed"):
         malformed_storage.load_partition("2026-08-01T00:00:00Z")
+
+
+def test_all_snapshot_partitions_are_loaded_in_stable_order_and_nonpartitions_ignored():
+    january = _snapshot(publication_id="january", media_id="media-january")
+    august = _snapshot(publication_id="august", media_id="media-august", target=72)
+    fake = FakeS3(
+        {
+            "insights/2026-08.json": json.dumps({"schema_version": 1, "snapshots": [august]}),
+            "insights/2026-01.json": json.dumps({"schema_version": 1, "snapshots": [january]}),
+            "insights/media-associations.json": json.dumps({"schema_version": 1, "associations": []}),
+        }
+    )
+
+    snapshots = InsightsStorage(fake, "bucket").load_all_snapshots()
+
+    assert [snapshot["publication_id"] for snapshot in snapshots] == ["january", "august"]

@@ -266,10 +266,11 @@ def test_hybrid_aic_analysis_requests_843_directly(monkeypatch, tmp_path):
     theme = get_default_theme_registry().by_id("winter_light")
     candidates = [
         _artwork(str(index), title=f"Winter snow landscape {index}")
-        for index in range(4)
+        for index in range(6)
     ]
     for candidate in candidates:
         candidate.artist_name = f"Artist {candidate.source_id}"
+        candidate.museum_name = f"Museum {candidate.source_id}"
         candidate.image_url = (
             f"https://www.artic.edu/iiif/2/image-{candidate.source_id}"
             "/full/1686,/0/default.jpg"
@@ -328,17 +329,17 @@ def test_hybrid_aic_analysis_requests_843_directly(monkeypatch, tmp_path):
     )
 
     selected, _, acquisition = art_fetcher._select_acquired_theme_artworks(
-        acquisition, count=3
+        acquisition, count=5
     )
 
-    assert len(selected) == 3
-    assert acquisition.availability.images_attempted == 4
+    assert len(selected) == 5
+    assert acquisition.availability.images_attempted == 6
     assert acquisition.availability.aic_fallback_attempted == 0
     assert acquisition.availability.aic_fallback_recovered == 0
     assert acquisition.availability.aic_fallback_failed == 0
-    assert set(requested_urls[:4]) == {
+    assert set(requested_urls[:6]) == {
         f"https://www.artic.edu/iiif/2/image-{index}/full/843,/0/default.jpg"
-        for index in range(4)
+        for index in range(6)
     }
 
 

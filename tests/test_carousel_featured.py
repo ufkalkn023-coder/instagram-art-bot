@@ -203,7 +203,7 @@ def test_valid_icc_profile_is_normalized_and_retained(tmp_path):
         assert output.info.get("icc_profile")
 
 
-@pytest.mark.parametrize("featured_count", [3, 5, 8])
+@pytest.mark.parametrize("featured_count", [5, 6, 8])
 def test_adaptive_carousels_share_one_presentation_without_fixed_length(
     tmp_path, featured_count
 ):

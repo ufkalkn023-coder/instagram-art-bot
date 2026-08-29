@@ -217,11 +217,11 @@ def test_publication_minimum_is_separate_from_preferred_headroom(monkeypatch):
             monkeypatch=monkeypatch,
         )
 
-    three = acquire_count(3)
-    assert not three.availability.sufficient
-    assert three.availability.failure_reason == "insufficient_unique_pool"
+    five = acquire_count(5)
+    assert not five.availability.sufficient
+    assert five.availability.failure_reason == "insufficient_unique_pool"
 
-    for count in range(4, 12):
+    for count in range(6, 12):
         narrow = acquire_count(count)
         assert narrow.availability.sufficient
         assert narrow.availability.narrow_pool
@@ -382,6 +382,7 @@ def test_canonical_dedup_merges_provenance_idempotently(monkeypatch):
 
 
 def test_raw_abundance_does_not_make_rights_or_relevance_pool_viable(monkeypatch):
+    monkeypatch.setenv("ARTFOLIO_RIGHTS_POLICY", "strict_public_domain")
     theme = _theme(primary_queries=["woman reading"], secondary_queries=[])
     unsafe = [_candidate(f"unsafe-{index}", rights=False) for index in range(20)]
     rights_result = _acquire(theme, [QueryAdapter({"woman reading": unsafe})], monkeypatch=monkeypatch)
@@ -397,7 +398,7 @@ def test_raw_abundance_does_not_make_rights_or_relevance_pool_viable(monkeypatch
     )
 
     assert not rights_result.availability.sufficient
-    assert rights_result.availability.failure_reason == "insufficient_confirmed_rights"
+    assert rights_result.availability.failure_reason == "insufficient_rights_policy_pool"
     assert not relevance_result.availability.sufficient
     assert relevance_result.availability.failure_reason == "insufficient_relevance_pool"
 

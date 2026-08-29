@@ -61,7 +61,7 @@ def test_non_featured_cover_metadata_cannot_enter_featured_works():
     assert future_cover["museum"] not in caption
 
 
-@pytest.mark.parametrize("featured_count", [3, 4, 5, 8])
+@pytest.mark.parametrize("featured_count", [5, 6, 7, 8])
 def test_adaptive_featured_works_numbering_matches_exact_final_order(featured_count):
     artworks = [_artwork(index) for index in range(1, featured_count + 1)]
     cover = _artwork(99, title="Cover Only")

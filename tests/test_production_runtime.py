@@ -13,18 +13,6 @@ from src.production_config import (
 )
 
 
-def _resolution(result=main.SinglePostResolutionCode.READY):
-    return main.SinglePostResolution(
-        result=result,
-        attempted=0,
-        zero_touch=0,
-        compatibility_processed=0,
-        single_ineligible=0,
-        fatal_failures=0,
-        diagnostics=(),
-    )
-
-
 def _set_required_environment(monkeypatch):
     for name in REQUIRED_PRODUCTION_VARIABLES:
         monkeypatch.setenv(name, "configured")
@@ -65,11 +53,11 @@ def test_dry_run_main_does_not_require_production_credentials(monkeypatch):
     )
     monkeypatch.setattr(
         main,
-        "run_single_post",
-        lambda args: calls.append(args.dry_run) or _resolution(),
+        "run_carousel_post",
+        lambda args: calls.append(args.dry_run),
     )
 
-    assert main.main(["--dry-run", "--mode", "single"]) == 0
+    assert main.main(["--dry-run"]) == 0
     assert calls == [True]
 
 
@@ -86,12 +74,12 @@ def test_missing_required_configuration_fails_before_production_path(
     )
     monkeypatch.setattr(
         main,
-        "run_single_post",
-        lambda args: calls.append("single") or _resolution(),
+        "run_carousel_post",
+        lambda args: calls.append("carousel"),
     )
     caplog.set_level(logging.INFO, logger=main.__name__)
 
-    assert main.main(["--mode", "single"]) == 1
+    assert main.main(["--mode", "carousel"]) == 1
     assert calls == []
     assert "Missing required production configuration" in caplog.text
     assert "must-not-appear" not in caplog.text
@@ -106,12 +94,12 @@ def test_optional_integrations_do_not_fail_production_startup(monkeypatch):
     _mock_reconciliation(monkeypatch, calls)
     monkeypatch.setattr(
         main,
-        "run_single_post",
-        lambda args: calls.append("single") or _resolution(),
+        "run_carousel_post",
+        lambda args: calls.append("carousel"),
     )
 
-    assert main.main(["--mode", "single"]) == 0
-    assert calls == ["reconcile", "single"]
+    assert main.main(["--mode", "carousel"]) == 0
+    assert calls == ["reconcile", "carousel"]
 
 
 def test_config_only_gate_exits_before_history_or_acquisition(monkeypatch):
@@ -123,28 +111,25 @@ def test_config_only_gate_exits_before_history_or_acquisition(monkeypatch):
     )
     monkeypatch.setattr(
         main,
-        "run_single_post",
+        "run_carousel_post",
         lambda args: pytest.fail("config gate entered acquisition"),
     )
 
     assert main.main(["--validate-production-config"]) == 0
 
 
-def test_no_candidate_is_clean_no_publish_outcome(monkeypatch, caplog):
+def test_carousel_selection_failure_returns_failure_status(monkeypatch, caplog):
     _set_required_environment(monkeypatch)
     _mock_reconciliation(monkeypatch)
     monkeypatch.setattr(
         main,
-        "run_single_post",
-        lambda args: _resolution(
-            main.SinglePostResolutionCode.NO_SINGLE_POST_PUBLISHABLE_CANDIDATE
-        ),
+        "run_carousel_post",
+        lambda args: (_ for _ in ()).throw(RuntimeError("insufficient candidates")),
     )
     caplog.set_level(logging.INFO, logger=main.__name__)
 
-    assert main.main(["--mode", "single"]) == 0
-    assert "production_no_publish mode=single" in caplog.text
-    assert "production_success mode=single" not in caplog.text
+    assert main.main(["--mode", "carousel"]) == 1
+    assert "production_failure error=RuntimeError" in caplog.text
 
 
 def test_publish_failure_returns_failure_status(monkeypatch):
@@ -152,25 +137,28 @@ def test_publish_failure_returns_failure_status(monkeypatch):
     _mock_reconciliation(monkeypatch)
     monkeypatch.setattr(
         main,
-        "run_single_post",
+        "run_carousel_post",
         lambda args: (_ for _ in ()).throw(
             instagram_poster.InstagramAPIError("publish rejected")
         ),
     )
 
-    assert main.main(["--mode", "single"]) == 1
+    assert main.main(["--mode", "carousel"]) == 1
 
 
 def test_explicit_mode_does_not_depend_on_wall_clock():
     carousel_hour = datetime(2026, 8, 26, 12, tzinfo=timezone.utc)
-    single_args = SimpleNamespace(mode="single", force_carousel=False)
-    carousel_args = SimpleNamespace(mode="carousel", force_carousel=False)
+    carousel_args = SimpleNamespace(mode="carousel")
 
-    assert main._resolve_production_mode(single_args, carousel_hour) is main.ProductionMode.SINGLE
     assert (
         main._resolve_production_mode(carousel_args, carousel_hour)
         is main.ProductionMode.CAROUSEL
     )
+
+
+def test_single_mode_is_not_exposed_by_production_cli():
+    with pytest.raises(SystemExit):
+        main.main(["--dry-run", "--mode", "single"])
 
 
 def test_cleanup_removes_only_new_production_artifacts(monkeypatch, tmp_path):

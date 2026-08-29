@@ -4,9 +4,9 @@ from dataclasses import dataclass
 from typing import Final
 
 
-MIN_FEATURED_WORKS: Final[int] = 3
+MIN_FEATURED_WORKS: Final[int] = 5
 MAX_FEATURED_WORKS: Final[int] = 8
-MIN_TOTAL_SLIDES: Final[int] = 4
+MIN_TOTAL_SLIDES: Final[int] = 6
 MAX_TOTAL_SLIDES: Final[int] = 9
 
 

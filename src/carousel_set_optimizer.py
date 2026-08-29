@@ -6,6 +6,7 @@ import logging
 from collections import Counter
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
+from typing import TYPE_CHECKING
 
 from src.artwork_visual_features import (
     ArtworkOrientation,
@@ -41,6 +42,9 @@ from src.carousel_policy import (
 
 logger = logging.getLogger(__name__)
 
+if TYPE_CHECKING:
+    from src.engagement_learning import EngagementModel
+
 FINALIST_POOL_SIZE = 24
 SET_BEAM_WIDTH = 64
 MAX_SWAP_ITERATIONS = 32
@@ -65,6 +69,8 @@ class ArtworkSelectionFeatures:
 
     @property
     def individual_strength(self) -> float:
+        if "learned_score" in self.artwork:
+            return round(max(0.0, min(100.0, self.candidate_score)), 4)
         return round(
             0.70 * self.theme_relevance
             + 0.25 * self.quality
@@ -119,6 +125,7 @@ class CarouselSetScoreBreakdown:
     visual_redundancy_penalty: float
     semantic_redundancy_penalty: float
     format_adjustments: float
+    engagement_prediction_adjustment: float = 0.0
 
     @property
     def total(self) -> float:
@@ -132,6 +139,7 @@ class CarouselSetScoreBreakdown:
             + self.orientation_balance
             + self.luminance_balance
             + self.format_adjustments
+            + self.engagement_prediction_adjustment
             - self.visual_redundancy_penalty
             - self.semantic_redundancy_penalty,
             4,
@@ -359,7 +367,11 @@ def _comparison_dimension_score(
 
 
 def score_carousel_set(
-    features: Sequence[ArtworkSelectionFeatures], theme: CarouselThemeDefinition
+    features: Sequence[ArtworkSelectionFeatures],
+    theme: CarouselThemeDefinition,
+    *,
+    engagement_model: "EngagementModel | None" = None,
+    engagement_context: Mapping[str, object] | None = None,
 ) -> CarouselSetScoreBreakdown:
     if not features:
         return CarouselSetScoreBreakdown(*(0.0 for _ in range(11)))
@@ -383,6 +395,20 @@ def score_carousel_set(
     ):
         format_adjustment = _comparison_dimension_score(
             features, theme.format_target.comparison_dimension
+        )
+
+    engagement_adjustment = 0.0
+    if engagement_model is not None:
+        prediction = engagement_model.score_set(
+            [feature.artwork for feature in features],
+            engagement_context or {},
+        )
+        engagement_adjustment = max(
+            -5.0,
+            min(
+                5.0,
+                (prediction.score - 50.0) / 10.0 * engagement_model.confidence,
+            ),
         )
 
     return CarouselSetScoreBreakdown(
@@ -423,6 +449,7 @@ def score_carousel_set(
         visual_redundancy_penalty=round(visual_penalty, 4),
         semantic_redundancy_penalty=round(semantic_penalty, 4),
         format_adjustments=round(format_adjustment, 4),
+        engagement_prediction_adjustment=round(engagement_adjustment, 4),
     )
 
 
@@ -444,6 +471,8 @@ def _beam_construct(
     theme: CarouselThemeDefinition,
     caps: _HardCaps,
     cover_candidate_ids: frozenset[str],
+    engagement_model: "EngagementModel | None" = None,
+    engagement_context: Mapping[str, object] | None = None,
 ) -> tuple[ArtworkSelectionFeatures, ...] | None:
     beam: list[tuple[ArtworkSelectionFeatures, ...]] = [()]
     for _depth in range(count):
@@ -467,7 +496,12 @@ def _beam_construct(
         beam = sorted(
             expanded.values(),
             key=lambda item: (
-                -score_carousel_set(item, theme).total,
+                -score_carousel_set(
+                    item,
+                    theme,
+                    engagement_model=engagement_model,
+                    engagement_context=engagement_context,
+                ).total,
                 tuple(sorted(feature.canonical_id for feature in item)),
             ),
         )[:SET_BEAM_WIDTH]
@@ -508,6 +542,8 @@ def _optimize_for_size(
     count: int,
     theme: CarouselThemeDefinition,
     cover_candidate_ids: frozenset[str],
+    engagement_model: "EngagementModel | None" = None,
+    engagement_context: Mapping[str, object] | None = None,
 ) -> tuple[
     tuple[ArtworkSelectionFeatures, ...],
     CarouselSetScoreBreakdown,
@@ -523,6 +559,8 @@ def _optimize_for_size(
             theme=theme,
             caps=caps,
             cover_candidate_ids=cover_candidate_ids,
+            engagement_model=engagement_model,
+            engagement_context=engagement_context,
         )
         if selected is not None:
             active_caps = caps
@@ -532,7 +570,12 @@ def _optimize_for_size(
 
     swap_iterations = 0
     while swap_iterations < MAX_SWAP_ITERATIONS:
-        current_breakdown = score_carousel_set(selected, theme)
+        current_breakdown = score_carousel_set(
+            selected,
+            theme,
+            engagement_model=engagement_model,
+            engagement_context=engagement_context,
+        )
         selected_ids = {feature.canonical_id for feature in selected}
         best = None
         for index in range(len(selected)):
@@ -546,7 +589,12 @@ def _optimize_for_size(
                     feature.canonical_id for feature in proposed
                 ):
                     continue
-                breakdown = score_carousel_set(proposed, theme)
+                breakdown = score_carousel_set(
+                    proposed,
+                    theme,
+                    engagement_model=engagement_model,
+                    engagement_context=engagement_context,
+                )
                 key = (
                     -breakdown.total,
                     tuple(sorted(feature.canonical_id for feature in proposed)),
@@ -570,7 +618,17 @@ def _optimize_for_size(
     selected = tuple(
         sorted(selected, key=lambda feature: (-feature.individual_strength, feature.canonical_id))
     )
-    return selected, score_carousel_set(selected, theme), active_caps, swap_iterations
+    return (
+        selected,
+        score_carousel_set(
+            selected,
+            theme,
+            engagement_model=engagement_model,
+            engagement_context=engagement_context,
+        ),
+        active_caps,
+        swap_iterations,
+    )
 
 
 def _marginal_inclusion_utility(
@@ -579,13 +637,25 @@ def _marginal_inclusion_utility(
     theme: CarouselThemeDefinition,
     profile_name: str,
     size_policy: CarouselSizePolicy,
+    engagement_model: "EngagementModel | None" = None,
+    engagement_context: Mapping[str, object] | None = None,
 ) -> tuple[float, str]:
     """Score the least worthwhile member using existing set and item utilities."""
-    full_utility = score_carousel_set(selected, theme).total
+    full_utility = score_carousel_set(
+        selected,
+        theme,
+        engagement_model=engagement_model,
+        engagement_context=engagement_context,
+    ).total
     weakest: tuple[float, str] | None = None
     for index, feature in enumerate(selected):
         reduced = (*selected[:index], *selected[index + 1 :])
-        set_effect = full_utility - score_carousel_set(reduced, theme).total
+        set_effect = full_utility - score_carousel_set(
+            reduced,
+            theme,
+            engagement_model=engagement_model,
+            engagement_context=engagement_context,
+        ).total
         bounded_effect = max(
             -size_policy.max_set_effect,
             min(size_policy.max_set_effect, set_effect),
@@ -609,8 +679,10 @@ def optimize_carousel_set(
     min_relevance: float = DEFAULT_MIN_THEME_RELEVANCE,
     cover_candidate_ids: Sequence[str] = (),
     size_policy: CarouselSizePolicy = ADAPTIVE_CAROUSEL_SIZE_POLICY,
+    engagement_model: "EngagementModel | None" = None,
+    engagement_context: Mapping[str, object] | None = None,
 ) -> CarouselSetOptimizationResult:
-    """Choose the strongest feasible 3–8-work set using bounded marginal utility."""
+    """Choose the strongest feasible 5–8-work set using bounded marginal utility."""
     if not MIN_FEATURED_WORKS <= count <= MAX_FEATURED_WORKS:
         raise ValueError(
             f"Carousel maximum must be between {MIN_FEATURED_WORKS} and "
@@ -654,6 +726,8 @@ def optimize_carousel_set(
             count=featured_count,
             theme=theme,
             cover_candidate_ids=cover_ids,
+            engagement_model=engagement_model,
+            engagement_context=engagement_context,
         )
         if optimized is None:
             logger.debug(
@@ -674,6 +748,8 @@ def optimize_carousel_set(
                 theme=theme,
                 profile_name=caps_for_size.name,
                 size_policy=size_policy,
+                engagement_model=engagement_model,
+                engagement_context=engagement_context,
             )
             accepted = marginal >= size_policy.marginal_inclusion_threshold
         diagnostics.append(
@@ -743,7 +819,7 @@ def optimize_carousel_set(
     logger.info(
         "carousel_set_selected theme=%s format=%s candidates=%s set_score=%.2f "
         "avg_relevance=%.2f avg_quality=%.2f artists=%s museums=%s regions=%s "
-        "periods=%s orientations=%s redundancy_penalty=%.2f",
+        "periods=%s orientations=%s redundancy_penalty=%.2f engagement_adjustment=%+.2f",
         theme.id,
         theme.format.value,
         len(finalists),
@@ -756,11 +832,12 @@ def optimize_carousel_set(
         periods,
         orientations,
         breakdown.visual_redundancy_penalty + breakdown.semantic_redundancy_penalty,
+        breakdown.engagement_prediction_adjustment,
     )
     logger.debug(
         "carousel_set_breakdown theme=%s individual=%.4f artist=%.4f museum=%.4f "
         "region=%.4f period=%.4f medium=%.4f orientation=%.4f luminance=%.4f "
-        "visual_penalty=%.4f semantic_penalty=%.4f format=%.4f total=%.4f",
+        "visual_penalty=%.4f semantic_penalty=%.4f format=%.4f engagement=%.4f total=%.4f",
         theme.id,
         breakdown.individual_strength,
         breakdown.artist_diversity,
@@ -773,6 +850,7 @@ def optimize_carousel_set(
         breakdown.visual_redundancy_penalty,
         breakdown.semantic_redundancy_penalty,
         breakdown.format_adjustments,
+        breakdown.engagement_prediction_adjustment,
         breakdown.total,
     )
     return CarouselSetOptimizationResult(

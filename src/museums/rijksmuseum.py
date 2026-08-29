@@ -85,9 +85,6 @@ class RijksmuseumAdapter(MuseumAdapter):
             for item in artworks:
                 rights_text = item.get("copyrightHolder")
                 rights_status = get_rights_status(rights_text)
-                if rights_status is None:
-                    logger.debug(f"[Rijksmuseum] Rejected {item.get('objectNumber')}: rights not confirmed.")
-                    continue
 
                 obj_number = item.get("objectNumber")
                 if not obj_number:
@@ -119,11 +116,13 @@ class RijksmuseumAdapter(MuseumAdapter):
                     classification=metadata_text(item.get("objectTypes")),
                     style_or_period=style_or_period,
                     museum_name="Rijksmuseum, Amsterdam",
+                    artwork_url=item.get("links", {}).get("web") if isinstance(item.get("links"), dict) else None,
                     image_url=image_url,
                     license=rights_text,
-                    is_public_domain=True,
-                    rights_status=rights_status,
+                    is_public_domain=rights_status is not None,
+                    rights_status=rights_status or ("KNOWN_RESTRICTED" if rights_text else None),
                     rights_text=rights_text,
+                    copyright_notice=rights_text,
                 )
                 candidates.append(artwork)
 

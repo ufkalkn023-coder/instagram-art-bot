@@ -33,6 +33,7 @@ from src.quality_filter import (
     calculate_quality_score,
     validate_and_download_image_with_metadata,
 )
+from src.rights_policy import is_rights_eligible
 from src.aic_image_policy import ImageDownloadPurpose, is_aic_iiif_url
 from src.region import normalize_region
 from src.theme_acquisition import ThemeAcquisitionResult, ThemeCandidate
@@ -183,8 +184,14 @@ def _cover_artwork_dict(candidate, local_path: str) -> dict:
         "visual_category": features.get("visual_category", "other"),
         "period": features.get("period", "unknown"),
         "region": normalize_region(candidate.region),
+        "source": candidate.source,
+        "artwork_url": candidate.artwork_url,
+        "credit_line": candidate.credit_line,
+        "license": candidate.license,
         "is_public_domain": candidate.is_public_domain,
         "rights_status": candidate.rights_status,
+        "rights_text": candidate.rights_text,
+        "copyright_notice": candidate.copyright_notice,
     }
 
 
@@ -247,8 +254,8 @@ def select_editorial_cover(
                 if candidate_id in excluded_ids:
                     reject("excluded_or_duplicate")
                     continue
-                if not candidate.has_confirmed_rights:
-                    reject("rights_unconfirmed")
+                if not is_rights_eligible(candidate):
+                    reject("rights_policy")
                     continue
                 if not candidate.image_url:
                     reject("missing_image_url")
@@ -408,8 +415,8 @@ def _select_editorial_cover_from_acquisition(
     for themed_candidate, _ in ranked:
         candidate = themed_candidate.artwork
         candidate_id = candidate.canonical_id
-        if not candidate.has_confirmed_rights:
-            reject("rights_unconfirmed")
+        if not is_rights_eligible(candidate):
+            reject("rights_policy")
             continue
         if themed_candidate.evidence.theme_relevance_score < acquisition.policy.minimum_relevance:
             reject("theme_relevance_below_threshold")

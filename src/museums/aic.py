@@ -3,7 +3,7 @@ import random
 import requests
 from typing import List
 from .base import AdapterHTTPError, MuseumAdapter
-from src.aic_image_policy import aic_request_headers
+from src.aic_image_policy import AIC_ANALYSIS_WIDTH, aic_request_headers
 from src.models import NormalizedArtwork
 from src.region import infer_region, metadata_text
 from src.source_health import classify_exception, classify_http_failure
@@ -35,7 +35,7 @@ class AICAdapter(MuseumAdapter):
             search_query = f"painting {query}" if query else "painting"
             url = (
                 f"https://api.artic.edu/api/v1/artworks/search"
-                f"?q={search_query}&query[term][is_public_domain]=true"
+                f"?q={search_query}"
                 f"&fields=id,title,artist_title,artist_display,date_display,medium_display,image_id,classification_title,place_of_origin,department_title,style_titles,is_public_domain,copyright_notice,credit_line"
                 f"&limit={limit}&page={page}"
             )
@@ -64,10 +64,6 @@ class AICAdapter(MuseumAdapter):
                 return candidates
             
             for item in artworks:
-                if item.get("is_public_domain") is not True:
-                    logger.debug(f"[AIC] Rejected {item.get('id')}: rights not confirmed.")
-                    continue
-
                 image_id = item.get("image_id")
                 if not image_id:
                     continue
@@ -76,9 +72,16 @@ class AICAdapter(MuseumAdapter):
                 if not cls or "painting" not in cls.lower():
                     continue
                     
+                public_domain_flag = item.get("is_public_domain")
+                is_public_domain = public_domain_flag is True
+                derivative_width = (
+                    AIC_PUBLIC_DOMAIN_IIIF_WIDTH
+                    if is_public_domain
+                    else AIC_ANALYSIS_WIDTH
+                )
                 image_url = (
                     f"https://www.artic.edu/iiif/2/{image_id}"
-                    f"/full/{AIC_PUBLIC_DOMAIN_IIIF_WIDTH},/0/default.jpg"
+                    f"/full/{derivative_width},/0/default.jpg"
                 )
                 
                 artwork = NormalizedArtwork(
@@ -102,9 +105,16 @@ class AICAdapter(MuseumAdapter):
                     museum_name="Art Institute of Chicago",
                     image_url=image_url,
                     credit_line=item.get("credit_line"),
-                    is_public_domain=True,
-                    rights_status="CONFIRMED_PUBLIC_DOMAIN",
+                    is_public_domain=is_public_domain,
+                    rights_status=(
+                        "CONFIRMED_PUBLIC_DOMAIN"
+                        if is_public_domain
+                        else "KNOWN_RESTRICTED"
+                        if public_domain_flag is False
+                        else None
+                    ),
                     rights_text=item.get("copyright_notice"),
+                    copyright_notice=item.get("copyright_notice"),
                 )
                 candidates.append(artwork)
                 

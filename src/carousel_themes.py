@@ -318,7 +318,7 @@ class CarouselThemeDefinition(BaseModel):
         le=100,
         description=(
             "Preferred metadata acquisition headroom and early-stop target; "
-            "publication viability is derived from the minimum distinct 1+3 plan."
+            "publication viability is derived from the minimum distinct 1+5 plan."
         ),
     )
     enabled: bool = True
@@ -593,20 +593,20 @@ def _theme_fatigue(count: int) -> float:
     if count == 0:
         return 0.0
     if count == 1:
-        return -18.0
+        return -8.0
     if count == 2:
-        return -34.0
-    return -44.0
+        return -12.0
+    return -16.0
 
 
 def _family_fatigue(count: int) -> float:
     if count <= 1:
         return 0.0
     if count == 2:
-        return -5.0
+        return -2.0
     if count == 3:
-        return -11.0
-    return max(-24.0, -17.0 - ((count - 4) * 3.0))
+        return -4.0
+    return max(-10.0, -6.0 - ((count - 4) * 1.0))
 
 
 def _format_fatigue(count: int) -> float:

@@ -73,7 +73,7 @@ def test_met_seeded_search_term_and_object_sample_are_reproducible(monkeypatch):
 
     def request(url, **kwargs):
         calls.append(url)
-        if url.endswith("/search?hasImages=true&isPublicDomain=true&medium=Paintings&q=baroque painting"):
+        if url.endswith("/search?hasImages=true&medium=Paintings&q=baroque painting"):
             return FakeResponse({"objectIDs": list(range(1, 11))})
         object_id = int(url.rsplit("/", 1)[1])
         return FakeResponse(

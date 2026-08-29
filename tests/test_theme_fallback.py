@@ -218,13 +218,11 @@ def test_only_successful_fallback_theme_is_reserved_in_history(monkeypatch):
 
     main.run_carousel_post(SimpleNamespace(dry_run=False, image_url=None, pinterest=False))
 
-    assert reservations == [
-        {
-            "theme_id": second.id,
-            "theme_family": second.family.value,
-            "carousel_format": second.format.value,
-        }
-    ]
+    assert len(reservations) == 1
+    assert reservations[0]["theme_id"] == second.id
+    assert reservations[0]["theme_family"] == second.family.value
+    assert reservations[0]["carousel_format"] == second.format.value
+    assert reservations[0]["publication_metadata"]["carousel_theme"] == second.id
 
 
 def test_fallback_attempts_are_strictly_bounded_and_raise_specific_error(monkeypatch):

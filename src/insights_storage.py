@@ -2,6 +2,7 @@
 
 import json
 import os
+import re
 from datetime import datetime, timezone
 from typing import Any
 
@@ -14,6 +15,7 @@ SNAPSHOT_SCHEMA_VERSION = 1
 ASSOCIATION_SCHEMA_VERSION = 1
 SNAPSHOT_SLOTS = {1, 6, 24, 72, 168}
 MATCH_METHODS = {"caption_exact", "caption_normalized", "title_artist_timestamp", "manual", "bot_publication"}
+SNAPSHOT_PARTITION_PATTERN = re.compile(r"^insights/\d{4}-\d{2}\.json$")
 
 
 class InsightsStorageError(Exception):
@@ -185,6 +187,68 @@ class InsightsStorage:
         except (KeyError, UnicodeDecodeError, json.JSONDecodeError) as exc:
             raise InsightsStorageError("Analytics partition is unreadable or malformed") from exc
         return key, data, response.get("ETag", "").strip('"')
+
+    def load_all_snapshots(self) -> list[dict[str, Any]]:
+        """Read every monthly partition for rebuildable engagement learning.
+
+        Malformed individual snapshots are ignored by the learning layer. A
+        malformed partition or unavailable listing still raises here so callers
+        can explicitly degrade to cold-start selection.
+        """
+        keys: list[str] = []
+        continuation: str | None = None
+        while True:
+            request: dict[str, Any] = {
+                "Bucket": self._bucket,
+                "Prefix": "insights/",
+                "MaxKeys": 1000,
+            }
+            if continuation:
+                request["ContinuationToken"] = continuation
+            try:
+                response = self._s3.list_objects_v2(**request)
+            except ClientError as exc:
+                raise InsightsStorageError(
+                    "Unable to list analytics partitions from R2"
+                ) from exc
+            contents = response.get("Contents", [])
+            if not isinstance(contents, list):
+                raise InsightsStorageError("Analytics partition listing is malformed")
+            for item in contents:
+                key = item.get("Key") if isinstance(item, dict) else None
+                if isinstance(key, str) and SNAPSHOT_PARTITION_PATTERN.fullmatch(key):
+                    keys.append(key)
+            if not response.get("IsTruncated"):
+                break
+            continuation = response.get("NextContinuationToken")
+            if not isinstance(continuation, str) or not continuation:
+                raise InsightsStorageError("Analytics partition listing is incomplete")
+
+        snapshots: list[dict[str, Any]] = []
+        for key in sorted(set(keys)):
+            try:
+                response = self._s3.get_object(Bucket=self._bucket, Key=key)
+                payload = json.loads(response["Body"].read().decode("utf-8"))
+            except ClientError as exc:
+                raise InsightsStorageError(
+                    f"Unable to read analytics partition {key}"
+                ) from exc
+            except (KeyError, UnicodeDecodeError, json.JSONDecodeError) as exc:
+                raise InsightsStorageError(
+                    f"Analytics partition {key} is unreadable or malformed"
+                ) from exc
+            if (
+                not isinstance(payload, dict)
+                or payload.get("schema_version") != SNAPSHOT_SCHEMA_VERSION
+            ):
+                raise InsightsStorageError(f"Analytics partition {key} is malformed")
+            partition_snapshots = payload.get("snapshots")
+            if not isinstance(partition_snapshots, list):
+                raise InsightsStorageError(f"Analytics partition {key} is malformed")
+            snapshots.extend(
+                snapshot for snapshot in partition_snapshots if isinstance(snapshot, dict)
+            )
+        return snapshots
 
     def load_associations(self) -> tuple[dict[str, Any], str | None]:
         try:

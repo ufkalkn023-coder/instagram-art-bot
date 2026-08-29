@@ -26,6 +26,7 @@ from src.format_contracts import (
 from src.models import NormalizedArtwork
 from src.museums.base import AdapterHTTPError
 from src.quality_filter import calculate_measurement_coverage, calculate_quality_score
+from src.rights_policy import is_rights_eligible
 from src.carousel_policy import MIN_TOTAL_SLIDES
 
 logger = logging.getLogger(__name__)
@@ -540,10 +541,10 @@ def _candidate_completeness(artwork: NormalizedArtwork) -> int:
 
 def _candidate_variant_rank(artwork: NormalizedArtwork) -> tuple[int, int, int, int]:
     return (
-        int(artwork.has_confirmed_rights),
         int(bool(artwork.image_url)),
         int(bool(artwork.image_width and artwork.image_height)),
         _candidate_completeness(artwork),
+        int(bool(artwork.rights_status or artwork.rights_text)),
     )
 
 
@@ -608,7 +609,7 @@ def _build_candidates(
             )
             continue
         counts["target"] += 1
-        if not artwork.has_confirmed_rights:
+        if not is_rights_eligible(artwork):
             continue
         counts["rights"] += 1
         if not artwork.image_url or quality < min_quality:
@@ -664,7 +665,7 @@ def _failure_reason(
     if unique < viability_minimum:
         return "insufficient_unique_pool"
     if counts["rights"] < viability_minimum:
-        return "insufficient_confirmed_rights"
+        return "insufficient_rights_policy_pool"
     if counts["quality"] < viability_minimum:
         return "insufficient_quality_pool"
     if counts["relevance"] < viability_minimum:

@@ -257,7 +257,7 @@ def test_constrained_format_accepts_minimum_product_but_retains_headroom_target(
 
     assert acquisition.availability.sufficient
     assert acquisition.availability.format_target_matches == 8
-    assert acquisition.availability.absolute_minimum == 4
+    assert acquisition.availability.absolute_minimum == 6
     assert acquisition.availability.narrow_pool
 
 

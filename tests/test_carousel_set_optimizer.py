@@ -16,8 +16,10 @@ from src.carousel_set_optimizer import (
     build_selection_features,
     optimize_carousel_set,
     pairwise_redundancy,
+    score_carousel_set,
 )
 from src.carousel_themes import CarouselFormat, CarouselThemeDefinition, ThemeFamily
+from src.engagement_learning import EngagementModel, FeatureEstimate
 from src.models import NormalizedArtwork
 from src.quality_filter import ImageValidationResult
 from src.theme_acquisition import ThemeAcquisitionPolicy
@@ -178,18 +180,18 @@ def test_optimizer_preserves_floors_uniqueness_caps_and_determinism():
         raise AssertionError("quality and relevance floors must not be bypassed")
 
 
-def test_adaptive_optimizer_accepts_three_excellent_works_with_distinct_cover():
+def test_adaptive_optimizer_accepts_five_excellent_works_with_distinct_cover():
     theme = _theme()
     artworks = [
         _artwork(index, relevance=score, quality=score, selection=score)
-        for index, score in enumerate((94.0, 92.0, 90.0))
+        for index, score in enumerate((96.0, 94.0, 92.0, 90.0, 88.0))
     ]
 
     result = optimize_carousel_set(
         artworks, theme=theme, cover_candidate_ids=("distinct-cover",)
     )
 
-    assert len(result.artworks) == 3
+    assert len(result.artworks) == 5
     assert result.optimizer_size_decision == "no_feasible_larger_set"
 
 
@@ -322,6 +324,37 @@ def test_general_theme_improves_region_diversity_when_equivalent_candidates_exis
     assert len(set(regions)) >= 5
 
 
+def test_set_score_applies_bounded_learned_engagement_prediction():
+    theme = _theme()
+    features = tuple(build_selection_features(_artwork(index), theme) for index in range(5))
+    baseline = score_carousel_set(features, theme)
+    model = EngagementModel(
+        global_score=50.0,
+        confidence=1.0,
+        useful_publications=10,
+        effective_observations=10.0,
+        feature_estimates={
+            f"theme:{theme.id}": FeatureEstimate(
+                score=90.0,
+                observed_score=90.0,
+                confidence=1.0,
+                observations=10,
+                effective_observations=10.0,
+            )
+        },
+    )
+
+    learned = score_carousel_set(
+        features,
+        theme,
+        engagement_model=model,
+        engagement_context={"carousel_theme": theme.id},
+    )
+
+    assert learned.engagement_prediction_adjustment == 4.0
+    assert learned.total == baseline.total + 4.0
+
+
 def test_structured_fetch_validates_a_finalist_pool_then_returns_typed_set_result(
     monkeypatch, tmp_path
 ):
@@ -385,7 +418,7 @@ def test_structured_fetch_validates_a_finalist_pool_then_returns_typed_set_resul
     )
 
     assert isinstance(result, ThemedArtworkSelection)
-    assert 3 <= len(result.artworks) <= 8
+    assert 5 <= len(result.artworks) <= 8
     assert result.set_optimization.optimizer_size_decision == "marginal_utility_threshold"
     assert result.set_optimization is not None
     assert result.set_optimization.finalist_count == 12

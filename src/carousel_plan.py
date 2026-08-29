@@ -13,7 +13,7 @@ from src.carousel_editorial import CarouselEditorialFacts
 
 
 class CoverMode(str, Enum):
-    """Supported editorial presentations of a rights-cleared cover artwork."""
+    """Supported editorial presentations of a rights-policy-eligible cover."""
 
     FULL_ARTWORK = "FULL_ARTWORK"
     DETAIL_CROP = "DETAIL_CROP"
@@ -72,6 +72,8 @@ class CarouselPlan:
     cover: CoverAsset
     featured_artworks: tuple[Mapping[str, Any], ...]
     caption: str
+    cover_variant: str = "editorial"
+    caption_hook_type: str = "curiosity"
     editorial_facts: CarouselEditorialFacts | None = None
     caption_intro: str = ""
     set_optimization: CarouselSetOptimizationResult | None = None
@@ -120,6 +122,8 @@ class CarouselPlan:
         cover: CoverAsset,
         featured_artworks: Sequence[Mapping[str, Any]],
         caption: str,
+        cover_variant: str = "editorial",
+        caption_hook_type: str = "curiosity",
         set_optimization: CarouselSetOptimizationResult | None = None,
         sequence: CarouselSequenceResult | None = None,
     ) -> "CarouselPlan":
@@ -133,6 +137,8 @@ class CarouselPlan:
             cover=cover,
             featured_artworks=tuple(featured_artworks),
             caption=caption,
+            cover_variant=cover_variant,
+            caption_hook_type=caption_hook_type,
             set_optimization=set_optimization,
             sequence=sequence,
         )

@@ -74,7 +74,7 @@ def _install_downloads(monkeypatch, tmp_path, invalid_ids=()):
     return attempted
 
 
-def test_cover_selection_is_distinct_rights_confirmed_and_theme_queried(monkeypatch, tmp_path):
+def test_cover_selection_is_distinct_permissive_and_theme_queried(monkeypatch, tmp_path):
     excluded = _candidate("featured_0")
     unconfirmed = _candidate("unconfirmed", rights=False)
     safe = _candidate("cover")
@@ -93,10 +93,10 @@ def test_cover_selection_is_distinct_rights_confirmed_and_theme_queried(monkeypa
         selection_run_seed=SelectionRunSeed("fixed", "test"),
     )
 
-    assert cover.canonical_id == safe.canonical_id
+    assert cover.canonical_id == unconfirmed.canonical_id
     assert cover.canonical_id not in {artwork["id"] for artwork in featured}
-    assert cover.artwork["is_public_domain"] is True
-    assert cover.artwork["rights_status"] == "CONFIRMED_PUBLIC_DOMAIN"
+    assert cover.artwork["is_public_domain"] is False
+    assert cover.artwork["rights_status"] is None
     assert queries == ["cool winter"]
 
 

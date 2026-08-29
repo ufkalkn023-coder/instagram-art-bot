@@ -241,12 +241,16 @@ def test_carousel_stops_when_child_or_parent_is_not_finished(monkeypatch):
     )
     monkeypatch.setattr(instagram_poster.requests, "get", response_sequence(FakeResponse(200, {"status_code": "ERROR"})))
     with pytest.raises(instagram_poster.InstagramMediaProcessingError):
-        instagram_poster.post_carousel_to_instagram_graph_api(["a", "b"], "caption", "account", "token")
+        instagram_poster.post_carousel_to_instagram_graph_api(
+            [f"item-{index}" for index in range(6)],
+            "caption",
+            "account",
+            "token",
+        )
     assert len(child_posts) == 1
 
     parent_posts = response_sequence(
-        FakeResponse(200, {"id": "child-1"}),
-        FakeResponse(200, {"id": "child-2"}),
+        *[FakeResponse(200, {"id": f"child-{index}"}) for index in range(6)],
         FakeResponse(200, {"id": "parent"}),
     )
     monkeypatch.setattr(instagram_poster.requests, "post", parent_posts)
@@ -254,13 +258,17 @@ def test_carousel_stops_when_child_or_parent_is_not_finished(monkeypatch):
         instagram_poster.requests,
         "get",
         response_sequence(
-            FakeResponse(200, {"status_code": "FINISHED"}),
-            FakeResponse(200, {"status_code": "FINISHED"}),
+            *[FakeResponse(200, {"status_code": "FINISHED"}) for _ in range(6)],
             FakeResponse(200, {"status_code": "ERROR"}),
         ),
     )
     with pytest.raises(instagram_poster.InstagramMediaProcessingError):
-        instagram_poster.post_carousel_to_instagram_graph_api(["a", "b"], "caption", "account", "token")
+        instagram_poster.post_carousel_to_instagram_graph_api(
+            [f"item-{index}" for index in range(6)],
+            "caption",
+            "account",
+            "token",
+        )
 
 
 def test_carousel_publishes_only_after_all_children_and_parent_finish(monkeypatch):
@@ -268,8 +276,7 @@ def test_carousel_publishes_only_after_all_children_and_parent_finish(monkeypatc
         instagram_poster.requests,
         "post",
         response_sequence(
-            FakeResponse(200, {"id": "child-1"}),
-            FakeResponse(200, {"id": "child-2"}),
+            *[FakeResponse(200, {"id": f"child-{index}"}) for index in range(6)],
             FakeResponse(200, {"id": "parent"}),
             FakeResponse(200, {"id": "media-1"}),
         ),
@@ -277,10 +284,15 @@ def test_carousel_publishes_only_after_all_children_and_parent_finish(monkeypatc
     monkeypatch.setattr(
         instagram_poster.requests,
         "get",
-        response_sequence(*[FakeResponse(200, {"status_code": "FINISHED"}) for _ in range(3)]),
+        response_sequence(*[FakeResponse(200, {"status_code": "FINISHED"}) for _ in range(7)]),
     )
 
-    assert instagram_poster.post_carousel_to_instagram_graph_api(["a", "b"], "caption", "account", "token") == "media-1"
+    assert instagram_poster.post_carousel_to_instagram_graph_api(
+        [f"item-{index}" for index in range(6)],
+        "caption",
+        "account",
+        "token",
+    ) == "media-1"
 
 
 @pytest.mark.parametrize("media_urls", [[], ["one"], [str(index) for index in range(11)]])

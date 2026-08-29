@@ -36,7 +36,7 @@ def _freetext_value(content: dict[str, Any], field: str) -> str:
     return ""
 
 
-def _cc0_image_media(content: dict[str, Any]) -> tuple[dict[str, Any], dict[str, Any]] | None:
+def _image_media(content: dict[str, Any]) -> tuple[dict[str, Any], dict[str, Any]] | None:
     descriptive = content.get("descriptiveNonRepeating", {})
     if not isinstance(descriptive, dict):
         return None
@@ -45,16 +45,16 @@ def _cc0_image_media(content: dict[str, Any]) -> tuple[dict[str, Any], dict[str,
     if not isinstance(media_items, list):
         return None
 
+    fallback: tuple[dict[str, Any], dict[str, Any]] | None = None
     for media in media_items:
         if not isinstance(media, dict) or media.get("type") != "Images":
             continue
         usage = media.get("usage", {})
-        if (
-            not isinstance(usage, dict)
-            or not isinstance(usage.get("access"), str)
-            or usage["access"].strip().upper() != SMITHSONIAN_CC0
-        ):
-            continue
+        is_cc0 = (
+            isinstance(usage, dict)
+            and isinstance(usage.get("access"), str)
+            and usage["access"].strip().upper() == SMITHSONIAN_CC0
+        )
         resources = media.get("resources", [])
         if not isinstance(resources, list):
             resources = []
@@ -63,8 +63,11 @@ def _cc0_image_media(content: dict[str, Any]) -> tuple[dict[str, Any], dict[str,
                 continue
             url = resource.get("url")
             if isinstance(url, str) and url.startswith("https://") and not url.lower().endswith(".tif"):
-                return media, resource
-    return None
+                if is_cc0:
+                    return media, resource
+                if fallback is None:
+                    fallback = (media, resource)
+    return fallback
 
 
 class SmithsonianAdapter(MuseumAdapter):
@@ -89,7 +92,7 @@ class SmithsonianAdapter(MuseumAdapter):
         search_query = query or "painting"
         params = {
             "api_key": api_key,
-            "q": f'({search_query}) AND online_media_type:"Images" AND media_usage:"CC0"',
+            "q": f'({search_query}) AND online_media_type:"Images"',
             "rows": min(max(requested * 2, 10), 40),
             "sort": "id",
         }
@@ -133,7 +136,7 @@ class SmithsonianAdapter(MuseumAdapter):
             content = item.get("content", {})
             if not isinstance(content, dict):
                 continue
-            media_and_resource = _cc0_image_media(content)
+            media_and_resource = _image_media(content)
             if media_and_resource is None:
                 continue
             media, resource = media_and_resource
@@ -149,6 +152,12 @@ class SmithsonianAdapter(MuseumAdapter):
             geographic_origin = metadata_text(indexed.get("place"))
             artist_nationality = metadata_text(indexed.get("nationality"))
             style_or_period = _freetext_value(content, "style")
+            usage = media.get("usage", {})
+            rights_text = usage.get("access") if isinstance(usage, dict) else None
+            is_public_domain = (
+                isinstance(rights_text, str)
+                and rights_text.strip().upper() == SMITHSONIAN_CC0
+            )
             candidates.append(
                 NormalizedArtwork(
                     source=self.source_id,
@@ -173,10 +182,18 @@ class SmithsonianAdapter(MuseumAdapter):
                     image_url=resource["url"],
                     image_width=image_width,
                     image_height=image_height,
-                    license=SMITHSONIAN_CC0,
-                    is_public_domain=True,
-                    rights_status="CONFIRMED_OPEN_ACCESS",
-                    rights_text=SMITHSONIAN_CC0,
+                    credit_line=_freetext_value(content, "creditLine") or None,
+                    license=rights_text,
+                    is_public_domain=is_public_domain,
+                    rights_status=(
+                        "CONFIRMED_OPEN_ACCESS"
+                        if is_public_domain
+                        else "KNOWN_RESTRICTED"
+                        if rights_text
+                        else None
+                    ),
+                    rights_text=rights_text,
+                    copyright_notice=rights_text,
                 )
             )
         return candidates

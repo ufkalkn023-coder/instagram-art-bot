@@ -43,10 +43,13 @@ def _rights_status(value: object) -> tuple[str, str] | None:
     return (normalized[0], status) if status else None
 
 
-def _image_resource(record: dict[str, Any]) -> tuple[str, str, str, dict[str, Any]] | None:
+def _image_resource(
+    record: dict[str, Any],
+) -> tuple[str, str | None, str | None, dict[str, Any]] | None:
     aggregations = record.get("aggregations", [])
     if not isinstance(aggregations, list):
         return None
+    fallback: tuple[str, str | None, str | None, dict[str, Any]] | None = None
     for aggregation in aggregations:
         if not isinstance(aggregation, dict):
             continue
@@ -64,7 +67,10 @@ def _image_resource(record: dict[str, Any]) -> tuple[str, str, str, dict[str, An
             if accepted_rights:
                 rights_uri, rights_status = accepted_rights
                 return image_url, rights_uri, rights_status, resource
-    return None
+            rights_uri = _first_text(rights) or None
+            if fallback is None:
+                fallback = (image_url, rights_uri, None, resource)
+    return fallback
 
 
 class EuropeanaAdapter(MuseumAdapter):
@@ -95,7 +101,6 @@ class EuropeanaAdapter(MuseumAdapter):
                     "rows": requested,
                     "media": "true",
                     "profile": "rich",
-                    "reusability": "open",
                 },
                 headers={"User-Agent": "InstagramArtBot/1.0"},
                 timeout=20,
@@ -177,9 +182,14 @@ class EuropeanaAdapter(MuseumAdapter):
                     image_width=width,
                     image_height=height,
                     license=rights_uri,
-                    is_public_domain=True,
-                    rights_status=rights_status,
+                    credit_line=_first_text(record.get("edmDataProvider")) or None,
+                    is_public_domain=rights_status in {
+                        "CONFIRMED_PUBLIC_DOMAIN",
+                        "CONFIRMED_OPEN_ACCESS",
+                    },
+                    rights_status=rights_status or ("KNOWN_RESTRICTED" if rights_uri else None),
                     rights_text=rights_uri,
+                    copyright_notice=rights_uri,
                 )
             )
         return candidates

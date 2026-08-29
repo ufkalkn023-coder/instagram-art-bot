@@ -45,7 +45,7 @@ class MetAdapter(MuseumAdapter):
             search_term = query if query else random_source.choice(MET_SEARCH_TERMS)
             search_url = (
                 f"{config.MET_API_BASE}/search"
-                f"?hasImages=true&isPublicDomain=true&medium=Paintings&q={search_term}"
+                f"?hasImages=true&medium=Paintings&q={search_term}"
             )
             
             headers = {"User-Agent": "InstagramArtBot/1.0"}
@@ -72,10 +72,6 @@ class MetAdapter(MuseumAdapter):
                     continue
 
                 detail = d_res.json()
-                if detail.get("isPublicDomain") is not True:
-                    logger.debug(f"[Met] Rejected {obj_id}: rights not confirmed.")
-                    continue
-
                 title = detail.get("title") or "Untitled"
                 object_name = detail.get("objectName") or ""
                 classification = detail.get("classification") or ""
@@ -95,6 +91,9 @@ class MetAdapter(MuseumAdapter):
                 if not image_url:
                     continue
 
+                public_domain_flag = detail.get("isPublicDomain")
+                is_public_domain = public_domain_flag is True
+                rights_text = detail.get("rightsAndReproduction")
                 artwork = NormalizedArtwork(
                     source=self.source_id,
                     source_id=str(obj_id),
@@ -117,9 +116,19 @@ class MetAdapter(MuseumAdapter):
                     style_or_period=style_or_period,
                     museum_name="The Metropolitan Museum of Art",
                     image_url=image_url,
-                    license="The Met Open Access",
-                    is_public_domain=True,
-                    rights_status="CONFIRMED_PUBLIC_DOMAIN",
+                    artwork_url=detail.get("objectURL"),
+                    credit_line=detail.get("creditLine"),
+                    license="The Met Open Access" if is_public_domain else None,
+                    is_public_domain=is_public_domain,
+                    rights_status=(
+                        "CONFIRMED_PUBLIC_DOMAIN"
+                        if is_public_domain
+                        else "KNOWN_RESTRICTED"
+                        if public_domain_flag is False
+                        else None
+                    ),
+                    rights_text=rights_text,
+                    copyright_notice=rights_text,
                 )
                 candidates.append(artwork)
 

@@ -16,6 +16,27 @@ CONFIRMED_RIGHTS_STATUSES = {
 MAX_IMAGE_DIMENSION = 100_000
 
 
+class CarouselExperimentMetadata(BaseModel):
+    """Compact, publication-level explanation of one carousel strategy."""
+
+    selection_model_version: str = Field(..., min_length=1)
+    engagement_model_version: str = Field(..., min_length=1)
+    carousel_theme: str = Field(..., min_length=1)
+    carousel_format: str = Field(..., min_length=1)
+    featured_count: int = Field(..., ge=5, le=8)
+    cover_variant: str = Field(..., min_length=1)
+    caption_hook_type: str = Field(..., min_length=1)
+    publish_slot: Literal["slot_1", "slot_2", "slot_3", "slot_4"]
+    exploration_selected: bool
+    learned_score: float = Field(..., ge=0, le=100)
+    engagement_confidence: float = Field(..., ge=0, le=1)
+    quality_component: float = Field(..., ge=0, le=100)
+    engagement_component: float = Field(..., ge=0, le=100)
+    diversity_component: float = Field(..., ge=-10, le=10)
+    exploration_component: float = Field(..., ge=0, le=100)
+    preceding_post_distance_minutes: Optional[float] = Field(default=None, ge=0)
+
+
 def normalize_artwork_id(artwork_id: str) -> str:
     """Return the canonical ID while preserving unknown ID formats."""
     for legacy_prefix, canonical_prefix in LEGACY_ARTWORK_ID_PREFIXES.items():
@@ -54,6 +75,22 @@ class PublicationRecord(BaseModel):
     posted_at: str = Field(..., min_length=1)
     theme: Optional[str] = None
     content_type: Optional[str] = None
+    selection_model_version: Optional[str] = None
+    engagement_model_version: Optional[str] = None
+    carousel_theme: Optional[str] = None
+    carousel_format: Optional[str] = None
+    featured_count: Optional[int] = Field(default=None, ge=1, le=8)
+    cover_variant: Optional[str] = None
+    caption_hook_type: Optional[str] = None
+    publish_slot: Optional[str] = None
+    exploration_selected: Optional[bool] = None
+    learned_score: Optional[float] = Field(default=None, ge=0, le=100)
+    engagement_confidence: Optional[float] = Field(default=None, ge=0, le=1)
+    quality_component: Optional[float] = Field(default=None, ge=0, le=100)
+    engagement_component: Optional[float] = Field(default=None, ge=0, le=100)
+    diversity_component: Optional[float] = Field(default=None, ge=-10, le=10)
+    exploration_component: Optional[float] = Field(default=None, ge=0, le=100)
+    preceding_post_distance_minutes: Optional[float] = Field(default=None, ge=0)
 
     @field_validator("id", "media_id", "posted_at")
     @classmethod
@@ -140,6 +177,7 @@ class NormalizedArtwork(BaseModel):
     is_public_domain: bool = Field(default=False)
     rights_status: Optional[str] = None
     rights_text: Optional[str] = None
+    copyright_notice: Optional[str] = None
     
     # Media
     image_url: Optional[str] = Field(None, description="Direct URL to the high-res image")

@@ -31,7 +31,7 @@ def _cover() -> CoverAsset:
     )
 
 
-@pytest.mark.parametrize("featured_count", range(3, 9))
+@pytest.mark.parametrize("featured_count", range(5, 9))
 def test_carousel_plan_accepts_every_adaptive_featured_count(featured_count):
     plan = CarouselPlan.build(
         theme=get_default_theme_registry().enabled_themes[0],
@@ -48,9 +48,9 @@ def test_carousel_plan_accepts_every_adaptive_featured_count(featured_count):
     assert len(set(plan.publication_ids)) == featured_count + 1
 
 
-@pytest.mark.parametrize("featured_count", [2, 9])
+@pytest.mark.parametrize("featured_count", [4, 9])
 def test_carousel_plan_rejects_out_of_contract_featured_counts(featured_count):
-    with pytest.raises(ValueError, match="between 3 and 8"):
+    with pytest.raises(ValueError, match="between 5 and 8"):
         CarouselPlan.build(
             theme=get_default_theme_registry().enabled_themes[0],
             editorial_title="Adaptive",
@@ -62,7 +62,7 @@ def test_carousel_plan_rejects_out_of_contract_featured_counts(featured_count):
         )
 
 
-@pytest.mark.parametrize("featured_count", [3, 5, 8])
+@pytest.mark.parametrize("featured_count", [5, 6, 8])
 def test_gemini_receives_exact_final_featured_list(monkeypatch, featured_count):
     prompts = []
 

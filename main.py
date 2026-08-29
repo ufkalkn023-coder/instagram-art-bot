@@ -2,12 +2,9 @@ import argparse
 import os
 import sys
 import logging
-import hashlib
 import inspect
-from dataclasses import dataclass
 from datetime import datetime, timezone
 from enum import Enum
-from itertools import islice
 from pathlib import Path
 from typing import Sequence
 
@@ -15,12 +12,10 @@ import config
 from src.aic_image_policy import get_aic_image_request_policy
 from src import (
     art_fetcher,
-    content_diversity,
     gemini_ai,
     history_tracker,
     image_processor,
     instagram_poster,
-    pinterest_poster,
     publication_reconciliation,
     r2_media,
 )
@@ -44,19 +39,21 @@ from src.carousel_editorial import (
 from src.carousel_plan import CarouselPlan
 from src.carousel_policy import MAX_FEATURED_WORKS
 from src.carousel_sequence import sequence_carousel_artworks
-from src.instagram_image import (
-    InstagramImagePublishability,
-    InstagramImagePublishabilityReason,
-    PreparedSingleImage,
-    SingleImageProcessing,
-    prepare_single_instagram_image,
+from src.editorial_experiments import (
+    ENGAGEMENT_MODEL_VERSION,
+    SELECTION_MODEL_VERSION,
+    CaptionHookType,
+    CoverVariant,
+    canonical_publish_slot,
+    select_caption_hook_type,
 )
+from src.engagement_learning import EngagementModel, build_engagement_model
+from src.insights_storage import InsightsStorage
 from src.carousel_themes import (
     get_default_theme_registry,
     plan_carousel_theme,
     primary_search_query,
 )
-from src.single_post_diversity import classify_orientation as classify_single_orientation
 from src.production_config import (
     validate_production_configuration,
     validate_reconciliation_configuration,
@@ -66,65 +63,10 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(
 logger = logging.getLogger(__name__)
 
 CAROUSEL_THEME_ATTEMPT_LIMIT = 5
-SINGLE_POST_CANDIDATE_ATTEMPT_LIMIT = 5
 
 
 class ProductionMode(str, Enum):
-    AUTO = "auto"
-    SINGLE = "single"
     CAROUSEL = "carousel"
-
-
-class SinglePostResolutionCode(str, Enum):
-    READY = "READY"
-    PROCESSING_FAILURE = "PROCESSING_FAILURE"
-    NO_SINGLE_POST_PUBLISHABLE_CANDIDATE = (
-        "NO_SINGLE_POST_PUBLISHABLE_CANDIDATE"
-    )
-
-
-@dataclass(frozen=True)
-class SinglePostCandidateDiagnostic:
-    canonical_id: str
-    reason: InstagramImagePublishabilityReason
-
-
-@dataclass(frozen=True)
-class SinglePostResolution:
-    result: SinglePostResolutionCode
-    attempted: int
-    zero_touch: int
-    compatibility_processed: int
-    single_ineligible: int
-    fatal_failures: int
-    diagnostics: tuple[SinglePostCandidateDiagnostic, ...]
-
-
-class SinglePostProcessingError(RuntimeError):
-    """A candidate failed technical processing after secure acquisition."""
-
-    def __init__(
-        self,
-        canonical_id: str,
-        result: InstagramImagePublishability,
-    ):
-        self.canonical_id = canonical_id
-        self.result = result
-        super().__init__(
-            "Single-image compatibility processing failed: "
-            f"{result.reason.value}"
-        )
-
-
-_SINGLE_LANE_INELIGIBLE_REASONS = frozenset(
-    {
-        InstagramImagePublishabilityReason.ASPECT_RATIO_OUT_OF_RANGE,
-        InstagramImagePublishabilityReason.UNSUPPORTED_TRANSPARENCY,
-        InstagramImagePublishabilityReason.UNSUPPORTED_FORMAT,
-        InstagramImagePublishabilityReason.FILE_TOO_LARGE,
-        InstagramImagePublishabilityReason.SIZE_UNRECOVERABLE,
-    }
-)
 
 
 def _get_grid_color_tone_for_run(dry_run: bool) -> str:
@@ -132,23 +74,6 @@ def _get_grid_color_tone_for_run(dry_run: bool) -> str:
     if dry_run:
         return history_tracker.get_grid_color_tone(read_only=True)
     return history_tracker.get_grid_color_tone()
-
-
-def _log_dry_run_success(mode: str, artworks: list[dict], artifact_paths: list[str]) -> None:
-    """Report the local artifacts produced without invoking publish mutations."""
-    selected_ids = ",".join(artwork["id"] for artwork in artworks)
-    quality_summary = ",".join(
-        f"{artwork['id']}:quality={artwork.get('quality_score')} selection={artwork.get('selection_score')}"
-        for artwork in artworks
-    )
-    logger.info(
-        "DRY RUN SUCCESS mode=%s selected_ids=%s local_artifacts=%s scores=%s "
-        "history_mutation=skipped media_upload=skipped instagram_publish=skipped pinterest_publish=skipped",
-        mode,
-        selected_ids,
-        ",".join(artifact_paths),
-        quality_summary,
-    )
 
 
 def _cleanup_authoritatively_expired_media(
@@ -222,7 +147,7 @@ def _log_carousel_dry_run_success(plan: CarouselPlan, artifact_paths: list[str])
     logger.info(
         "DRY RUN SUCCESS mode=carousel theme=%s cover_id=%s cover_mode=%s "
         "featured_count=%s total_slide_count=%s featured_ids=%s local_artifacts=%s history_mutation=skipped "
-        "media_upload=skipped instagram_publish=skipped pinterest_publish=skipped",
+        "media_upload=skipped instagram_publish=skipped",
         plan.theme_id,
         plan.cover.canonical_id,
         plan.cover.mode.value,
@@ -291,385 +216,54 @@ def _cleanup_new_generated_artifacts(existing: set[Path]) -> None:
 
 
 def _resolve_production_mode(args, now: datetime | None = None) -> ProductionMode:
-    requested_mode = ProductionMode(args.mode)
-    if args.force_carousel or requested_mode is ProductionMode.CAROUSEL:
-        return ProductionMode.CAROUSEL
-    if requested_mode is ProductionMode.SINGLE:
-        return ProductionMode.SINGLE
-    current_hour = (now or datetime.now(timezone.utc)).hour
-    return (
-        ProductionMode.CAROUSEL
-        if current_hour in {12, 21}
-        else ProductionMode.SINGLE
-    )
+    del now
+    return ProductionMode(args.mode)
 
 
-def _log_single_candidate_resolution(resolution: SinglePostResolution) -> None:
-    logger.info(
-        "single_candidate_resolution attempted=%s zero_touch=%s "
-        "compatibility_processed=%s single_ineligible=%s fatal_failures=%s result=%s",
-        resolution.attempted,
-        resolution.zero_touch,
-        resolution.compatibility_processed,
-        resolution.single_ineligible,
-        resolution.fatal_failures,
-        resolution.result.value,
-    )
-
-
-def _resolve_single_post_candidate(
-    posted_ids: set,
-) -> tuple[dict | None, PreparedSingleImage | None, SinglePostResolution]:
-    diagnostics: list[SinglePostCandidateDiagnostic] = []
-    zero_touch = 0
-    compatibility_processed = 0
-    single_ineligible = 0
-
-    candidates = art_fetcher.iter_single_post_candidates(
-        posted_ids,
-        max_candidates=SINGLE_POST_CANDIDATE_ATTEMPT_LIMIT,
-    )
-    for attempt, artwork in enumerate(
-        islice(candidates, SINGLE_POST_CANDIDATE_ATTEMPT_LIMIT), start=1
-    ):
-        prepared_image = prepare_single_instagram_image(
-            artwork["local_image_path"],
-            config.OUTPUT_IMAGE_PATH,
-        )
-        publishability = prepared_image.publishability
-        logger.info(
-            "single_image_publishability canonical_id=%s size=%sx%s aspect=%s "
-            "format=%s file_size=%s result=%s processing=%s",
-            artwork["id"],
-            publishability.width,
-            publishability.height,
-            (
-                f"{publishability.aspect_ratio:.3f}"
-                if publishability.aspect_ratio is not None
-                else "unknown"
-            ),
-            publishability.image_format or "unknown",
-            publishability.file_size,
-            publishability.reason.value,
-            prepared_image.processing.value,
-        )
-        diagnostics.append(
-            SinglePostCandidateDiagnostic(
-                canonical_id=artwork["id"],
-                reason=publishability.reason,
-            )
-        )
-
-        if publishability.publishable and prepared_image.path is not None:
-            if prepared_image.processing is SingleImageProcessing.ZERO_TOUCH:
-                zero_touch += 1
-                result = "SUPPORTED_AS_IS"
-            else:
-                compatibility_processed += 1
-                result = "SUPPORTED_AFTER_TECHNICAL_COMPATIBILITY"
-            logger.info(
-                "single_candidate_attempt attempt=%s canonical_id=%s result=%s action=PUBLISH",
-                attempt,
-                artwork["id"],
-                result,
-            )
-            if not prepared_image.source_bytes_preserved:
-                logger.info(
-                    "single_image_compatibility canonical_id=%s source_bytes=%s "
-                    "published_bytes=%s source_dimensions=%sx%s published_dimensions=%sx%s "
-                    "processing=%s byte_preservation=false jpeg_quality=%s attempts=%s",
-                    artwork["id"],
-                    prepared_image.source.file_size,
-                    publishability.file_size,
-                    prepared_image.source.width,
-                    prepared_image.source.height,
-                    publishability.width,
-                    publishability.height,
-                    prepared_image.processing.value,
-                    prepared_image.jpeg_quality,
-                    prepared_image.compatibility_attempts,
-                )
-            resolution = SinglePostResolution(
-                result=SinglePostResolutionCode.READY,
-                attempted=attempt,
-                zero_touch=zero_touch,
-                compatibility_processed=compatibility_processed,
-                single_ineligible=single_ineligible,
-                fatal_failures=0,
-                diagnostics=tuple(diagnostics),
-            )
-            _log_single_candidate_resolution(resolution)
-            return artwork, prepared_image, resolution
-
-        if publishability.reason in _SINGLE_LANE_INELIGIBLE_REASONS:
-            single_ineligible += 1
-            logger.info(
-                "single_candidate_attempt attempt=%s canonical_id=%s result=%s action=SKIP_SINGLE",
-                attempt,
-                artwork["id"],
-                publishability.reason.value,
-            )
-            continue
-
-        logger.error(
-            "single_candidate_attempt attempt=%s canonical_id=%s result=%s action=ABORT",
-            attempt,
-            artwork["id"],
-            publishability.reason.value,
-        )
-        resolution = SinglePostResolution(
-            result=SinglePostResolutionCode.PROCESSING_FAILURE,
-            attempted=attempt,
-            zero_touch=zero_touch,
-            compatibility_processed=compatibility_processed,
-            single_ineligible=single_ineligible,
-            fatal_failures=1,
-            diagnostics=tuple(diagnostics),
-        )
-        _log_single_candidate_resolution(resolution)
-        raise SinglePostProcessingError(artwork["id"], publishability)
-
-    resolution = SinglePostResolution(
-        result=SinglePostResolutionCode.NO_SINGLE_POST_PUBLISHABLE_CANDIDATE,
-        attempted=len(diagnostics),
-        zero_touch=zero_touch,
-        compatibility_processed=compatibility_processed,
-        single_ineligible=single_ineligible,
-        fatal_failures=0,
-        diagnostics=tuple(diagnostics),
-    )
-    _log_single_candidate_resolution(resolution)
-    return None, None, resolution
-
-
-def run_single_post(args) -> SinglePostResolution:
-    logger.info("Running single post logic...")
-    posted_ids = history_tracker.get_posted_ids()
-    artwork, prepared_image, resolution = _resolve_single_post_candidate(posted_ids)
-    if artwork is None or prepared_image is None:
-        if not args.dry_run:
-            logger.info(
-                "selection_complete mode=single result=%s selected=none",
-                resolution.result.value,
-            )
-        logger.warning(
-            "No single-post-publishable candidate found within attempt budget=%s; "
-            "ending run without publication.",
-            SINGLE_POST_CANDIDATE_ATTEMPT_LIMIT,
-        )
-        return resolution
-
-    if not args.dry_run:
-        logger.info(
-            "selection_complete mode=single result=%s selected=%s",
-            resolution.result.value,
-            artwork["id"],
-        )
-
-    publishability = prepared_image.publishability
-
-    artwork.update(
-        {
-            "published_width": publishability.width,
-            "published_height": publishability.height,
-            "published_image_format": publishability.image_format,
-            "published_image_file_size": publishability.file_size,
-            "source_width": prepared_image.source.width,
-            "source_height": prepared_image.source.height,
-            "source_image_format": prepared_image.source.image_format,
-            "source_image_file_size": prepared_image.source.file_size,
-            "exif_orientation": prepared_image.source.exif_orientation,
-            "image_processing": prepared_image.processing.value,
-            "compatibility_conversion": prepared_image.compatibility_conversion,
-            "source_bytes_preserved": prepared_image.source_bytes_preserved,
-            "jpeg_compatibility_quality": prepared_image.jpeg_quality,
-            "compatibility_attempts": prepared_image.compatibility_attempts,
-            "published_orientation": classify_single_orientation(
-                publishability.width,
-                publishability.height,
-            ).value,
-        }
-    )
-
-    selection_breakdown = artwork.get("_single_selection_breakdown")
-    if isinstance(selection_breakdown, dict):
-        logger.info(
-            "single_selection_breakdown canonical_id=%s quality=%.2f museum=%+.2f region=%+.2f orientation=%+.2f artist=%+.2f visual_category=%+.2f discovery=%+.2f serendipity=%+.2f final=%.2f",
-            artwork["id"],
-            selection_breakdown["quality"],
-            selection_breakdown["museum"],
-            selection_breakdown["region"],
-            selection_breakdown["orientation"],
-            selection_breakdown["artist"],
-            selection_breakdown["visual_category"],
-            selection_breakdown["discovery"],
-            selection_breakdown["serendipity"],
-            selection_breakdown["final"],
-        )
-
-    if args.dry_run:
-        logger.info("[DRY-RUN MODE] Skipping history reservation.")
-        publication_id = None
-    else:
-        logger.info("Reserving artwork in history (PRE-WRITE)...")
-        publication_id = history_tracker.reserve_artwork(artwork)
-        logger.info("reservation_complete mode=single count=1")
-
-    output_media_path = prepared_image.path
-
-    recent_history = history_tracker.get_recent_history()
-    content_type = content_diversity.select_content_type(recent_history)
-    artwork["content_type"] = content_type
-
-    logger.info(f"Analyzing artwork with Google Gemini AI (Content Type: {content_type})...")
-    ai_analysis = gemini_ai.analyze_artwork(
-        output_media_path,
-        artwork["title"], 
-        artwork["artist"], 
-        artwork["date"], 
-        artwork["museum"],
-        artwork.get("medium", ""),
-        artwork.get("classification", ""),
-        content_type=content_type
-    )
-    
-    clean_title = artwork['title'].strip() if artwork.get('title') else "Untitled"
-    clean_artist = artwork['artist'].strip() if artwork.get('artist') else "Unknown Artist"
-    
-    if ai_analysis:
-        logger.info("Gemini analysis successful! Updating metadata...")
-
-        ref_num = int(hashlib.md5(f"{clean_title}{clean_artist}".encode('utf-8')).hexdigest()[:8], 16) % 100000
-        catalog_index = f"ARTFOLIO / REF-{ref_num:05d}"
-        artwork["catalog_index"] = catalog_index
-        
-        artwork["caption"] = (
-            f"⠀\n"
-            f"{clean_title}\n"
-            f"\n"
-            f"{clean_artist} - {artwork.get('date', 'Unknown')}\n"
-            f"\n"
-            f"{artwork.get('museum', 'Unknown')}\n"
-            f"\n"
-            f"{ai_analysis.get('caption', '')}\n"
-            f"\n"
-            f"{ai_analysis.get('hashtags', '')}"
-        )
-        artwork["alt_text"] = ai_analysis.get("alt_text", artwork.get("alt_text", ""))
-    else:
-        logger.info("Gemini analysis skipped or failed. Using fallback templates.")
-        raw_desc = artwork.get('description', '')
-        if not raw_desc:
-            raw_desc = f"A classic piece titled '{clean_title}' by {clean_artist}, created in {artwork.get('date', 'unknown date')}."
-        artist_hashtag = clean_artist.replace(" ", "").replace("-", "")
-        hashtags = f"#Art #{artist_hashtag} #{artwork.get('museum', '').replace(' ', '')} #ClassicArt #ArtHistory"
-        artwork["caption"] = (f"⠀\n{clean_title}\n\n{clean_artist} - {artwork.get('date', 'Unknown')}\n\n{artwork.get('museum', 'Unknown')}\n\n{raw_desc}\n\n{hashtags}")
-        artwork["alt_text"] = f"Artwork: {clean_title} by {clean_artist}"
-
-    if not args.dry_run:
-        logger.info("media_prepared mode=single count=1")
-
-    if args.dry_run:
-        _log_dry_run_success("single", [artwork], [output_media_path])
-        return resolution
-
-    account_id = os.environ.get("INSTAGRAM_ACCOUNT_ID")
-    access_token = os.environ.get("INSTAGRAM_ACCESS_TOKEN")
-    if args.image_url or os.environ.get("PUBLIC_IMAGE_URL"):
-        logger.warning(
-            "External single-image publishing override ignored; uploading the "
-            "securely validated selected artwork."
-        )
-    if publication_id is None:
-        raise RuntimeError("Single publication reservation returned no publication ID")
+def _load_engagement_model() -> EngagementModel:
+    """Best-effort optimization layer; publishing remains safe without Insights."""
     try:
-        media_upload = image_processor.upload_temp_media(
-            output_media_path, publication_id
-        )
-    except Exception:
-        _handle_pre_meta_staging_failure(
-            [artwork["id"]], publication_id, ()
-        )
-        raise
-    public_media_url = media_upload.public_url
-    logger.info("upload_complete mode=single count=1")
-
-    publish_attempt_started = False
-
-    def before_publish(container_id: str, child_container_ids: tuple[str, ...]) -> None:
-        nonlocal publish_attempt_started
-        history_tracker.start_publication_attempt(
-            [artwork["id"]], container_id, child_container_ids
-        )
-        publish_attempt_started = True
-
-    try:
-        media_id = instagram_poster.post_to_instagram_graph_api(
-            media_url=public_media_url,
-            caption=artwork["caption"],
-            account_id=account_id,
-            access_token=access_token,
-            alt_text=artwork.get("alt_text"),
-            media_type="IMAGE",
-            before_publish=before_publish,
-        )
-        if not publish_attempt_started:
-            history_tracker.mark_artwork_ambiguous(
-                artwork["id"], "publisher_skipped_durable_boundary"
-            )
-            raise RuntimeError("Instagram publisher skipped the durable publication boundary")
-        logger.info("publish_complete mode=single media_id=%s", media_id)
-    except instagram_poster.InstagramPublishAmbiguousError:
-        logger.error("Instagram publish result is ambiguous; preserving the duplicate lock.")
-        try:
-            history_tracker.mark_artwork_ambiguous(artwork["id"])
-        except Exception:
-            logger.exception("Failed to preserve the ambiguous single-post reservation.")
-            raise
-        raise
-    except instagram_poster.InstagramAPIError as error:
-        if publish_attempt_started:
-            history_tracker.mark_publication_not_published(
-                [artwork["id"]],
-                f"definitive_media_publish_rejection:{type(error).__name__}",
-                authoritative=True,
-            )
-            _cleanup_authoritatively_expired_media(
-                publication_id,
-                reason="definitive_media_publish_rejection",
-            )
-        raise
+        history, _ = history_tracker.load_history_with_etag()
+        snapshots = InsightsStorage().load_all_snapshots()
+        model = build_engagement_model(history, snapshots)
     except Exception as error:
-        if publish_attempt_started:
-            try:
-                history_tracker.mark_artwork_ambiguous(
-                    artwork["id"],
-                    f"unexpected_post_boundary_error:{type(error).__name__}",
-                )
-            except Exception:
-                logger.exception("Failed to preserve the uncertain single-post reservation.")
-        raise
+        logger.warning(
+            "engagement_learning_unavailable error=%s fallback=quality_editorial",
+            type(error).__name__,
+        )
+        return EngagementModel.cold_start()
+    logger.info(
+        "engagement_model_loaded version=%s publications=%s effective_observations=%.3f "
+        "confidence=%.3f global_score=%.2f",
+        model.version,
+        model.useful_publications,
+        model.effective_observations,
+        model.confidence,
+        model.global_score,
+    )
+    return model
 
+
+def _preceding_post_distance_minutes(now: datetime) -> float | None:
     try:
-        history_tracker.record_publish_response([artwork["id"]], media_id)
-    except Exception:
-        logger.exception(
-            "Failed to record Instagram media ID before final history confirmation; "
-            "the durable container lock remains."
+        publications = history_tracker.get_recent_publications(limit=1)
+    except Exception as error:
+        logger.warning(
+            "preceding_post_distance_unavailable error=%s",
+            type(error).__name__,
         )
-    history_tracker.confirm_artwork(artwork["id"], media_id)
-    logger.info("history_confirmed mode=single count=1")
-    
-    if args.pinterest:
-        logger.info("Triggering Pinterest cross-post...")
-        title = f"{artwork['title']} by {artwork['artist']}"
-        pinterest_poster.post_to_pinterest(
-            image_url=public_media_url,
-            title=title[:100],
-            description=artwork["caption"],
-            link=public_media_url
+        return None
+    if not publications:
+        return None
+    try:
+        posted_at = datetime.fromisoformat(
+            str(publications[-1]["posted_at"]).replace("Z", "+00:00")
         )
-    return resolution
+    except (KeyError, TypeError, ValueError):
+        return None
+    if posted_at.tzinfo is None or posted_at.utcoffset() is None:
+        return None
+    return max(0.0, (now - posted_at.astimezone(timezone.utc)).total_seconds() / 60)
 
 
 def run_carousel_post(args):
@@ -678,6 +272,17 @@ def run_carousel_post(args):
     color_tone = _get_grid_color_tone_for_run(args.dry_run)
 
     selection_run_seed = art_fetcher.resolve_selection_run_seed()
+    run_time = datetime.now(timezone.utc)
+    publish_slot = canonical_publish_slot(run_time)
+    engagement_model = _load_engagement_model()
+    exploration_selected = engagement_model.exploration_selected(
+        selection_run_seed.value
+    )
+    base_engagement_context = {
+        "publish_slot": publish_slot,
+        "publication_weekday": run_time.strftime("%A").casefold(),
+        "cover_variant": CoverVariant.EDITORIAL.value,
+    }
     theme_history = history_tracker.get_recent_carousel_theme_history()
     theme_registry = get_default_theme_registry()
     theme_selection = plan_carousel_theme(
@@ -693,6 +298,20 @@ def run_carousel_post(args):
         # Compatibility for callers/tests supplying the former one-theme plan shape.
         ordered_candidates = (theme_selection.theme,)
         fallback_enabled = False
+    if engagement_model.confidence > 0:
+        ranked_scores = getattr(theme_selection, "ranked_scores", ())
+        base_scores = {
+            score.theme_id: score.total
+            for score in ranked_scores
+            if hasattr(score, "theme_id") and hasattr(score, "total")
+        }
+        ordered_candidates = engagement_model.rank_themes(
+            ordered_candidates,
+            base_scores=base_scores,
+            context=base_engagement_context,
+            run_seed=selection_run_seed.value,
+            exploration_selected=exploration_selected,
+        )
 
     attempted_themes: list[tuple[str, str]] = []
     acquisition_run_state = art_fetcher.AcquisitionRunState()
@@ -701,11 +320,22 @@ def run_carousel_post(args):
     acquisition = None
     set_optimization = None
     theme_definition = None
+    caption_hook_type: CaptionHookType | None = None
     for attempt, candidate_theme in enumerate(
         ordered_candidates[:CAROUSEL_THEME_ATTEMPT_LIMIT],
         start=1,
     ):
         search_query = primary_search_query(candidate_theme)
+        candidate_hook_type = select_caption_hook_type(
+            candidate_theme,
+            run_seed=selection_run_seed.value,
+        )
+        engagement_context = {
+            **base_engagement_context,
+            "carousel_theme": candidate_theme.id,
+            "carousel_format": candidate_theme.format.value,
+            "caption_hook_type": candidate_hook_type.value,
+        }
         if attempted_themes:
             logger.info(
                 "theme_fallback from=%s to=%s attempt=%s",
@@ -733,6 +363,9 @@ def run_carousel_post(args):
                 theme_definition=candidate_theme,
                 return_acquisition=True,
                 acquisition_run_state=acquisition_run_state,
+                engagement_model=engagement_model,
+                engagement_context=engagement_context,
+                exploration_selected=exploration_selected,
             )
             if isinstance(selection, art_fetcher.ThemedArtworkSelection):
                 candidate_artworks = list(selection.artworks)
@@ -776,9 +409,15 @@ def run_carousel_post(args):
         acquisition = candidate_acquisition
         set_optimization = candidate_set_optimization
         theme_definition = candidate_theme
+        caption_hook_type = candidate_hook_type
         break
 
-    if theme_definition is None or artworks is None or cover is None:
+    if (
+        theme_definition is None
+        or artworks is None
+        or cover is None
+        or caption_hook_type is None
+    ):
         raise art_fetcher.CarouselThemeAvailabilityError(attempted_themes)
 
     if not args.dry_run:
@@ -848,6 +487,8 @@ def run_carousel_post(args):
         )
     if "editorial_facts" in analysis_parameters:
         analysis_context["editorial_facts"] = editorial_facts.as_dict()
+    if "caption_hook_type" in analysis_parameters:
+        analysis_context["caption_hook_type"] = caption_hook_type.value
     ai_analysis = gemini_ai.analyze_carousel(
         theme_definition.title,
         artworks,
@@ -887,6 +528,8 @@ def run_carousel_post(args):
         cover=cover,
         featured_artworks=artworks,
         caption=final_caption,
+        cover_variant=CoverVariant.EDITORIAL.value,
+        caption_hook_type=caption_hook_type.value,
         set_optimization=set_optimization,
         sequence=sequence,
     )
@@ -927,6 +570,73 @@ def run_carousel_post(args):
 
     logger.info("media_prepared mode=carousel count=%s", len(output_media_paths))
 
+    final_engagement_context = {
+        **base_engagement_context,
+        "carousel_theme": plan.theme.id,
+        "carousel_format": plan.theme.format.value,
+        "caption_hook_type": plan.caption_hook_type,
+        "featured_count": len(plan.featured_artworks),
+    }
+    set_prediction = engagement_model.score_set(
+        plan.featured_artworks,
+        final_engagement_context,
+    )
+    editorial_quality = sum(
+        0.65 * float(artwork.get("theme_relevance_score") or 0.0)
+        + 0.35 * float(artwork.get("quality_score") or 0.0)
+        for artwork in plan.featured_artworks
+    ) / len(plan.featured_artworks)
+    diversity_adjustment = 0.0
+    if plan.set_optimization is not None:
+        breakdown = plan.set_optimization.breakdown
+        diversity_adjustment = (
+            breakdown.total
+            - breakdown.individual_strength
+            - breakdown.engagement_prediction_adjustment
+        )
+    selection_components = engagement_model.blend_candidate_score(
+        quality_editorial_score=editorial_quality,
+        prediction=set_prediction,
+        exploration_selected=exploration_selected,
+        diversity_component=diversity_adjustment,
+    )
+    preceding_distance = _preceding_post_distance_minutes(run_time)
+    publication_metadata = {
+        "selection_model_version": SELECTION_MODEL_VERSION,
+        "engagement_model_version": ENGAGEMENT_MODEL_VERSION,
+        "carousel_theme": plan.theme.id,
+        "carousel_format": plan.theme.format.value,
+        "featured_count": len(plan.featured_artworks),
+        "cover_variant": plan.cover_variant,
+        "caption_hook_type": plan.caption_hook_type,
+        "publish_slot": publish_slot,
+        "exploration_selected": exploration_selected,
+        "learned_score": selection_components.learned_score,
+        "engagement_confidence": selection_components.engagement_confidence,
+        "quality_component": selection_components.quality_component,
+        "engagement_component": selection_components.engagement_component,
+        "diversity_component": selection_components.diversity_component,
+        "exploration_component": selection_components.exploration_component,
+        **(
+            {"preceding_post_distance_minutes": round(preceding_distance, 3)}
+            if preceding_distance is not None
+            else {}
+        ),
+    }
+    logger.info(
+        "carousel_selection_score quality=%.2f engagement=%.2f "
+        "engagement_confidence=%.3f exploration=%.2f diversity=%.2f final=%.2f "
+        "slot=%s exploration_selected=%s",
+        selection_components.quality_component,
+        selection_components.engagement_component,
+        selection_components.engagement_confidence,
+        selection_components.exploration_component,
+        selection_components.diversity_component,
+        selection_components.final_score,
+        publish_slot,
+        exploration_selected,
+    )
+
     # All selection, copy, validation, and rendering has succeeded. Reserve the
     # all variable-length canonical IDs together before any Instagram media operation.
     publication_id = history_tracker.reserve_carousel(
@@ -935,6 +645,7 @@ def run_carousel_post(args):
         theme_id=plan.theme.id,
         theme_family=plan.theme.family.value,
         carousel_format=plan.theme.format.value,
+        publication_metadata=publication_metadata,
     )
     logger.info("reservation_complete mode=carousel count=%s", len(plan.publication_ids))
     media_uploads: list[r2_media.TempMediaUpload] = []
@@ -1027,12 +738,11 @@ def run_carousel_post(args):
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Instagram Art Museum Automation Bot")
     parser.add_argument("--dry-run", action="store_true", help="Run bot locally without posting to Instagram")
-    parser.add_argument("--force-carousel", action="store_true", help="Force the bot to post a carousel")
     parser.add_argument(
         "--mode",
         choices=[mode.value for mode in ProductionMode],
-        default=ProductionMode.AUTO.value,
-        help="Select single/carousel explicitly, or retain legacy UTC-hour auto mode",
+        default=ProductionMode.CAROUSEL.value,
+        help="Publish the canonical carousel feed product",
     )
     parser.add_argument(
         "--validate-production-config",
@@ -1044,12 +754,6 @@ def main(argv: list[str] | None = None) -> int:
         action="store_true",
         help="Reconcile existing publication lifecycle state without creating or publishing media",
     )
-    parser.add_argument(
-        "--image-url",
-        type=str,
-        help="Deprecated compatibility option; external publish overrides are ignored",
-    )
-    parser.add_argument("--pinterest", action="store_true", help="Also cross-post to Pinterest")
     args = parser.parse_args(argv)
 
     existing_artifacts: set[Path] | None = None
@@ -1124,20 +828,7 @@ def main(argv: list[str] | None = None) -> int:
                 getattr(summary, "cleanup_failures", 0),
             )
 
-        if mode is ProductionMode.CAROUSEL:
-            run_carousel_post(args)
-        else:
-            resolution = run_single_post(args)
-            if (
-                not args.dry_run
-                and resolution.result
-                is SinglePostResolutionCode.NO_SINGLE_POST_PUBLISHABLE_CANDIDATE
-            ):
-                logger.info(
-                    "production_no_publish mode=single reason=%s",
-                    resolution.result.value,
-                )
-                return 0
+        run_carousel_post(args)
 
         if not args.dry_run:
             logger.info("production_success mode=%s", mode.value)

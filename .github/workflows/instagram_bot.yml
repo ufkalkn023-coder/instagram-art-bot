@@ -2,20 +2,11 @@ name: Instagram Art Bot Scheduler
 
 "on":
   schedule:
-    # Split by publish mode so delayed scheduled jobs do not depend on wall-clock time.
-    - cron: "0 0,3,6,9,15,18 * * *"
-    - cron: "0 12,21 * * *"
+    - cron: "0 5,10,15,20 * * *"
   workflow_dispatch: # Allows manual trigger from GitHub Actions tab
     inputs:
-      publish_mode:
-        description: "Select the type of REAL Instagram post to create"
-        required: true
-        type: choice
-        options:
-          - single
-          - carousel
       confirm_publish:
-        description: "Type PUBLISH_TO_INSTAGRAM to create a REAL Instagram post"
+        description: "Type PUBLISH_TO_INSTAGRAM to create a REAL Instagram carousel"
         required: true
         type: string
 
@@ -77,9 +68,6 @@ jobs:
 
       - name: Fetch artwork, process image, and post to Instagram
         env:
-          EVENT_NAME: ${{ github.event_name }}
-          SCHEDULE_EXPRESSION: ${{ github.event.schedule }}
-          PUBLISH_MODE: ${{ github.event.inputs.publish_mode }}
           INSTAGRAM_ACCOUNT_ID: ${{ secrets.INSTAGRAM_ACCOUNT_ID }}
           INSTAGRAM_ACCESS_TOKEN: ${{ secrets.INSTAGRAM_ACCESS_TOKEN }}
           GOOGLE_GEMINI_API_KEY: ${{ secrets.GOOGLE_GEMINI_API_KEY }}
@@ -91,25 +79,4 @@ jobs:
           CLOUDFLARE_R2_SECRET_ACCESS_KEY: ${{ secrets.CLOUDFLARE_R2_SECRET_ACCESS_KEY }}
           CLOUDFLARE_R2_BUCKET_NAME: ${{ secrets.CLOUDFLARE_R2_BUCKET_NAME }}
           CLOUDFLARE_R2_PUBLIC_URL: ${{ secrets.CLOUDFLARE_R2_PUBLIC_URL }}
-          PINTEREST_APP_ID: ${{ secrets.PINTEREST_APP_ID }}
-          PINTEREST_APP_SECRET: ${{ secrets.PINTEREST_APP_SECRET }}
-          PINTEREST_REFRESH_TOKEN: ${{ secrets.PINTEREST_REFRESH_TOKEN }}
-          PINTEREST_BOARD_ID: ${{ secrets.PINTEREST_BOARD_ID }}
-        run: |
-          set -euo pipefail
-          if [ "$EVENT_NAME" = "schedule" ]; then
-            case "$SCHEDULE_EXPRESSION" in
-              "0 12,21 * * *") python main.py --mode carousel ;;
-              "0 0,3,6,9,15,18 * * *") python main.py --mode single ;;
-              *) echo "Unsupported production schedule: $SCHEDULE_EXPRESSION" >&2; exit 2 ;;
-            esac
-          elif [ "$EVENT_NAME" = "workflow_dispatch" ]; then
-            case "$PUBLISH_MODE" in
-              "single") python main.py --mode single ;;
-              "carousel") python main.py --mode carousel ;;
-              *) echo "Unsupported manual publish mode: $PUBLISH_MODE" >&2; exit 2 ;;
-            esac
-          else
-            echo "Unsupported production event: $EVENT_NAME" >&2
-            exit 2
-          fi
+        run: python main.py --mode carousel

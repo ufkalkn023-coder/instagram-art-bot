@@ -25,12 +25,6 @@ REQUIRED_RECONCILIATION_VARIABLES = (
 OPTIONAL_INTEGRATION_VARIABLES = {
     "gemini": ("GOOGLE_GEMINI_API_KEY",),
     "rijksmuseum": ("RIJKSMUSEUM_API_KEY",),
-    "pinterest": (
-        "PINTEREST_APP_ID",
-        "PINTEREST_APP_SECRET",
-        "PINTEREST_REFRESH_TOKEN",
-        "PINTEREST_BOARD_ID",
-    ),
 }
 
 

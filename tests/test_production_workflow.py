@@ -10,8 +10,7 @@ WORKFLOW_PATH = REPOSITORY_ROOT / ".github" / "workflows" / "instagram_bot.yml"
 JOB_NAME = "post-to-instagram"
 SCHEDULE_FLAG = "ARTFOLIO_PRODUCTION_SCHEDULE_ENABLED"
 CONFIRMATION = "PUBLISH_TO_INSTAGRAM"
-SINGLE_CRON = "0 0,3,6,9,15,18 * * *"
-CAROUSEL_CRON = "0 12,21 * * *"
+CAROUSEL_CRON = "0 5,10,15,20 * * *"
 
 
 def _workflow() -> dict:
@@ -33,21 +32,15 @@ def _normalized(expression: str) -> str:
     return " ".join(expression.split())
 
 
-def test_manual_dispatch_requires_explicit_mode_and_exact_confirmation():
+def test_manual_dispatch_is_carousel_only_and_requires_exact_confirmation():
     dispatch = _workflow()["on"]["workflow_dispatch"]
-    assert set(dispatch["inputs"]) == {"publish_mode", "confirm_publish"}
-
-    publish_mode = dispatch["inputs"]["publish_mode"]
-    assert publish_mode["required"] is True
-    assert publish_mode["type"] == "choice"
-    assert publish_mode["options"] == ["single", "carousel"]
-    assert "auto" not in publish_mode["options"]
+    assert set(dispatch["inputs"]) == {"confirm_publish"}
 
     confirmation = dispatch["inputs"]["confirm_publish"]
     assert confirmation["required"] is True
     assert confirmation["type"] == "string"
     assert CONFIRMATION in confirmation["description"]
-    assert "REAL Instagram post" in confirmation["description"]
+    assert "REAL Instagram carousel" in confirmation["description"]
     assert "default" not in confirmation
 
 
@@ -72,28 +65,21 @@ def test_job_condition_independently_gates_schedule_and_manual_publishing():
     assert "schedule" not in manual_branch
 
 
-def test_schedule_crons_and_commands_remain_deterministic():
+def test_schedule_has_exactly_four_daily_utc_carousel_runs():
     schedules = _workflow()["on"]["schedule"]
-    assert schedules == [{"cron": SINGLE_CRON}, {"cron": CAROUSEL_CRON}]
+    assert schedules == [{"cron": CAROUSEL_CRON}]
+    assert CAROUSEL_CRON.split()[1].split(",") == ["5", "10", "15", "20"]
 
     publish = _steps_by_name()["Fetch artwork, process image, and post to Instagram"]
-    script = publish["run"]
-    assert f'"{SINGLE_CRON}") python main.py --mode single ;;' in script
-    assert f'"{CAROUSEL_CRON}") python main.py --mode carousel ;;' in script
-    assert '*) echo "Unsupported production schedule: $SCHEDULE_EXPRESSION" >&2; exit 2 ;;' in script
+    assert publish["run"] == "python main.py --mode carousel"
 
 
-def test_manual_modes_map_exactly_and_never_invoke_auto_mode():
+def test_all_production_invocations_are_carousel_only():
     publish = _steps_by_name()["Fetch artwork, process image, and post to Instagram"]
-    assert publish["env"]["PUBLISH_MODE"] == "${{ github.event.inputs.publish_mode }}"
-
     script = publish["run"]
-    assert '"single") python main.py --mode single ;;' in script
-    assert '"carousel") python main.py --mode carousel ;;' in script
-    assert '*) echo "Unsupported manual publish mode: $PUBLISH_MODE" >&2; exit 2 ;;' in script
+    assert "single" not in script
     assert "--force-carousel" not in script
-    assert "python main.py\n" not in script
-    assert "python main.py\r\n" not in script
+    assert script == "python main.py --mode carousel"
 
 
 def test_production_workflow_retains_operational_safety_gates():

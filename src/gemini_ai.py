@@ -190,6 +190,7 @@ def analyze_carousel(
     carousel_format: str | None = None,
     format_target: dict[str, object] | None = None,
     editorial_facts: dict[str, object] | None = None,
+    caption_hook_type: str | None = None,
 ) -> Optional[Dict[str, Any]]:
     """
     Analyzes a collection of artworks for a thematic carousel post using Gemini.
@@ -223,6 +224,7 @@ def analyze_carousel(
             )
             format_context += f"\nFORMAT TARGET: {grounded_target}"
         facts_context = json.dumps(editorial_facts or {}, sort_keys=True, ensure_ascii=False)
+        hook_context = caption_hook_type or "curiosity"
 
         prompt = f"""ROLE
 
@@ -235,6 +237,7 @@ CAROUSEL THEME: {theme}
 ==================================================
 APPLICATION-OWNED EDITORIAL FACTS (READ ONLY):
 {facts_context}
+APPLICATION-SELECTED HOOK TYPE: {hook_context}
 
 The theme above is an editorial registry label. It does not prove that every work
 is formally classified as that movement, period, region, medium, or category.
@@ -249,6 +252,8 @@ EDITORIAL INTRODUCTION GUIDELINES
   short paragraphs that remain mobile-readable.
 - Open with a visual-first hook grounded in the supplied theme and metadata. Since
   no image is supplied here, metadata is the only factual grounding.
+- Follow the application-selected hook type. A question must be thoughtful and
+  answerable from the carousel, never engagement bait.
 - Do not generate a Featured Works heading, numbered list, artwork title, artist,
   date, or museum line. The application will generate that list itself.
 - Ground every statement in the supplied theme and artwork metadata. No visual input
@@ -264,6 +269,7 @@ EDITORIAL INTRODUCTION GUIDELINES
 - Preserve any uncertainty in the supplied metadata; do not correct or embellish it.
 - Avoid generic AI/art clichés; prefer concrete, specific editorial language.
 - NO EMOJIS allowed anywhere in the output.
+- Never ask viewers to like, follow, tag friends, or comment a stock response.
 - Write in natural, polished English. Tone should be editorial, sophisticated, and engaging.
 - The application preserves the registry theme title; any returned theme_title is
   advisory and cannot replace it.

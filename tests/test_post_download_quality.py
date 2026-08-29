@@ -121,6 +121,7 @@ def test_selection_breakdown_is_mathematically_consistent():
 
 def test_single_selection_logs_breakdown_and_aggregate_rejections_without_query_secrets(monkeypatch, tmp_path, caplog):
     caplog.set_level(logging.INFO, logger=art_fetcher.__name__)
+    monkeypatch.setenv("ARTFOLIO_RIGHTS_POLICY", "strict_public_domain")
     restricted = _candidate("restricted")
     restricted.rights_status = None
     duplicate = _candidate("duplicate")
@@ -182,7 +183,7 @@ def test_single_selection_logs_breakdown_and_aggregate_rejections_without_query_
         "final": 70.5,
     }
     assert "raw=6 rights_safe=5 history_new=4 quality_pass=3 downloads=3 selected=aic_selected" in caplog.text
-    for reason in ("rights_unconfirmed:1", "history_duplicate:1", "pre_quality_below_threshold:1", "image_validation_failed:1", "post_quality_below_threshold:1"):
+    for reason in ("rights_policy:1", "history_duplicate:1", "pre_quality_below_threshold:1", "image_validation_failed:1", "post_quality_below_threshold:1"):
         assert reason in caplog.text
     assert "selection-secret" not in caplog.text
     assert "super-secret-looking-seed" not in caplog.text

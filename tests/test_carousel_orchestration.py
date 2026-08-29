@@ -159,10 +159,15 @@ def test_carousel_media_and_caption_order_are_cover_then_featured_one_through_ei
     assert calls.index("reserve") > calls.index("featured_render:carousel_08.jpg")
     assert reserved[0][0]["id"] == cover.canonical_id
     assert [art["id"] for art in reserved[0][1]] == [art["id"] for art in featured]
-    assert reserved[0][2] == {
-        "theme_id": "winter_light",
-        "theme_family": "season",
-        "carousel_format": "LIGHT_STUDY",
+    assert reserved[0][2]["theme_id"] == "winter_light"
+    assert reserved[0][2]["theme_family"] == "season"
+    assert reserved[0][2]["carousel_format"] == "LIGHT_STUDY"
+    assert reserved[0][2]["publication_metadata"]["featured_count"] == 8
+    assert reserved[0][2]["publication_metadata"]["publish_slot"] in {
+        "slot_1",
+        "slot_2",
+        "slot_3",
+        "slot_4",
     }
     assert protected == [cover.canonical_id, *[art["id"] for art in featured]]
     assert published[0]["media_urls"] == [

@@ -68,11 +68,10 @@ def test_legacy_feed_wrapper_rejects_unpublishable_aspect_without_crop(tmp_path)
     assert not output_path.exists()
 
 
-def test_workflow_uses_explicit_split_single_and_carousel_schedules():
+def test_workflow_uses_four_daily_carousel_only_slots():
     workflow = Path(".github/workflows/instagram_bot.yml").read_text()
 
-    assert 'cron: "0 0,3,6,9,15,18 * * *"' in workflow
-    assert 'cron: "0 12,21 * * *"' in workflow
-    assert "python main.py --mode single" in workflow
+    assert 'cron: "0 5,10,15,20 * * *"' in workflow
+    assert "python main.py --mode single" not in workflow
     assert "python main.py --mode carousel" in workflow
     assert "workflow_dispatch" in workflow

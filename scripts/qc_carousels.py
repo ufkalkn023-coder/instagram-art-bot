@@ -302,7 +302,7 @@ def _manifest(
     featured_count = len(featured)
     total_slide_count = len(paths)
     if not MIN_FEATURED_WORKS <= featured_count <= MAX_FEATURED_WORKS:
-        raise ValueError("QC carousel featured count is outside the 3–8 product contract")
+        raise ValueError("QC carousel featured count is outside the 5–8 product contract")
     if (
         not MIN_TOTAL_SLIDES <= total_slide_count <= MAX_TOTAL_SLIDES
         or total_slide_count != featured_count + 1

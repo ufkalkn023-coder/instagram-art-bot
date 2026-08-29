@@ -11,7 +11,7 @@ import boto3
 from botocore.config import Config
 from botocore.exceptions import ClientError
 from pydantic import ValidationError
-from typing import Callable, Iterable, Sequence, Set, Dict, Any, Tuple, TypeVar
+from typing import Any, Callable, Dict, Iterable, Mapping, Sequence, Set, Tuple, TypeVar
 from src.carousel_themes import CarouselFormat, ThemeFamily, ThemeHistorySlot
 from src.carousel_policy import (
     MAX_FEATURED_WORKS,
@@ -19,7 +19,11 @@ from src.carousel_policy import (
     MIN_FEATURED_WORKS,
     MIN_TOTAL_SLIDES,
 )
-from src.models import PublicationRecord, normalize_artwork_id
+from src.models import (
+    CarouselExperimentMetadata,
+    PublicationRecord,
+    normalize_artwork_id,
+)
 from src import r2_media
 
 logging.basicConfig(level=logging.INFO)
@@ -802,6 +806,7 @@ def _reservation_record(
     theme_id: str | None = None,
     theme_family: str | None = None,
     carousel_format: str | None = None,
+    publication_metadata: Mapping[str, Any] | None = None,
 ) -> Dict[str, Any]:
     artwork_id = normalize_artwork_id(artwork_data["id"])
     record = {
@@ -826,6 +831,21 @@ def _reservation_record(
         "quality_score": artwork_data.get("quality_score"),
         "measurement_coverage": artwork_data.get("measurement_coverage"),
         "selection_score": artwork_data.get("selection_score"),
+        "learned_score": artwork_data.get("learned_score"),
+        "engagement_confidence": artwork_data.get("engagement_confidence"),
+        "quality_component": artwork_data.get("quality_component"),
+        "engagement_component": artwork_data.get("engagement_component"),
+        "diversity_component": artwork_data.get("diversity_component"),
+        "exploration_component": artwork_data.get("exploration_component"),
+        "exploration_selected": artwork_data.get("exploration_selected"),
+        "source": artwork_data.get("source"),
+        "artwork_url": artwork_data.get("artwork_url"),
+        "credit_line": artwork_data.get("credit_line"),
+        "license": artwork_data.get("license"),
+        "is_public_domain": artwork_data.get("is_public_domain"),
+        "rights_status": artwork_data.get("rights_status"),
+        "rights_text": artwork_data.get("rights_text"),
+        "copyright_notice": artwork_data.get("copyright_notice"),
         "image_width": artwork_data.get("image_width"),
         "image_height": artwork_data.get("image_height"),
         "published_width": artwork_data.get("published_width"),
@@ -876,6 +896,8 @@ def _reservation_record(
                     "carousel_format": carousel_format,
                 }
             )
+        if publication_role == "COVER" and publication_metadata is not None:
+            record["publication_metadata"] = dict(publication_metadata)
     return record
 
 
@@ -958,8 +980,9 @@ def reserve_carousel(
     theme_id: str | None = None,
     theme_family: str | None = None,
     carousel_format: str | None = None,
+    publication_metadata: Mapping[str, Any] | None = None,
 ) -> str:
-    """Atomically reserve one cover and 3–8 featured works with explicit roles."""
+    """Atomically reserve one cover and 5–8 featured works with explicit roles."""
     if not MIN_FEATURED_WORKS <= len(featured_artworks) <= MAX_FEATURED_WORKS:
         raise ValueError(
             "Carousel history reservation requires between "
@@ -983,6 +1006,19 @@ def reserve_carousel(
             CarouselFormat(carousel_format)
         except ValueError as error:
             raise ValueError(f"Invalid carousel theme metadata: {error}") from error
+
+    validated_publication_metadata = None
+    if publication_metadata is not None:
+        try:
+            validated_publication_metadata = CarouselExperimentMetadata.model_validate(
+                publication_metadata
+            )
+        except ValidationError as error:
+            raise ValueError("Invalid carousel experiment metadata") from error
+        if validated_publication_metadata.featured_count != len(featured_artworks):
+            raise ValueError(
+                "Carousel experiment featured_count must match reserved artworks"
+            )
 
     history, etag = load_history_with_etag()
     now = datetime.now(timezone.utc)
@@ -1024,6 +1060,11 @@ def reserve_carousel(
             theme_id=theme_id,
             theme_family=theme_family,
             carousel_format=carousel_format,
+            publication_metadata=(
+                validated_publication_metadata.model_dump(exclude_none=True)
+                if validated_publication_metadata
+                else None
+            ),
         )
     )
     for position, artwork in enumerate(featured_artworks, start=1):
@@ -1322,6 +1363,7 @@ def _finalize_publication_history(
             )
 
     role_records = [record for record in target_records if record.get("publication_role")]
+    experiment_metadata: dict[str, Any] = {}
     if role_records:
         if publication_type != "carousel":
             raise RuntimeError("Role-bearing reservation must finalize as carousel")
@@ -1336,6 +1378,28 @@ def _finalize_publication_history(
             range(1, len(featured) + 1)
         ):
             raise RuntimeError("Carousel featured role/order mismatch")
+        cover_record = next(
+            record for record in role_records if record.get("publication_role") == "COVER"
+        )
+        if theme is None and isinstance(cover_record.get("theme_id"), str):
+            theme = cover_record["theme_id"]
+        if content_type is None:
+            content_type = "CAROUSEL"
+        raw_metadata = cover_record.get("publication_metadata")
+        if raw_metadata is not None:
+            try:
+                validated_metadata = CarouselExperimentMetadata.model_validate(
+                    raw_metadata
+                )
+            except ValidationError as error:
+                raise CorruptedHistoryError(
+                    "Carousel reservation has malformed experiment metadata"
+                ) from error
+            if validated_metadata.featured_count != len(featured):
+                raise CorruptedHistoryError(
+                    "Carousel experiment metadata does not match reserved roles"
+                )
+            experiment_metadata = validated_metadata.model_dump(exclude_none=True)
 
     if content_type is None and publication_type == "single":
         stored_types = {
@@ -1413,6 +1477,7 @@ def _finalize_publication_history(
         posted_at=posted_at,
         theme=theme,
         content_type=content_type,
+        **experiment_metadata,
     ).model_dump(exclude_none=True)
     for item in target_records:
         item["status"] = PublicationStatus.PUBLISHED.value

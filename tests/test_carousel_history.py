@@ -22,6 +22,27 @@ def _publication():
     return _artwork("met_cover"), [_artwork(f"aic_{index}") for index in range(1, 9)]
 
 
+def _experiment_metadata(featured_count=8):
+    return {
+        "selection_model_version": "carousel_learning_v1",
+        "engagement_model_version": "engagement_rates_v1",
+        "carousel_theme": "winter_light",
+        "carousel_format": "LIGHT_STUDY",
+        "featured_count": featured_count,
+        "cover_variant": "editorial",
+        "caption_hook_type": "curiosity",
+        "publish_slot": "slot_2",
+        "exploration_selected": False,
+        "learned_score": 63.5,
+        "engagement_confidence": 0.42,
+        "quality_component": 38.0,
+        "engagement_component": 24.0,
+        "diversity_component": -1.0,
+        "exploration_component": 0.0,
+        "preceding_post_distance_minutes": 300.0,
+    }
+
+
 def _history_backend(monkeypatch, initial=None):
     history = initial or {"posted_artworks": []}
     uploads = []
@@ -49,7 +70,7 @@ def test_carousel_reservation_atomically_records_cover_and_featured_roles(monkey
     assert history_tracker.get_posted_ids() == {cover["id"], *[art["id"] for art in featured]}
 
 
-@pytest.mark.parametrize("featured_count", [3, 5, 8])
+@pytest.mark.parametrize("featured_count", [5, 6, 8])
 def test_variable_length_carousel_history_transitions_atomically(
     monkeypatch, featured_count
 ):
@@ -92,6 +113,51 @@ def test_carousel_reservation_persists_theme_metadata_on_all_publication_records
     assert {record["theme_id"] for record in history["posted_artworks"]} == {"winter_light"}
     assert {record["theme_family"] for record in history["posted_artworks"]} == {"season"}
     assert {record["carousel_format"] for record in history["posted_artworks"]} == {"LIGHT_STUDY"}
+
+
+def test_experiment_metadata_is_compact_reserved_and_finalized_backward_compatibly(monkeypatch):
+    history, _ = _history_backend(monkeypatch)
+    cover, featured = _publication()
+    metadata = _experiment_metadata()
+
+    publication_id = history_tracker.reserve_carousel(
+        cover,
+        featured,
+        theme_id="winter_light",
+        theme_family="season",
+        carousel_format="LIGHT_STUDY",
+        publication_metadata=metadata,
+    )
+
+    records = history["posted_artworks"]
+    assert records[0]["publication_metadata"] == metadata
+    assert all("publication_metadata" not in record for record in records[1:])
+    ids = [record["id"] for record in records]
+    history_tracker.mark_artworks_publishing(ids)
+    history_tracker.confirm_carousel_publication(
+        cover["id"], [artwork["id"] for artwork in featured], "media-1"
+    )
+
+    published = history["publications"][0]
+    assert published["id"] == publication_id
+    for field, value in metadata.items():
+        assert published[field] == value
+
+
+def test_legacy_carousel_without_experiment_metadata_still_finalizes(monkeypatch):
+    history, _ = _history_backend(monkeypatch)
+    cover, featured = _publication()
+    history_tracker.reserve_carousel(cover, featured)
+    ids = [cover["id"], *[artwork["id"] for artwork in featured]]
+    history_tracker.mark_artworks_publishing(ids)
+
+    history_tracker.confirm_carousel_publication(
+        cover["id"], [artwork["id"] for artwork in featured], "legacy-media"
+    )
+
+    publication = history["publications"][0]
+    assert publication["type"] == "carousel"
+    assert "selection_model_version" not in publication
 
 
 def test_theme_history_collapses_nine_artwork_rows_into_one_publication_slot(monkeypatch):

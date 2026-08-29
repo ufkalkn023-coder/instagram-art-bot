@@ -8,7 +8,7 @@ from types import SimpleNamespace
 import pytest
 from PIL import Image
 
-from src import history_tracker, image_processor, instagram_poster, pinterest_poster
+from src import history_tracker, image_processor, instagram_poster
 from src.carousel_caption import format_carousel_caption
 from src.carousel_plan import CoverAsset, CoverMode, CoverScoreBreakdown
 from src.carousel_themes import CarouselFormat, get_default_theme_registry, get_format_policy
@@ -258,7 +258,6 @@ def test_bundle_artifacts_caption_order_and_publish_isolation(monkeypatch, tmp_p
     monkeypatch.setattr(image_processor, "upload_temp_media", lambda *args, **kwargs: pytest.fail("R2 upload"))
     monkeypatch.setattr( instagram_poster, "post_to_instagram_graph_api", lambda *args, **kwargs: pytest.fail("Instagram publish"))
     monkeypatch.setattr(instagram_poster, "post_carousel_to_instagram_graph_api", lambda *args, **kwargs: pytest.fail("Instagram carousel publish"))
-    monkeypatch.setattr(pinterest_poster, "post_to_pinterest", lambda *args, **kwargs: pytest.fail("Pinterest publish"))
     monkeypatch.setattr(qc.gemini_ai, "analyze_carousel", lambda *args, **kwargs: pytest.fail("Gemini called"))
     monkeypatch.setattr(sys, "argv", ["qc", "--theme", theme.id, "--no-gemini", "--seed", "fixed"])
     assert qc.main() == 0
@@ -275,7 +274,7 @@ def test_bundle_artifacts_caption_order_and_publish_isolation(monkeypatch, tmp_p
     assert (bundle.parent / "index.html").exists()
 
 
-@pytest.mark.parametrize("featured_count", [3, 5, 8])
+@pytest.mark.parametrize("featured_count", [5, 6, 8])
 def test_qc_manifest_and_contact_sheet_use_actual_adaptive_slide_count(
     tmp_path, featured_count
 ):
@@ -345,7 +344,7 @@ def test_qc_manifest_rejects_out_of_contract_slide_count(tmp_path):
     plan = _fake_plan(theme, tmp_path, featured_count=2)
     acquisition = SimpleNamespace(availability=_availability(theme.id))
 
-    with pytest.raises(ValueError, match="outside the 3–8"):
+    with pytest.raises(ValueError, match="outside the 5–8"):
         qc._manifest(
             plan,
             acquisition,

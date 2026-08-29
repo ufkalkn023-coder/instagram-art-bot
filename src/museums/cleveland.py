@@ -57,10 +57,6 @@ class ClevelandAdapter(MuseumAdapter):
             artworks = res.json().get("data", [])
             
             for item in artworks:
-                if item.get("share_license_status") != "CC0":
-                    logger.debug(f"[Cleveland] Rejected {item.get('id')}: rights not confirmed.")
-                    continue
-
                 images = item.get("images")
                 if not images:
                     continue
@@ -111,6 +107,8 @@ class ClevelandAdapter(MuseumAdapter):
                 department = metadata_text(item.get("department"))
                 style_or_period = metadata_text(item.get("style"))
                 
+                license_status = item.get("share_license_status")
+                is_public_domain = license_status == "CC0"
                 artwork = NormalizedArtwork(
                     source=self.source_id,
                     source_id=str(item.get("id")),
@@ -133,10 +131,18 @@ class ClevelandAdapter(MuseumAdapter):
                     museum_name="Cleveland Museum of Art",
                     image_url=image_url,
                     credit_line=item.get("creditline"),
-                    license="CC0",
-                    is_public_domain=True,
-                    rights_status="CONFIRMED_OPEN_ACCESS",
+                    artwork_url=item.get("url"),
+                    license=license_status,
+                    is_public_domain=is_public_domain,
+                    rights_status=(
+                        "CONFIRMED_OPEN_ACCESS"
+                        if is_public_domain
+                        else "KNOWN_RESTRICTED"
+                        if license_status
+                        else None
+                    ),
                     rights_text=item.get("copyright"),
+                    copyright_notice=item.get("copyright"),
                     image_width=image_width,
                     image_height=image_height,
                 )

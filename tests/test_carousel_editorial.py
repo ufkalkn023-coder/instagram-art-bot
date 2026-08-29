@@ -255,7 +255,7 @@ def test_theme_display_title_never_leaks_internal_id():
     )
 
 
-@pytest.mark.parametrize("featured_count", range(3, 9))
+@pytest.mark.parametrize("featured_count", range(5, 9))
 def test_grounded_copy_supports_every_adaptive_featured_count(featured_count):
     artworks = [
         _work(index, museum="One Museum")
