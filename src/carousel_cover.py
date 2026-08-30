@@ -403,7 +403,11 @@ def _select_editorial_cover_from_acquisition(
             (candidate, preliminary(candidate))
             for candidate in acquisition.candidates
             if candidate.artwork.canonical_id not in excluded_ids
-            and candidate.evidence.theme_relevance_score >= acquisition.policy.minimum_relevance
+            and (
+                not acquisition.policy.require_theme_relevance
+                or candidate.evidence.theme_relevance_score
+                >= acquisition.policy.minimum_relevance
+            )
         ),
         key=lambda item: (
             -item[1].total,
@@ -418,7 +422,11 @@ def _select_editorial_cover_from_acquisition(
         if not is_rights_eligible(candidate):
             reject("rights_policy")
             continue
-        if themed_candidate.evidence.theme_relevance_score < acquisition.policy.minimum_relevance:
+        if (
+            acquisition.policy.require_theme_relevance
+            and themed_candidate.evidence.theme_relevance_score
+            < acquisition.policy.minimum_relevance
+        ):
             reject("theme_relevance_below_threshold")
             continue
         attempted += 1

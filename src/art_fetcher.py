@@ -289,6 +289,7 @@ def _apply_downloaded_image_measurements(
     validation_result: ImageValidationResult,
     museum_weights: dict,
     preserve_selection_adjustments: bool,
+    theme_quality_weight: float = 0.30,
 ) -> float:
     """Recalculate quality using dimensions decoded by the secure download."""
     previous_quality_score = candidate.quality_score
@@ -306,7 +307,7 @@ def _apply_downloaded_image_measurements(
     ):
         updated_theme_breakdown = replace(
             theme_breakdown,
-            technical_quality=candidate.quality_score * 0.30,
+            technical_quality=candidate.quality_score * theme_quality_weight,
         )
         candidate._theme_candidate_breakdown = updated_theme_breakdown
         candidate.selection_score = updated_theme_breakdown.total
@@ -1129,6 +1130,9 @@ def _select_acquired_theme_artworks(
             validation,
             museum_weights,
             preserve_selection_adjustments=True,
+            theme_quality_weight=(
+                0.30 if acquisition.policy.require_theme_relevance else 1.0
+            ),
         )
         if measured_score < min_score:
             observability.reject("post_quality_below_threshold")
@@ -1204,6 +1208,9 @@ def _select_acquired_theme_artworks(
                 candidate_score=final_score,
             )
         candidate_dict = _theme_artwork_dict(final_candidate, candidate_path)
+        if not acquisition.policy.require_theme_relevance:
+            candidate_dict.pop("theme_relevance_score", None)
+            candidate_dict.pop("theme_relevance_breakdown", None)
         candidate_dict["visual_features"] = visual_features
         if engagement_model is not None:
             prediction = engagement_model.score_candidate(
@@ -1211,7 +1218,9 @@ def _select_acquired_theme_artworks(
                 engagement_context or {},
             )
             quality_editorial = (
-                0.65 * float(candidate_dict.get("theme_relevance_score") or 0.0)
+                float(candidate_dict.get("quality_score") or 0.0)
+                if not acquisition.policy.require_theme_relevance
+                else 0.65 * float(candidate_dict.get("theme_relevance_score") or 0.0)
                 + 0.35 * float(candidate_dict.get("quality_score") or 0.0)
             )
             components = engagement_model.blend_candidate_score(
@@ -1373,10 +1382,15 @@ def _select_acquired_theme_artworks(
             theme=acquisition.theme,
             count=count,
             min_quality=min_score,
-            min_relevance=acquisition.policy.minimum_relevance,
+            min_relevance=(
+                acquisition.policy.minimum_relevance
+                if acquisition.policy.require_theme_relevance
+                else None
+            ),
             cover_candidate_ids=(
                 tuple(str(artwork["id"]) for artwork in validated_artworks)
                 if acquisition.theme.evidence_mode is not ThemeEvidenceMode.METADATA
+                or not acquisition.policy.require_theme_relevance
                 else ()
             ),
             engagement_model=engagement_model,

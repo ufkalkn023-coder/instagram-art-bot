@@ -8,9 +8,11 @@ from src.carousel_themes import (
     CarouselFormat,
     CarouselThemeDefinition,
     CarouselThemeRegistry,
+    ThemeEvidenceMode,
     ThemeFamily,
     ThemeHistorySlot,
     ThemeRegistryError,
+    ThemeVisualTarget,
     get_default_theme_registry,
     parse_theme_registry,
     plan_carousel_theme,
@@ -227,3 +229,31 @@ def test_planner_logs_explainable_selected_score_and_eligibility(caplog):
     assert "theme_selected id=logged_theme family=subject" in caplog.text
     assert "fatigue=" in caplog.text
     assert "serendipity=" in caplog.text
+
+
+def test_production_theme_logging_uses_only_metadata_eligible_ranking(caplog):
+    caplog.set_level(logging.INFO, logger="src.carousel_themes")
+    metadata = _theme("metadata_theme", editorial_priority=-5)
+    hybrid = _theme("hybrid_theme", editorial_priority=5).model_copy(
+        update={
+            "evidence_mode": ThemeEvidenceMode.HYBRID,
+            "visual_target": ThemeVisualTarget(luminance_buckets=("MID",)),
+        }
+    )
+    registry = CarouselThemeRegistry(themes=(hybrid, metadata))
+
+    selection = plan_carousel_theme(
+        registry,
+        [],
+        run_seed="fixed",
+        current_month=8,
+        eligible_evidence_modes=(ThemeEvidenceMode.METADATA,),
+    )
+
+    assert selection.theme.id == metadata.id
+    assert tuple(score.theme_id for score in selection.ranked_scores) == (
+        metadata.id,
+    )
+    assert "theme_selected id=metadata_theme" in caplog.text
+    assert "theme_selected id=hybrid_theme" not in caplog.text
+    assert "theme_runner_up_summary none" in caplog.text

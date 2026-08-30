@@ -611,7 +611,7 @@ def optimize_carousel_set(
     theme: CarouselThemeDefinition,
     count: int = MAX_FEATURED_WORKS,
     min_quality: float = 50.0,
-    min_relevance: float = DEFAULT_MIN_THEME_RELEVANCE,
+    min_relevance: float | None = DEFAULT_MIN_THEME_RELEVANCE,
     cover_candidate_ids: Sequence[str] = (),
     size_policy: CarouselSizePolicy = ADAPTIVE_CAROUSEL_SIZE_POLICY,
     engagement_model: "EngagementModel | None" = None,
@@ -629,7 +629,9 @@ def optimize_carousel_set(
         if not target_match:
             continue
         feature = build_selection_features(artwork, theme)
-        if feature.quality < min_quality or feature.theme_relevance < min_relevance:
+        if feature.quality < min_quality or (
+            min_relevance is not None and feature.theme_relevance < min_relevance
+        ):
             continue
         previous = by_id.get(feature.canonical_id)
         if previous is None or feature.individual_strength > previous.individual_strength:

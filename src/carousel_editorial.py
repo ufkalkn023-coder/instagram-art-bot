@@ -190,6 +190,8 @@ def derive_carousel_editorial_facts(
 def fallback_editorial_subtitle(facts: CarouselEditorialFacts) -> str:
     """Write a grounded cover deck without strengthening the registry label."""
     works = format_count(facts.featured_count, "work")
+    if facts.theme_id == "artfolio_selection":
+        return f"{works.capitalize()}, selected by Artfolio."
     if facts.all_same_museum:
         museum_name = facts.museum_names[0]
         article = "" if museum_name.casefold().startswith("the ") else "the "
@@ -215,7 +217,9 @@ def derive_cover_micro_facts(facts: CarouselEditorialFacts) -> tuple[str, ...]:
 def fallback_carousel_intro(facts: CarouselEditorialFacts, target_name: str | None = None) -> str:
     """Write a compact publishable intro using only final-set facts."""
     works = format_count(facts.featured_count, "work")
-    if facts.format == "MONOGRAPHIC" and target_name:
+    if facts.theme_id == "artfolio_selection":
+        opening = f"{works.capitalize()} selected by Artfolio."
+    elif facts.format == "MONOGRAPHIC" and target_name:
         opening = f"{works.capitalize()} by {target_name} are brought together around {facts.theme_title}."
     elif facts.format == "MUSEUM_SPOTLIGHT" and target_name:
         opening = f"{works.capitalize()} held by {target_name} are brought together around {facts.theme_title}."
@@ -242,8 +246,10 @@ def fallback_carousel_intro(facts: CarouselEditorialFacts, target_name: str | No
         return f"{opening} Dated {facts.date_span_label}, they offer perspectives from {artists}."
     if facts.date_span_label:
         return f"{opening} The works date from {facts.date_span_label}."
-    if artists:
+    if artists and facts.theme_id != "artfolio_selection":
         return f"{opening} Across {artists}, the selection offers different approaches to a shared theme."
+    if artists:
+        return f"{opening} The selection includes {artists}."
     return opening
 
 

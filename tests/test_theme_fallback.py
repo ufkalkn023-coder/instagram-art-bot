@@ -259,8 +259,8 @@ def test_fallback_attempts_are_strictly_bounded_and_raise_specific_error(monkeyp
         themes,
         attempt_limit=main.CAROUSEL_THEME_ATTEMPT_LIMIT,
     ).preview()
-    assert calls == [theme.id for theme in expected]
-    assert len(error.value.attempts) == main.CAROUSEL_THEME_ATTEMPT_LIMIT
+    assert calls == [theme.id for theme in expected] + ["artfolio_selection"]
+    assert len(error.value.attempts) == main.CAROUSEL_THEME_ATTEMPT_LIMIT + 1
     assert "reserve" not in calls
     assert "gemini" not in calls
 
@@ -359,4 +359,55 @@ def test_all_five_failed_production_themes_return_nonzero(monkeypatch):
     )
 
     assert main.main(["--dry-run"]) == 1
-    assert calls == [theme.id for theme in themes]
+    assert calls == [theme.id for theme in themes] + ["artfolio_selection"]
+
+
+def test_five_themed_failures_enter_generic_fallback(monkeypatch, caplog):
+    registry = get_default_theme_registry()
+    themes = [
+        theme
+        for theme in registry.enabled_themes
+        if theme.evidence_mode is ThemeEvidenceMode.METADATA
+    ][:5]
+    calls = []
+    _install_common(monkeypatch, themes, calls)
+
+    def select(posted_ids, query, **kwargs):
+        theme = kwargs["theme_definition"]
+        calls.append(("selection", theme.id))
+        if theme.id != "artfolio_selection":
+            raise art_fetcher.CarouselSelectionError(
+                "none", reason="insufficient_relevance_pool"
+            )
+        assert not kwargs["acquisition_policy"].require_theme_relevance
+        return _artworks("generic")[:5]
+
+    monkeypatch.setattr(main.art_fetcher, "fetch_themed_artworks", select)
+    monkeypatch.setattr(
+        main,
+        "select_editorial_cover",
+        lambda **kwargs: calls.append(
+            ("cover", kwargs["theme_definition"].id)
+        )
+        or _cover("met_generic_cover"),
+    )
+    monkeypatch.setattr(
+        main.gemini_ai,
+        "analyze_carousel",
+        lambda *args, **kwargs: pytest.fail(
+            "generic fallback must use neutral deterministic copy"
+        ),
+    )
+    caplog.set_level("INFO", logger=main.__name__)
+
+    main.run_carousel_post(
+        SimpleNamespace(dry_run=True, image_url=None, pinterest=False)
+    )
+
+    assert calls == [
+        *(("selection", theme.id) for theme in themes),
+        ("selection", "artfolio_selection"),
+        ("cover", "artfolio_selection"),
+    ]
+    assert "generic_production_fallback_succeeded theme=artfolio_selection featured=5" in caplog.text
+    assert "carousel_theme_selected theme=artfolio_selection" in caplog.text

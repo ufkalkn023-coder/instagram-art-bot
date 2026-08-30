@@ -50,10 +50,15 @@ from src.editorial_experiments import (
 from src.engagement_learning import EngagementModel, build_engagement_model
 from src.insights_storage import InsightsStorage
 from src.carousel_themes import (
+    CarouselFormat,
+    CarouselThemeDefinition,
+    ThemeEvidenceMode,
+    ThemeFamily,
     get_default_theme_registry,
     plan_carousel_theme,
     primary_search_query,
 )
+from src.theme_acquisition import ThemeAcquisitionPolicy
 from src.theme_fallback import ThemeAttemptPlanner
 from src.production_config import (
     validate_production_configuration,
@@ -64,6 +69,15 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(
 logger = logging.getLogger(__name__)
 
 CAROUSEL_THEME_ATTEMPT_LIMIT = 5
+ARTFOLIO_SELECTION_THEME = CarouselThemeDefinition(
+    id="artfolio_selection",
+    title="Artfolio Selection",
+    family=ThemeFamily.SUBJECT,
+    format=CarouselFormat.THEMATIC_COLLECTION,
+    description="A neutral selection of strong, safe artworks without a shared subject claim.",
+    primary_queries=("museum art", "painting", "artwork"),
+    secondary_queries=("open access art",),
+)
 
 
 class ProductionMode(str, Enum):
@@ -307,6 +321,7 @@ def run_carousel_post(args):
         theme_history,
         run_seed=selection_run_seed.value,
         current_month=datetime.now(timezone.utc).month,
+        eligible_evidence_modes=(ThemeEvidenceMode.METADATA,),
     )
     if hasattr(theme_selection, "ranked_themes"):
         ordered_candidates = theme_selection.ranked_themes(theme_registry)
@@ -446,6 +461,82 @@ def run_carousel_post(args):
         )
         break
 
+    if theme_definition is None and fallback_enabled:
+        generic_theme = ARTFOLIO_SELECTION_THEME
+        generic_query = primary_search_query(generic_theme)
+        generic_hook_type = select_caption_hook_type(
+            generic_theme,
+            run_seed=selection_run_seed.value,
+        )
+        generic_context = {
+            **base_engagement_context,
+            "carousel_theme": generic_theme.id,
+            "carousel_format": generic_theme.format.value,
+            "caption_hook_type": generic_hook_type.value,
+        }
+        candidate_artworks = None
+        candidate_acquisition = None
+        logger.info(
+            "generic_production_fallback theme=%s title=%r after_failures=%s",
+            generic_theme.id,
+            generic_theme.title,
+            len(attempted_themes),
+        )
+        try:
+            selection = art_fetcher.fetch_themed_artworks(
+                posted_ids,
+                generic_query,
+                count=MAX_FEATURED_WORKS,
+                color_tone=color_tone,
+                selection_run_seed=selection_run_seed,
+                theme_definition=generic_theme,
+                return_acquisition=True,
+                acquisition_policy=ThemeAcquisitionPolicy(
+                    require_theme_relevance=False
+                ),
+                acquisition_run_state=acquisition_run_state,
+                engagement_model=engagement_model,
+                engagement_context=generic_context,
+                exploration_selected=exploration_selected,
+            )
+            if isinstance(selection, art_fetcher.ThemedArtworkSelection):
+                candidate_artworks = list(selection.artworks)
+                candidate_acquisition = selection.acquisition
+                candidate_set_optimization = selection.set_optimization
+            else:
+                candidate_artworks = selection
+                candidate_set_optimization = None
+            candidate_cover = select_editorial_cover(
+                posted_ids=posted_ids,
+                featured_artworks=candidate_artworks,
+                theme=generic_query,
+                color_tone=color_tone,
+                selection_run_seed=selection_run_seed,
+                theme_definition=generic_theme,
+                acquisition=candidate_acquisition,
+            )
+        except (art_fetcher.CarouselSelectionError, EditorialCoverSelectionError) as error:
+            _cleanup_failed_theme_artifacts(candidate_artworks)
+            reason = getattr(error, "reason", type(error).__name__)
+            attempted_themes.append((generic_theme.id, reason))
+            logger.info(
+                "generic_production_fallback_unavailable theme=%s reason=%s",
+                generic_theme.id,
+                reason,
+            )
+        else:
+            artworks = candidate_artworks
+            cover = candidate_cover
+            acquisition = candidate_acquisition
+            set_optimization = candidate_set_optimization
+            theme_definition = generic_theme
+            caption_hook_type = generic_hook_type
+            logger.info(
+                "generic_production_fallback_succeeded theme=%s featured=%s",
+                generic_theme.id,
+                len(candidate_artworks),
+            )
+
     if (
         theme_definition is None
         or artworks is None
@@ -526,10 +617,14 @@ def run_carousel_post(args):
         analysis_context["editorial_facts"] = editorial_facts.as_dict()
     if "caption_hook_type" in analysis_parameters:
         analysis_context["caption_hook_type"] = caption_hook_type.value
-    ai_analysis = gemini_ai.analyze_carousel(
-        theme_definition.title,
-        artworks,
-        **analysis_context,
+    ai_analysis = (
+        None
+        if theme_definition.id == ARTFOLIO_SELECTION_THEME.id
+        else gemini_ai.analyze_carousel(
+            theme_definition.title,
+            artworks,
+            **analysis_context,
+        )
     )
     format_target_name = None
     if theme_definition.format_target:
@@ -619,8 +714,12 @@ def run_carousel_post(args):
         final_engagement_context,
     )
     editorial_quality = sum(
-        0.65 * float(artwork.get("theme_relevance_score") or 0.0)
-        + 0.35 * float(artwork.get("quality_score") or 0.0)
+        (
+            float(artwork.get("quality_score") or 0.0)
+            if plan.theme.id == ARTFOLIO_SELECTION_THEME.id
+            else 0.65 * float(artwork.get("theme_relevance_score") or 0.0)
+            + 0.35 * float(artwork.get("quality_score") or 0.0)
+        )
         for artwork in plan.featured_artworks
     ) / len(plan.featured_artworks)
     diversity_adjustment = 0.0

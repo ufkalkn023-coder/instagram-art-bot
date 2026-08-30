@@ -299,6 +299,7 @@ class ThemeAcquisitionPolicy:
     max_network_calls: int = 20
     minimum_safe_pool: int = DEFAULT_SAFE_POOL_HEADROOM
     minimum_relevance: float = DEFAULT_MIN_THEME_RELEVANCE
+    require_theme_relevance: bool = True
 
 
 @dataclass(frozen=True)
@@ -608,6 +609,7 @@ def _build_candidates(
     museum_weights: dict,
     min_quality: float,
     min_relevance: float,
+    require_theme_relevance: bool,
     run_seed: str,
 ) -> tuple[tuple[ThemeCandidate, ...], tuple[ThemeCandidate, ...], dict[str, int]]:
     all_candidates: list[ThemeCandidate] = []
@@ -621,8 +623,12 @@ def _build_candidates(
         artwork.quality_score = quality
         artwork.measurement_coverage = calculate_measurement_coverage(artwork)
         score = CarouselCandidateScoreBreakdown(
-            theme_relevance=evidence.theme_relevance_score * 0.68,
-            technical_quality=quality * 0.30,
+            theme_relevance=(
+                evidence.theme_relevance_score * 0.68
+                if require_theme_relevance
+                else 0.0
+            ),
+            technical_quality=quality * (0.30 if require_theme_relevance else 1.0),
             serendipity=_stable_serendipity(run_seed, theme.id, candidate_id),
         )
         artwork._theme_candidate_breakdown = score
@@ -662,7 +668,9 @@ def _build_candidates(
         if not artwork.image_url or quality < min_quality:
             continue
         counts["quality"] += 1
-        if theme.evidence_mode is ThemeEvidenceMode.METADATA:
+        if not require_theme_relevance:
+            relevance_pass = True
+        elif theme.evidence_mode is ThemeEvidenceMode.METADATA:
             relevance_pass = (
                 evidence.relevance_eligible
                 and evidence.theme_relevance_score >= min_relevance
@@ -857,6 +865,7 @@ def acquire_theme_candidates(
             museum_weights=museum_weights,
             min_quality=min_quality,
             min_relevance=policy.minimum_relevance,
+            require_theme_relevance=policy.require_theme_relevance,
             run_seed=run_seed,
         )
         if (

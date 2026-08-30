@@ -652,6 +652,7 @@ def plan_carousel_theme(
     *,
     run_seed: str,
     current_month: int,
+    eligible_evidence_modes: Sequence[ThemeEvidenceMode] | None = None,
 ) -> ThemePlanSelection:
     """Choose the highest-scoring enabled theme without global RNG mutation."""
     ranked = rank_carousel_themes(
@@ -660,16 +661,39 @@ def plan_carousel_theme(
         run_seed=run_seed,
         current_month=current_month,
     )
-    enabled = registry.enabled_themes
+    if eligible_evidence_modes is not None:
+        allowed_modes = frozenset(eligible_evidence_modes)
+        ranked = tuple(
+            score
+            for score in ranked
+            if registry.by_id(score.theme_id).evidence_mode in allowed_modes
+        )
+        if not ranked:
+            raise ThemeRegistryError(
+                "Carousel theme registry has no enabled themes for the requested evidence modes"
+            )
+    enabled = tuple(registry.by_id(score.theme_id) for score in ranked)
     selected_score = ranked[0]
     selected_theme = registry.by_id(selected_score.theme_id)
-    logger.info(
-        "theme_eligibility enabled=%s disabled=%s recent_publication_slots=%s month=%s",
-        len(enabled),
-        len(registry.themes) - len(enabled),
-        min(len(history), THEME_HISTORY_WINDOW),
-        current_month,
-    )
+    if eligible_evidence_modes is None:
+        logger.info(
+            "theme_eligibility enabled=%s disabled=%s recent_publication_slots=%s month=%s",
+            len(enabled),
+            len(registry.themes) - len(enabled),
+            min(len(history), THEME_HISTORY_WINDOW),
+            current_month,
+        )
+    else:
+        logger.info(
+            "theme_eligibility enabled=%s disabled=%s production_eligible=%s "
+            "evidence_modes=%s recent_publication_slots=%s month=%s",
+            len(registry.enabled_themes),
+            len(registry.themes) - len(registry.enabled_themes),
+            len(enabled),
+            ",".join(mode.value for mode in eligible_evidence_modes),
+            min(len(history), THEME_HISTORY_WINDOW),
+            current_month,
+        )
     logger.info(
         "theme_selected id=%s family=%s format=%s base=%.2f fatigue=%.2f "
         "family_fatigue=%.2f format_fatigue=%.2f seasonal=%.2f editorial=%.2f "
