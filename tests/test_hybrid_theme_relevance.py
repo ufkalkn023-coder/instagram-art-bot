@@ -346,7 +346,7 @@ def test_light_study_provenance_never_overrides_visual_or_exclusion_failures():
     assert not excluded.relevance_eligible
 
 
-def test_candlelight_single_visual_dimension_explains_score_fifty_cluster():
+def test_candlelight_single_visual_dimension_meets_score_fifty_threshold():
     theme = get_default_theme_registry().by_id("candlelight")
     evidence = evaluate_theme_relevance(
         _artwork("candle", title="Untitled composition"),
@@ -361,7 +361,7 @@ def test_candlelight_single_visual_dimension_explains_score_fifty_cluster():
     assert evidence.relevance_breakdown.visual_target == 14.0
     assert evidence.relevance_breakdown.visual_support == 12.0
     assert evidence.theme_relevance_score == 50.0
-    assert evidence.theme_relevance_score < DEFAULT_MIN_THEME_RELEVANCE
+    assert evidence.theme_relevance_score >= DEFAULT_MIN_THEME_RELEVANCE
 
 
 def test_color_study_requires_actual_target_color_evidence():
@@ -609,10 +609,9 @@ def test_hybrid_diagnostics_separate_image_and_relevance_failures(
     assert diagnostics.images_validated == 4
     assert diagnostics.image_validation_failed == 1
     assert diagnostics.visually_scored == 4
-    assert diagnostics.final_relevance_qualified == 1
-    assert diagnostics.qualified_at_60 == 1
+    assert diagnostics.final_relevance_qualified == 2
+    assert diagnostics.qualified_at_60 == 2
     assert dict(diagnostics.final_relevance_failures) == {
-        "final_score_below_threshold": 1,
         "image_validation_failure": 1,
         "insufficient_semantic_evidence": 1,
         "insufficient_visual_target_evidence": 1,

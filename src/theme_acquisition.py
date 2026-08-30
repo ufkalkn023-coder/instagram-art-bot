@@ -20,6 +20,7 @@ from src.carousel_themes import (
 )
 from src.format_contracts import (
     constrained_adapter_source_ids,
+    matches_normalized_format_target,
     qualify_normalized_artwork,
     target_query_terms,
 )
@@ -31,7 +32,7 @@ from src.carousel_policy import MIN_FEATURED_WORKS
 
 logger = logging.getLogger(__name__)
 
-DEFAULT_MIN_THEME_RELEVANCE = 60.0
+DEFAULT_MIN_THEME_RELEVANCE = 50.0
 ABSOLUTE_MINIMUM_RELEVANT_POOL = MIN_FEATURED_WORKS
 PREFERRED_HEADROOM = 12
 # Compatibility names retained for existing callers and manifests.
@@ -456,7 +457,7 @@ def evaluate_theme_relevance(
                 CarouselFormat.MEDIUM_FOCUS,
             }
             and theme.format_target is not None
-            and qualify_normalized_artwork(artwork, theme)[0]
+            and matches_normalized_format_target(artwork, theme)
             else 0.0
         ),
         excluded=-100.0 if excluded_matches else 0.0,
@@ -494,8 +495,17 @@ def evaluate_theme_relevance(
         query_tokens = normalize_theme_text(hit.query)
         if any(phrase_matches(query_tokens, signal) for group in groups for signal in group):
             primary_semantic_hits += 1
+    supporting_metadata_fields = matched_signal_fields.intersection(
+        {"title", "description", "classification", "medium"}
+    )
+    strongly_grounded_primary_metadata = (
+        bool(primary_hits)
+        and len(supporting_metadata_fields) >= 2
+        and not excluded_matches
+        and format_target_match
+    )
     if theme.evidence_mode is ThemeEvidenceMode.METADATA:
-        semantic_grounded = not missing_groups
+        semantic_grounded = not missing_groups or strongly_grounded_primary_metadata
     elif theme.format is CarouselFormat.COLOR_STUDY:
         # The target color is proved by pixels; provenance keeps that evidence thematic.
         semantic_grounded = bool(primary_hits) or not missing_groups

@@ -7,6 +7,7 @@ from src.museums.europeana import EuropeanaAdapter
 from src.museums.smithsonian import SmithsonianAdapter
 from src.theme_acquisition import (
     ABSOLUTE_MINIMUM,
+    DEFAULT_MIN_THEME_RELEVANCE,
     PREFERRED_PREFLIGHT_TARGET,
     AcquisitionRunState,
     QueryType,
@@ -125,7 +126,7 @@ def test_strong_primary_required_metadata_scores_high_and_secondary_is_lower():
     assert primary.relevance_breakdown.primary_query > secondary.relevance_breakdown.secondary_query
 
 
-def test_missing_required_group_and_excluded_signal_are_hard_gates():
+def test_missing_required_group_stays_below_threshold_and_exclusion_is_a_hard_gate():
     theme = _theme()
     missing = evaluate_theme_relevance(
         _candidate("generic", title="Portrait of a Woman", description="A seated woman indoors."),
@@ -138,11 +139,81 @@ def test_missing_required_group_and_excluded_signal_are_hard_gates():
         [ThemeQueryHit(QueryType.PRIMARY, 0, "woman reading")],
     )
 
-    assert not missing.relevance_eligible
+    assert missing.theme_relevance_score < DEFAULT_MIN_THEME_RELEVANCE
     assert missing.missing_required_groups == (("reading", "reader", "book"),)
     assert not excluded.relevance_eligible
     assert excluded.excluded_matches == ("bookplate",)
     assert excluded.theme_relevance_score == 0
+
+
+def test_relevance_score_50_qualifies_without_exact_required_term_repetition(monkeypatch):
+    theme = _theme(
+        primary_queries=["unused", "watercolor landscapes"],
+        secondary_queries=[],
+        required_terms=["watercolor"],
+        required_term_groups=[],
+        preferred_terms=["river", "drawing"],
+        excluded_terms=["photograph"],
+    )
+    candidates = [
+        _candidate(
+            f"boundary-{index}",
+            title=f"River Study {index}",
+            description="Catalogued study on paper.",
+        ).model_copy(update={"classification": "Drawing"})
+        for index in range(5)
+    ]
+
+    result = _acquire(
+        theme,
+        [QueryAdapter({"watercolor landscapes": candidates})],
+        monkeypatch=monkeypatch,
+        policy=ThemeAcquisitionPolicy(
+            max_primary_queries=2,
+            max_secondary_queries=0,
+            minimum_safe_pool=5,
+        ),
+    )
+
+    assert DEFAULT_MIN_THEME_RELEVANCE == 50.0
+    assert result.availability.sufficient
+    assert len(result.candidates) == 5
+    assert {candidate.evidence.theme_relevance_score for candidate in result.candidates} == {50.0}
+    assert all(not candidate.evidence.required_matches for candidate in result.candidates)
+
+
+def test_relevance_below_50_does_not_qualify(monkeypatch):
+    theme = _theme(
+        primary_queries=["unused-0", "unused-1", "watercolor landscapes"],
+        secondary_queries=[],
+        required_terms=["watercolor"],
+        required_term_groups=[],
+        preferred_terms=["river", "drawing"],
+        excluded_terms=[],
+    )
+    candidates = [
+        _candidate(
+            f"below-{index}",
+            title=f"River Study {index}",
+            description="Catalogued study on paper.",
+        ).model_copy(update={"classification": "Drawing"})
+        for index in range(5)
+    ]
+
+    result = _acquire(
+        theme,
+        [QueryAdapter({"watercolor landscapes": candidates})],
+        monkeypatch=monkeypatch,
+        policy=ThemeAcquisitionPolicy(
+            max_primary_queries=3,
+            max_secondary_queries=0,
+            minimum_safe_pool=5,
+        ),
+    )
+
+    assert {candidate.evidence.theme_relevance_score for candidate in result.all_candidates} == {48.0}
+    assert not result.candidates
+    assert result.availability.failure_reason == "insufficient_relevance_pool"
 
 
 def test_preferred_bonus_is_bounded_and_title_outweighs_description():
@@ -462,7 +533,7 @@ def test_low_quality_pool_and_fully_posted_pool_have_distinct_reasons(monkeypatc
         theme,
         [QueryAdapter({"woman reading": candidates})],
         monkeypatch=monkeypatch,
-        quality=lambda artwork, weights: 40.0,
+        quality=lambda artwork, weights: 49.9,
     )
     fully_posted = _acquire(
         theme,

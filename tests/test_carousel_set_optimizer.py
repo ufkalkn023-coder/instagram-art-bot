@@ -173,7 +173,7 @@ def test_optimizer_preserves_floors_uniqueness_caps_and_determinism():
     insufficient = [_artwork(index) for index in range(2)]
     insufficient.extend(
         [
-            _artwork(2, relevance=59.9),
+            _artwork(2, relevance=49.9),
             _artwork(3, quality=49.9),
         ]
     )

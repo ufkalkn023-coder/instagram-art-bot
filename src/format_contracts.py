@@ -44,7 +44,7 @@ def _period_matches(value: object, style_or_period: object, target: str) -> bool
     )
 
 
-def _qualify_values(
+def _target_matches_values(
     theme: CarouselThemeDefinition,
     *,
     artist: object,
@@ -78,6 +78,20 @@ def _qualify_values(
     return True, None
 
 
+def _qualify_values(
+    theme: CarouselThemeDefinition,
+    **metadata: object,
+) -> tuple[bool, str | None]:
+    """Enforce only intrinsic artist and museum format identities."""
+    matches, reason = _target_matches_values(theme, **metadata)
+    if theme.format in {
+        CarouselFormat.MONOGRAPHIC,
+        CarouselFormat.MUSEUM_SPOTLIGHT,
+    }:
+        return matches, reason
+    return True, None
+
+
 def qualify_normalized_artwork(
     artwork: NormalizedArtwork,
     theme: CarouselThemeDefinition,
@@ -92,6 +106,24 @@ def qualify_normalized_artwork(
         medium=artwork.medium,
         classification=artwork.classification,
     )
+
+
+def matches_normalized_format_target(
+    artwork: NormalizedArtwork,
+    theme: CarouselThemeDefinition,
+) -> bool:
+    """Return target evidence for scoring without making soft formats hard gates."""
+    matches, _ = _target_matches_values(
+        theme,
+        artist=artwork.artist_name,
+        museum=artwork.museum_name,
+        region=artwork.region,
+        date=artwork.creation_date,
+        style_or_period=artwork.style_or_period,
+        medium=artwork.medium,
+        classification=artwork.classification,
+    )
+    return matches
 
 
 def qualify_artwork_mapping(

@@ -29,7 +29,13 @@ from src.carousel_themes import (
 )
 from src.models import NormalizedArtwork
 from src.quality_filter import ImageValidationResult
-from src.theme_acquisition import ThemeAcquisitionPolicy, acquire_theme_candidates
+from src.theme_acquisition import (
+    QueryType,
+    ThemeAcquisitionPolicy,
+    ThemeQueryHit,
+    acquire_theme_candidates,
+    evaluate_theme_relevance,
+)
 
 
 def _theme(carousel_format: CarouselFormat, **target) -> CarouselThemeDefinition:
@@ -435,7 +441,7 @@ def test_comparison_dimension_adds_bounded_preference_without_bypassing_floors()
         _mapping(
             99,
             artist="Artist 99",
-            relevance=59.9,
+            relevance=49.9,
             quality=100.0,
             date="1100",
             region="latin_america_caribbean",
@@ -512,17 +518,71 @@ def test_remaining_intentional_similarity_exemptions_are_format_scoped():
     assert pattern_penalty.same_color == 0
 
 
-def test_typed_region_and_medium_targets_are_hard_only_when_declared():
-    regional = _theme(CarouselFormat.REGIONAL, region="east_asia")
-    medium = _theme(CarouselFormat.MEDIUM_FOCUS, medium_family="watercolor")
-    wrong_region = [_mapping(index, region="europe") for index in range(9)]
-    wrong_medium = [_mapping(index, medium="Oil on canvas") for index in range(9)]
+@pytest.mark.parametrize(
+    ("carousel_format", "target", "mismatch"),
+    [
+        (CarouselFormat.REGIONAL, {"region": "east_asia"}, {"region": "europe"}),
+        (CarouselFormat.PERIOD_FOCUS, {"period": "1800-1899"}, {"date": "1650"}),
+        (
+            CarouselFormat.MEDIUM_FOCUS,
+            {"medium_family": "watercolor"},
+            {"medium": "Drawing on paper"},
+        ),
+    ],
+)
+def test_regional_period_and_medium_targets_are_soft_not_hard_rejects(
+    carousel_format, target, mismatch
+):
+    theme = _theme(carousel_format, **target)
+    works = [_mapping(index, **mismatch) for index in range(5)]
 
-    with pytest.raises(ValueError, match="got 0"):
-        optimize_carousel_set(wrong_region, theme=regional)
-    with pytest.raises(ValueError, match="got 0"):
-        optimize_carousel_set(wrong_medium, theme=medium)
+    result = optimize_carousel_set(works, theme=theme, count=5)
 
+    assert len(result.artworks) == 5
+
+
+@pytest.mark.parametrize(
+    ("carousel_format", "target", "matching_update", "coarse_update"),
+    [
+        (
+            CarouselFormat.REGIONAL,
+            {"region": "east_asia"},
+            {"region": "east_asia"},
+            {"region": "europe"},
+        ),
+        (
+            CarouselFormat.PERIOD_FOCUS,
+            {"period": "1800-1899"},
+            {"creation_date": "1850"},
+            {"creation_date": "1650"},
+        ),
+        (
+            CarouselFormat.MEDIUM_FOCUS,
+            {"medium_family": "watercolor"},
+            {"medium": "Watercolor on paper"},
+            {"medium": "Drawing on paper"},
+        ),
+    ],
+)
+def test_soft_format_target_matches_receive_existing_relevance_bonus(
+    carousel_format, target, matching_update, coarse_update
+):
+    theme = _theme(carousel_format, **target)
+    matching = _normalized(1).model_copy(update=matching_update)
+    coarse = _normalized(2).model_copy(update=coarse_update)
+    hit = [ThemeQueryHit(QueryType.PRIMARY, 0, "shared subject")]
+
+    matching_evidence = evaluate_theme_relevance(matching, theme, hit)
+    coarse_evidence = evaluate_theme_relevance(coarse, theme, hit)
+
+    assert matching_evidence.format_target_match
+    assert coarse_evidence.format_target_match
+    assert matching_evidence.relevance_breakdown.format_target == 40.0
+    assert coarse_evidence.relevance_breakdown.format_target == 0.0
+    assert matching_evidence.theme_relevance_score > coarse_evidence.theme_relevance_score
+
+
+def test_legacy_soft_format_target_is_optional():
     legacy_regional = CarouselThemeDefinition(
         id="legacy_regional",
         title="Legacy Regional",
