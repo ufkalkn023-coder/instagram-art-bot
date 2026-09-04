@@ -60,6 +60,12 @@ from src.carousel_themes import (
 )
 from src.theme_acquisition import ThemeAcquisitionPolicy
 from src.theme_fallback import ThemeAttemptPlanner
+from src.theme_feasibility import (
+    FeasibilityAttemptRanker,
+    ThemeFeasibilityStorage,
+    load_feasibility_state,
+    record_theme_availability,
+)
 from src.production_config import (
     validate_production_configuration,
     validate_reconciliation_configuration,
@@ -330,13 +336,14 @@ def run_carousel_post(args):
         # Compatibility for callers/tests supplying the former one-theme plan shape.
         ordered_candidates = (theme_selection.theme,)
         fallback_enabled = False
+    ranked_scores = getattr(theme_selection, "ranked_scores", ())
+    base_scores = {
+        score.theme_id: score.total
+        for score in ranked_scores
+        if hasattr(score, "theme_id") and hasattr(score, "total")
+    }
+    editorial_scores = dict(base_scores)
     if engagement_model.confidence > 0:
-        ranked_scores = getattr(theme_selection, "ranked_scores", ())
-        base_scores = {
-            score.theme_id: score.total
-            for score in ranked_scores
-            if hasattr(score, "theme_id") and hasattr(score, "total")
-        }
         ordered_candidates = engagement_model.rank_themes(
             ordered_candidates,
             base_scores=base_scores,
@@ -344,14 +351,37 @@ def run_carousel_post(args):
             run_seed=selection_run_seed.value,
             exploration_selected=exploration_selected,
         )
+        editorial_scores = {
+            theme.id: engagement_model.theme_score(
+                theme,
+                base_score=base_scores.get(theme.id, 50.0),
+                context=base_engagement_context,
+                exploration_selected=exploration_selected,
+            )
+            for theme in ordered_candidates
+        }
 
     attempted_themes: list[tuple[str, str]] = []
+    actual_theme_attempt_order: list[str] = []
     acquisition_run_state = art_fetcher.AcquisitionRunState()
+    museum_adapters = tuple(art_fetcher.get_museum_adapters())
+    feasibility_storage = ThemeFeasibilityStorage()
+    feasibility_state = load_feasibility_state(feasibility_storage)
+    feasibility_ranker = FeasibilityAttemptRanker(
+        editorial_scores=editorial_scores,
+        state=feasibility_state,
+        adapters=museum_adapters,
+        run_state=acquisition_run_state,
+        now=run_time,
+        log_limit=CAROUSEL_THEME_ATTEMPT_LIMIT,
+    )
     attempt_planner = ThemeAttemptPlanner(
         ordered_candidates,
         attempt_limit=CAROUSEL_THEME_ATTEMPT_LIMIT,
+        ranker=feasibility_ranker.rank,
     )
     initial_attempt_plan = attempt_planner.preview()
+    feasibility_ranker.log_shortlist(initial_attempt_plan)
     logger.info(
         "theme_attempt_plan themes=%s evidence_modes=%s",
         ",".join(theme.id for theme in initial_attempt_plan),
@@ -366,6 +396,7 @@ def run_carousel_post(args):
     attempt = 0
     while candidate_theme := attempt_planner.next_theme():
         attempt += 1
+        actual_theme_attempt_order.append(candidate_theme.id)
         search_query = primary_search_query(candidate_theme)
         candidate_hook_type = select_caption_hook_type(
             candidate_theme,
@@ -396,6 +427,7 @@ def run_carousel_post(args):
         candidate_acquisition = None
         candidate_set_optimization = None
         candidate_artworks = None
+        availability_recorded = False
         try:
             selection = art_fetcher.fetch_themed_artworks(
                 posted_ids,
@@ -409,6 +441,7 @@ def run_carousel_post(args):
                 engagement_model=engagement_model,
                 engagement_context=engagement_context,
                 exploration_selected=exploration_selected,
+                adapters=museum_adapters,
             )
             if isinstance(selection, art_fetcher.ThemedArtworkSelection):
                 candidate_artworks = list(selection.artworks)
@@ -417,6 +450,16 @@ def run_carousel_post(args):
             else:
                 candidate_artworks = selection
                 candidate_acquisition = None
+            if candidate_acquisition is not None:
+                record_theme_availability(
+                    candidate_acquisition.availability,
+                    theme=candidate_theme,
+                    adapters=museum_adapters,
+                    run_state=acquisition_run_state,
+                    attempted_at=datetime.now(timezone.utc),
+                    storage=feasibility_storage,
+                )
+                availability_recorded = True
             candidate_cover = select_editorial_cover(
                 posted_ids=posted_ids,
                 featured_artworks=candidate_artworks,
@@ -438,6 +481,15 @@ def run_carousel_post(args):
                 "availability",
                 None,
             )
+            if availability is not None and not availability_recorded:
+                record_theme_availability(
+                    availability,
+                    theme=candidate_theme,
+                    adapters=museum_adapters,
+                    run_state=acquisition_run_state,
+                    attempted_at=datetime.now(timezone.utc),
+                    storage=feasibility_storage,
+                )
             logger.info(
                 "theme_unavailable theme=%s reason=%s eligible=%s target=%s attempt=%s",
                 candidate_theme.id,
@@ -446,6 +498,7 @@ def run_carousel_post(args):
                 getattr(availability, "target", "unknown"),
                 attempt,
             )
+            feasibility_ranker.log_shortlist(attempt_planner.remaining_preview())
             continue
 
         artworks = candidate_artworks
@@ -460,6 +513,11 @@ def run_carousel_post(args):
             attempt,
         )
         break
+
+    logger.info(
+        "theme_attempt_order themes=%s",
+        ",".join(actual_theme_attempt_order) or "none",
+    )
 
     if theme_definition is None and fallback_enabled:
         generic_theme = ARTFOLIO_SELECTION_THEME
@@ -476,6 +534,7 @@ def run_carousel_post(args):
         }
         candidate_artworks = None
         candidate_acquisition = None
+        availability_recorded = False
         logger.info(
             "generic_production_fallback theme=%s title=%r after_failures=%s",
             generic_theme.id,
@@ -498,6 +557,7 @@ def run_carousel_post(args):
                 engagement_model=engagement_model,
                 engagement_context=generic_context,
                 exploration_selected=exploration_selected,
+                adapters=museum_adapters,
             )
             if isinstance(selection, art_fetcher.ThemedArtworkSelection):
                 candidate_artworks = list(selection.artworks)
@@ -506,6 +566,16 @@ def run_carousel_post(args):
             else:
                 candidate_artworks = selection
                 candidate_set_optimization = None
+            if candidate_acquisition is not None:
+                record_theme_availability(
+                    candidate_acquisition.availability,
+                    theme=generic_theme,
+                    adapters=museum_adapters,
+                    run_state=acquisition_run_state,
+                    attempted_at=datetime.now(timezone.utc),
+                    storage=feasibility_storage,
+                )
+                availability_recorded = True
             candidate_cover = select_editorial_cover(
                 posted_ids=posted_ids,
                 featured_artworks=candidate_artworks,
@@ -519,6 +589,20 @@ def run_carousel_post(args):
             _cleanup_failed_theme_artifacts(candidate_artworks)
             reason = getattr(error, "reason", type(error).__name__)
             attempted_themes.append((generic_theme.id, reason))
+            availability = getattr(error, "availability", None) or getattr(
+                candidate_acquisition,
+                "availability",
+                None,
+            )
+            if availability is not None and not availability_recorded:
+                record_theme_availability(
+                    availability,
+                    theme=generic_theme,
+                    adapters=museum_adapters,
+                    run_state=acquisition_run_state,
+                    attempted_at=datetime.now(timezone.utc),
+                    storage=feasibility_storage,
+                )
             logger.info(
                 "generic_production_fallback_unavailable theme=%s reason=%s",
                 generic_theme.id,

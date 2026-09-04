@@ -56,3 +56,13 @@ def classify_exception(error: BaseException) -> str:
 
 def normalize_source_failure_category(category: object) -> str:
     return category if isinstance(category, str) and category in SOURCE_FAILURE_CATEGORIES else "UNKNOWN"
+
+
+def is_retryable_source_failure(category: object, status_code: object = None) -> bool:
+    """Return a conservative retryability signal without retaining response data."""
+    normalized = normalize_source_failure_category(category)
+    return normalized in {"RATE_LIMITED", "NETWORK_ERROR"} or (
+        normalized == "API_ERROR"
+        and isinstance(status_code, int)
+        and 500 <= status_code <= 599
+    )

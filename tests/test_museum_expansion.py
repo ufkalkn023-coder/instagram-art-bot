@@ -1,16 +1,41 @@
 import random
 
-from src.museums import europeana, smithsonian
+import pytest
+
+from src.museums import europeana, met, smithsonian
+from src.museums.base import AdapterHTTPError
 
 
 class FakeResponse:
     status_code = 200
+    headers = {}
 
     def __init__(self, payload):
         self.payload = payload
 
     def json(self):
         return self.payload
+
+
+def test_met_http_failure_identifies_object_operation(monkeypatch):
+    responses = iter(
+        (
+            FakeResponse({"objectIDs": [123]}),
+            type(
+                "ForbiddenResponse",
+                (),
+                {"status_code": 403, "headers": {}, "json": lambda self: {}},
+            )(),
+        )
+    )
+    monkeypatch.setattr(met.requests, "get", lambda *args, **kwargs: next(responses))
+
+    with pytest.raises(AdapterHTTPError) as error:
+        met.MetAdapter().fetch_candidates(limit=1, query="portrait", rng=random.Random(1))
+
+    assert error.value.status_code == 403
+    assert error.value.operation == "object"
+    assert error.value.category == "HTTP_BLOCKED"
 
 
 def test_smithsonian_requires_key_and_preserves_image_rights(monkeypatch):

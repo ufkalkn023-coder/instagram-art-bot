@@ -7,6 +7,7 @@ from .base import AdapterHTTPError, MuseumAdapter
 from src.models import NormalizedArtwork
 from src.region import infer_region, metadata_text
 import config
+from src.source_health import classify_exception, classify_http_failure
 
 logger = logging.getLogger(__name__)
 
@@ -40,6 +41,7 @@ class MetAdapter(MuseumAdapter):
         rng: random.Random | None = None,
     ) -> List[NormalizedArtwork]:
         candidates = []
+        self._clear_source_failure()
         try:
             random_source = rng or random
             search_term = query if query else random_source.choice(MET_SEARCH_TERMS)
@@ -51,12 +53,27 @@ class MetAdapter(MuseumAdapter):
             headers = {"User-Agent": "InstagramArtBot/1.0"}
             res = requests.get(search_url, headers=headers, timeout=20)
             if res.status_code != 200:
+                category = classify_http_failure(res.status_code, res.headers)
+                self._record_source_failure(category)
                 if res.status_code in {403, 429}:
-                    raise AdapterHTTPError(self.source_id, res.status_code)
+                    raise AdapterHTTPError(
+                        self.source_id,
+                        res.status_code,
+                        operation="search",
+                        category=category,
+                    )
                 logger.warning(f"[Met] API returned {res.status_code}")
                 return candidates
 
-            object_ids = res.json().get("objectIDs", [])
+            try:
+                payload = res.json()
+            except ValueError:
+                self._record_source_failure("INVALID_RESPONSE")
+                return candidates
+            if not isinstance(payload, dict):
+                self._record_source_failure("INVALID_RESPONSE")
+                return candidates
+            object_ids = payload.get("objectIDs", [])
             if not object_ids:
                 return candidates
 
@@ -68,7 +85,14 @@ class MetAdapter(MuseumAdapter):
                 d_res = requests.get(detail_url, headers=headers, timeout=15)
                 if d_res.status_code != 200:
                     if d_res.status_code in {403, 429}:
-                        raise AdapterHTTPError(self.source_id, d_res.status_code)
+                        raise AdapterHTTPError(
+                            self.source_id,
+                            d_res.status_code,
+                            operation="object",
+                            category=classify_http_failure(
+                                d_res.status_code, d_res.headers
+                            ),
+                        )
                     continue
 
                 detail = d_res.json()
@@ -135,6 +159,7 @@ class MetAdapter(MuseumAdapter):
         except AdapterHTTPError:
             raise
         except Exception as e:
-            logger.error(f"[Met] Error fetching candidates: {e}")
+            logger.error("[Met] Error fetching candidates (%s).", type(e).__name__)
+            self._record_source_failure(classify_exception(e))
 
         return candidates

@@ -365,6 +365,11 @@ def test_http_403_circuit_breaker_is_run_local(monkeypatch):
     assert state.http_403_failures == 2
     assert state.disabled_adapters == {"met": "HTTP403"}
     assert state.diagnostics()["runtime_disabled_adapters"] == {"met": "HTTP403"}
+    assert first.availability.adapter_failures[0].http_status == 403
+    assert first.availability.adapter_failures[0].operation == "search"
+    assert first.availability.adapter_failures[0].category == "HTTP_BLOCKED"
+    assert not first.availability.adapter_failures[0].retryable
+    assert first.availability.adapter_failures[1].disabled_for_run
 
     fresh_adapter = BackoffAdapter()
     fresh_state = AcquisitionRunState()

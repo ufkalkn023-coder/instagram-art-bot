@@ -6,7 +6,7 @@ import hashlib
 import secrets
 from collections import Counter
 from dataclasses import dataclass, field, replace
-from typing import TYPE_CHECKING, Dict, Any, Iterator, List, Mapping
+from typing import TYPE_CHECKING, Dict, Any, Iterator, List, Mapping, Sequence
 from src.museums import (
     AICAdapter,
     ClevelandAdapter,
@@ -1473,6 +1473,7 @@ def fetch_themed_artworks(
     engagement_model: "EngagementModel | None" = None,
     engagement_context: Mapping[str, object] | None = None,
     exploration_selected: bool = False,
+    adapters: Sequence[object] | None = None,
 ) -> List[Dict[str, Any]] | ThemedArtworkSelection:
     """Select legacy query artwork or a structured, multi-query themed carousel."""
     if theme_definition is None:
@@ -1493,7 +1494,7 @@ def fetch_themed_artworks(
     acquisition = acquire_theme_candidates(
         theme_definition,
         posted_ids=posted_ids,
-        adapters=_museum_adapters(),
+        adapters=tuple(adapters) if adapters is not None else _museum_adapters(),
         run_seed=run_seed.value,
         museum_weights=getattr(config, "MUSEUM_SOURCE_WEIGHTS", DEFAULT_WEIGHTS),
         min_quality=getattr(config, "MIN_QUALITY_SCORE", 50),

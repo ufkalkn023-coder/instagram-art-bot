@@ -26,6 +26,11 @@ from src.format_contracts import (
 )
 from src.models import NormalizedArtwork
 from src.museums.base import AdapterHTTPError
+from src.source_health import (
+    classify_http_failure,
+    is_retryable_source_failure,
+    normalize_source_failure_category,
+)
 from src.quality_filter import calculate_measurement_coverage, calculate_quality_score
 from src.rights_policy import is_rights_eligible
 from src.carousel_policy import MIN_FEATURED_WORKS
@@ -183,6 +188,11 @@ class AdapterFailure:
     source_id: str
     query: str
     error_type: str
+    http_status: int | None = None
+    operation: str = "search"
+    category: str = "UNKNOWN"
+    retryable: bool = False
+    disabled_for_run: bool = False
 
 
 @dataclass(frozen=True)
@@ -822,22 +832,55 @@ def acquire_theme_candidates(
                 )
             except AdapterHTTPError as error:
                 error_type = f"HTTP{error.status_code}"
-                adapter_failures.append(AdapterFailure(source_id, hit.query, error_type))
                 if error.status_code == 403:
                     run_state.http_403_failures += 1
+                category = (
+                    error.category
+                    if error.category != "UNKNOWN"
+                    else classify_http_failure(error.status_code)
+                )
                 failures = run_state.consecutive_backoff_failures.get(source_id, 0) + 1
                 run_state.consecutive_backoff_failures[source_id] = failures
-                if failures >= 2 and run_state.disable(source_id, error_type):
+                disabled_now = failures >= 2
+                if disabled_now and run_state.disable(source_id, error_type):
                     logger.warning(
-                        "theme_adapter_disabled_for_run source=%s reason=%s failures=%s",
+                        "theme_adapter_disabled_for_run source=%s status=%s operation=%s "
+                        "category=%s retryable=%s reason=%s failures=%s",
                         source_id,
+                        error.status_code,
+                        error.operation,
+                        category,
+                        is_retryable_source_failure(
+                            category, error.status_code
+                        ),
                         error_type,
                         failures,
                     )
+                adapter_failures.append(
+                    AdapterFailure(
+                        source_id,
+                        hit.query,
+                        error_type,
+                        http_status=error.status_code,
+                        operation=error.operation,
+                        category=category,
+                        retryable=is_retryable_source_failure(
+                            category, error.status_code
+                        ),
+                        disabled_for_run=source_id in run_state.disabled_adapters,
+                    )
+                )
                 continue
             except Exception as error:
                 run_state.consecutive_backoff_failures[source_id] = 0
-                adapter_failures.append(AdapterFailure(source_id, hit.query, type(error).__name__))
+                adapter_failures.append(
+                    AdapterFailure(
+                        source_id,
+                        hit.query,
+                        type(error).__name__,
+                        category="UNKNOWN",
+                    )
+                )
                 logger.warning(
                     "theme_adapter_failure theme=%s source=%s query=%r error=%s",
                     theme.id,
@@ -847,6 +890,19 @@ def acquire_theme_candidates(
                 )
                 continue
             run_state.consecutive_backoff_failures[source_id] = 0
+            adapter_category = normalize_source_failure_category(
+                getattr(adapter, "source_failure_category", None)
+            )
+            if adapter_category != "UNKNOWN":
+                adapter_failures.append(
+                    AdapterFailure(
+                        source_id,
+                        hit.query,
+                        adapter_category,
+                        category=adapter_category,
+                        retryable=is_retryable_source_failure(adapter_category),
+                    )
+                )
             for artwork in fetched:
                 raw_candidates += 1
                 candidate_id = artwork.canonical_id

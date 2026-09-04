@@ -179,6 +179,30 @@ def test_first_viable_ranked_theme_stops_without_fallback(monkeypatch):
     assert calls == [themes[0].id]
 
 
+def test_internal_acquisition_error_is_not_recorded_as_feasibility(monkeypatch):
+    theme = get_default_theme_registry().by_id("women_reading")
+    calls = []
+    _install_common(monkeypatch, [theme], calls)
+    recorded = []
+    monkeypatch.setattr(
+        main,
+        "record_theme_availability",
+        lambda *args, **kwargs: recorded.append((args, kwargs)),
+    )
+    monkeypatch.setattr(
+        main.art_fetcher,
+        "fetch_themed_artworks",
+        lambda *args, **kwargs: (_ for _ in ()).throw(ValueError("programming bug")),
+    )
+
+    with pytest.raises(ValueError, match="programming bug"):
+        main.run_carousel_post(
+            SimpleNamespace(dry_run=True, image_url=None, pinterest=False)
+        )
+
+    assert recorded == []
+
+
 def test_only_successful_fallback_theme_is_reserved_in_history(monkeypatch):
     registry = get_default_theme_registry()
     first = registry.by_id("women_reading")

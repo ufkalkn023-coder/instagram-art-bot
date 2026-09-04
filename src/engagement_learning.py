@@ -205,21 +205,48 @@ class EngagementModel:
         ranked = []
         for original_index, theme in enumerate(themes):
             theme_id = str(getattr(theme, "id"))
-            theme_format = getattr(getattr(theme, "format", None), "value", None)
-            prediction = self.score_features(
-                context_feature_keys(
-                    {**context, "carousel_theme": theme_id, "carousel_format": theme_format}
-                )
+            score = self.theme_score(
+                theme,
+                base_score=base_scores.get(theme_id, 50.0),
+                context=context,
+                exploration_selected=exploration_selected,
             )
-            engagement_weight = self.config.mature_engagement_weight * self.confidence
-            exploration_weight = self.config.exploration_weight if exploration_selected else 0.0
-            base_weight = 1.0 - engagement_weight - exploration_weight
-            base = _bounded(base_scores.get(theme_id, 50.0))
-            novelty = 100.0 * (1.0 - prediction.confidence)
-            score = base_weight * base + engagement_weight * prediction.score + exploration_weight * novelty
             tie = _stable_unit(run_seed, f"theme-learning:{theme_id}")
             ranked.append((-score, -tie, original_index, theme))
         return tuple(item[3] for item in sorted(ranked))
+
+    def theme_score(
+        self,
+        theme: object,
+        *,
+        base_score: float,
+        context: Mapping[str, object],
+        exploration_selected: bool,
+    ) -> float:
+        """Expose the unchanged engagement-adjusted score for attempt planning."""
+        theme_id = str(getattr(theme, "id"))
+        theme_format = getattr(getattr(theme, "format", None), "value", None)
+        prediction = self.score_features(
+            context_feature_keys(
+                {
+                    **context,
+                    "carousel_theme": theme_id,
+                    "carousel_format": theme_format,
+                }
+            )
+        )
+        engagement_weight = self.config.mature_engagement_weight * self.confidence
+        exploration_weight = (
+            self.config.exploration_weight if exploration_selected else 0.0
+        )
+        base_weight = 1.0 - engagement_weight - exploration_weight
+        base = _bounded(base_score)
+        novelty = 100.0 * (1.0 - prediction.confidence)
+        return (
+            base_weight * base
+            + engagement_weight * prediction.score
+            + exploration_weight * novelty
+        )
 
 
 def _bounded(value: float) -> float:

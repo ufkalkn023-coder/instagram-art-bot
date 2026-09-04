@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Sequence
+from typing import Callable, Sequence
 
 from src.carousel_themes import CarouselThemeDefinition, ThemeEvidenceMode
 
@@ -22,6 +22,10 @@ class ThemeAttemptPlanner:
         ranked_themes: Sequence[CarouselThemeDefinition],
         *,
         attempt_limit: int,
+        ranker: Callable[
+            [Sequence[CarouselThemeDefinition]], Sequence[CarouselThemeDefinition]
+        ]
+        | None = None,
     ) -> None:
         if attempt_limit < 1:
             raise ValueError("attempt_limit must be positive")
@@ -34,8 +38,9 @@ class ThemeAttemptPlanner:
                 continue
             seen_ids.add(theme.id)
             unique.append(theme)
-        self._ranked = tuple(unique[:attempt_limit])
+        self._ranked = tuple(unique)
         self._attempt_limit = attempt_limit
+        self._ranker = ranker
         self._attempted: list[CarouselThemeDefinition] = []
         self._failures: list[ThemeAttemptFailure] = []
 
@@ -51,6 +56,8 @@ class ThemeAttemptPlanner:
         if len(self._attempted) >= self._attempt_limit:
             return None
         remaining = self._remaining()
+        if self._ranker is not None:
+            remaining = list(self._ranker(remaining))
         return remaining[0] if remaining else None
 
     def next_theme(self) -> CarouselThemeDefinition | None:
@@ -66,7 +73,24 @@ class ThemeAttemptPlanner:
 
     def preview(self) -> tuple[CarouselThemeDefinition, ...]:
         """Return the deterministic no-failure plan without mutating run state."""
-        preview = ThemeAttemptPlanner(self._ranked, attempt_limit=self._attempt_limit)
+        preview = ThemeAttemptPlanner(
+            self._ranked,
+            attempt_limit=self._attempt_limit,
+            ranker=self._ranker,
+        )
+        planned: list[CarouselThemeDefinition] = []
+        while theme := preview.next_theme():
+            planned.append(theme)
+        return tuple(planned)
+
+    def remaining_preview(self) -> tuple[CarouselThemeDefinition, ...]:
+        """Return the current dynamic remainder without mutating run state."""
+        preview = ThemeAttemptPlanner(
+            self._ranked,
+            attempt_limit=self._attempt_limit,
+            ranker=self._ranker,
+        )
+        preview._attempted = list(self._attempted)
         planned: list[CarouselThemeDefinition] = []
         while theme := preview.next_theme():
             planned.append(theme)

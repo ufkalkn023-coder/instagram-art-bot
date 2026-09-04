@@ -8,9 +8,18 @@ from src.source_health import normalize_source_failure_category
 class AdapterHTTPError(RuntimeError):
     """Structured adapter HTTP failure used by run-local acquisition backoff."""
 
-    def __init__(self, source_id: str, status_code: int):
+    def __init__(
+        self,
+        source_id: str,
+        status_code: int,
+        *,
+        operation: str = "search",
+        category: str | None = None,
+    ):
         self.source_id = source_id
         self.status_code = status_code
+        self.operation = operation
+        self.category = normalize_source_failure_category(category)
         super().__init__(f"{source_id} API returned HTTP {status_code}")
 
 class MuseumAdapter(ABC):
