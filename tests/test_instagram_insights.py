@@ -86,6 +86,52 @@ def test_unsupported_optional_metric_is_isolated_without_losing_core_metrics():
     assert "ig_reels_avg_watch_time" in response.missing_metrics
     assert response.api_calls == len(calls) > 1
     assert set(OPTIONAL_METRICS).intersection(response.requested_metrics)
+    assert response.permanently_unavailable is False
+    assert response.permanently_failed_metrics == ("ig_reels_avg_watch_time",)
+    assert response.diagnostics
+
+
+def test_multiple_unsupported_metrics_are_retained_while_other_metrics_succeed():
+    unsupported = {"saved", "clips_replays_count"}
+
+    class Session:
+        def get(self, *args, **kwargs):
+            requested = tuple(kwargs["params"]["metric"].split(","))
+            if unsupported.intersection(requested):
+                return FakeResponse(400, {"error": {"code": 100, "message": "unsupported"}})
+            return FakeResponse(200, {
+                "data": [{"name": name, "values": [{"value": 1}]} for name in requested]
+            })
+
+    response = InstagramInsightsClient("token", Session()).fetch_media_insights("media")
+
+    assert response.metrics["reach"] == 1
+    assert set(response.permanently_failed_metrics) == unsupported
+    assert response.permanently_unavailable is False
+    assert len(response.diagnostics) == 2
+
+
+def test_all_code_100_metric_failures_are_explicit_permanent_and_sanitized(caplog):
+    secret = "very-secret-token"
+
+    class Session:
+        def get(self, *args, **kwargs):
+            return FakeResponse(400, {"error": {
+                "type": "OAuthException",
+                "code": 100,
+                "message": f"unsupported access_token={secret}",
+            }})
+
+    response = InstagramInsightsClient(secret, Session()).fetch_media_insights("media")
+
+    assert response.metrics == {}
+    assert response.permanently_unavailable is True
+    assert response.permanent_failure_category == "all_metrics_permanently_unavailable"
+    assert response.permanently_failed_metrics == TARGET_METRICS
+    assert len(response.diagnostics) == len(TARGET_METRICS)
+    assert all("code=100" in diagnostic for diagnostic in response.diagnostics)
+    assert secret not in str(response.diagnostics)
+    assert secret not in caplog.text
 
 
 def test_server_error_is_not_misreported_as_an_unsupported_metric():

@@ -60,10 +60,16 @@ class FakeClient:
         return outcome
 
 
-def _response(metrics=None):
+def _response(metrics=None, **kwargs):
     metrics = {"views": 4} if metrics is None else metrics
     returned = tuple(metric for metric in TARGET_METRICS if metric in metrics)
-    return InsightsResponse(metrics, TARGET_METRICS, returned, tuple(metric for metric in TARGET_METRICS if metric not in metrics))
+    return InsightsResponse(
+        metrics,
+        TARGET_METRICS,
+        returned,
+        tuple(metric for metric in TARGET_METRICS if metric not in metrics),
+        **kwargs,
+    )
 
 
 def test_due_policy_prefers_highest_defensible_slot_and_expires_old_gaps():
@@ -88,8 +94,9 @@ def test_collector_writes_one_snapshot_for_carousel_parent_and_never_changes_his
     assert summary.snapshots_written == 1
     assert summary.api_requests == 1
     assert client.media_ids == ["parent-media"]
-    assert storage.appended[0]["target_age_hours"] == 72
-    assert storage.appended[0]["metrics"] == {"views": 0, "saved": 2}
+    collected = next(item for item in storage.appended if "failure_category" not in item)
+    assert collected["target_age_hours"] == 72
+    assert collected["metrics"] == {"views": 0, "saved": 2}
     assert storage.history["posted_artworks"] == []
     assert storage.history["publications"] == [publication]
 
@@ -103,7 +110,8 @@ def test_legacy_naive_publication_timestamp_is_normalized_as_utc():
 
     assert summary.invalid_publications == 0
     assert summary.snapshots_written == 1
-    assert storage.appended[0]["target_age_hours"] == 24
+    collected = next(item for item in storage.appended if "failure_category" not in item)
+    assert collected["target_age_hours"] == 24
 
 
 def test_aware_legacy_publication_offset_preserves_its_instant():
@@ -134,11 +142,12 @@ def test_malformed_and_unknown_naive_legacy_timestamps_are_reported_without_bloc
     assert "id=unknown-naive" in caplog.text
 
 
-def test_existing_slots_are_skipped_and_empty_data_is_retried():
+def test_learning_complete_slots_are_skipped_and_empty_data_is_retried():
     publication = _publication("pub", 30)
     existing = {
         "publication_id": "pub", "media_id": "media-pub", "target_age_hours": 24,
-        "captured_at": "2026-08-24T11:00:00Z", "actual_age_hours": 24, "metrics": {"views": 1},
+        "captured_at": "2026-08-24T11:00:00Z", "actual_age_hours": 24,
+        "metrics": {"reach": 1, "likes": 0}, "completion_status": "learning_complete",
         "missing_metrics": [], "api_version": "v22.0",
     }
     complete_storage = FakeStorage([publication], [existing])
@@ -147,7 +156,64 @@ def test_existing_slots_are_skipped_and_empty_data_is_retried():
     pending_storage = FakeStorage([_publication("pending", 30)])
     pending_summary = InsightsCollector(pending_storage, FakeClient([_response({})]), NOW).run()
     assert pending_summary.availability_pending == 1
-    assert pending_storage.appended == []
+    assert all(item["failure_category"] == "missed_collection_window" for item in pending_storage.appended)
+
+
+def test_partial_snapshot_is_append_only_and_later_completed_in_same_slot():
+    publication = _publication("partial", 30)
+    storage = FakeStorage([publication])
+
+    first = InsightsCollector(storage, FakeClient([_response({"views": 10})]), NOW).run()
+    second = InsightsCollector(
+        storage,
+        FakeClient([_response({"views": 12, "reach": 8, "likes": 0})]),
+        NOW + timedelta(hours=1),
+    ).run()
+
+    attempts = [
+        item
+        for item in storage.partition["snapshots"]
+        if item["target_age_hours"] == 24
+    ]
+    assert first.partial_snapshots == 1
+    assert second.learning_complete_snapshots == 1
+    assert [item["completion_status"] for item in attempts] == [
+        "partial",
+        "learning_complete",
+    ]
+    assert attempts[0]["metrics"] == {"views": 10}
+    assert attempts[1]["metrics"]["reach"] == 8
+
+
+def test_all_metric_permanent_failure_is_terminal_not_availability_pending():
+    storage = FakeStorage([_publication("unsupported", 30)])
+    response = _response(
+        {},
+        permanent_failure_category="all_metrics_permanently_unavailable",
+        permanently_failed_metrics=TARGET_METRICS,
+        diagnostics=("sanitized diagnostic",),
+    )
+
+    summary = InsightsCollector(storage, FakeClient([response]), NOW).run()
+
+    terminal = storage.appended[-1]
+    assert summary.availability_pending == 0
+    assert summary.permanently_unavailable == 1
+    assert terminal["completion_status"] == "permanently_unavailable"
+    assert terminal["failure_category"] == "all_metrics_permanently_unavailable"
+    assert terminal["diagnostics"] == ["sanitized diagnostic"]
+
+
+def test_repeated_runs_do_not_recount_persisted_missed_slots():
+    storage = FakeStorage([_publication("old", 800)])
+
+    first = InsightsCollector(storage, FakeClient([]), NOW).run()
+    second = InsightsCollector(storage, FakeClient([]), NOW).run()
+
+    assert first.missed_slots == 5
+    assert first.missed_slot_markers_written == 5
+    assert second.missed_slots == 0
+    assert second.missed_slot_markers_written == 0
 
 
 def test_api_failure_and_write_conflict_are_isolated_per_publication():

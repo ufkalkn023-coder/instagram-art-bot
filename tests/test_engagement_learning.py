@@ -8,6 +8,7 @@ import main
 from src.engagement_learning import (
     EngagementModel,
     LearningConfig,
+    analyze_engagement_learning,
     build_engagement_model,
     candidate_feature_keys,
     select_mature_snapshot,
@@ -177,6 +178,40 @@ def test_snapshot_maturity_prefers_72h_then_168h_then_provisional_24h():
     assert select_mature_snapshot([snapshots[0]]) is None
 
 
+def test_snapshot_selection_falls_back_by_learning_usability_and_accepts_zero_outcomes():
+    unusable_72 = _snapshot(0, target=72, reach=0)
+    usable_168 = _snapshot(0, target=168, shares=0, saved=0, comments=0, likes=0)
+    usable_24 = _snapshot(0, target=24, shares=0)
+
+    assert select_mature_snapshot([unusable_72, usable_168, usable_24]) is usable_168
+    assert select_mature_snapshot([
+        unusable_72,
+        _snapshot(0, target=168, shares=None, saved=None, comments=None, likes=None),
+        usable_24,
+    ]) is usable_24
+    assert select_mature_snapshot([
+        unusable_72,
+        _snapshot(0, target=168, reach=1, shares=None, saved=None, comments=None, likes=None),
+        _snapshot(0, target=24, reach=0),
+    ]) is None
+    assert select_mature_snapshot([_snapshot(0, target=72, reach=None)]) is None
+    assert select_mature_snapshot([{**_snapshot(0, target=72), "metrics": {"likes": 0}}]) is None
+
+
+def test_model_records_the_usable_fallback_slot():
+    history, snapshots = _dataset([{}])
+    snapshots[0]["metrics"] = {"reach": 0, "likes": 0}
+    snapshots.extend([
+        _snapshot(0, target=168, reach=100, shares=0),
+        _snapshot(0, target=24, reach=200, shares=5),
+    ])
+
+    audit = analyze_engagement_learning(history, snapshots, now=NOW)
+
+    assert audit.eligible_learning_observations == 1
+    assert audit.selected_snapshot_slot_counts == {168: 1}
+
+
 def test_24h_signal_has_less_effective_confidence_than_72h_or_168h():
     provisional_history, provisional_snapshots = _dataset([{"target": 24} for _ in range(8)])
     mature_history, mature_snapshots = _dataset([{"target": 72} for _ in range(8)])
@@ -202,6 +237,39 @@ def test_multiple_snapshots_use_only_the_preferred_mature_slot():
     model = build_engagement_model(history, snapshots, now=NOW)
 
     assert model.useful_publications == 1
+
+
+def test_snapshot_identity_requires_the_authoritative_publication_media_pair():
+    history, snapshots = _dataset([{}, {}, {}])
+    snapshots[1]["media_id"] = "media-2"
+    snapshots[2]["publication_id"] = "publication-1"
+
+    audit = analyze_engagement_learning(history, snapshots, now=NOW)
+
+    assert audit.model.useful_carousel_observations == 1
+    assert audit.excluded_by_reason["snapshot_identity_mismatch"] == 2
+    assert audit.selected_snapshot_slot_counts == {72: 1}
+
+
+def test_duplicate_authoritative_media_cannot_reuse_one_snapshot_for_two_publications():
+    history, snapshots = _dataset([{}, {}])
+    history["publications"][1]["media_id"] = "media-0"
+    snapshots = [_snapshot(0)]
+
+    audit = analyze_engagement_learning(history, snapshots, now=NOW)
+
+    assert audit.model.useful_carousel_observations == 1
+    assert audit.excluded_by_reason["duplicate_publication_media_identity"] == 1
+
+
+def test_corrupt_snapshot_does_not_disable_valid_observations_around_it():
+    history, snapshots = _dataset([{}, {}, {}])
+    snapshots[1]["media_id"] = "wrong-media"
+
+    audit = analyze_engagement_learning(history, snapshots, now=NOW)
+
+    assert audit.model.useful_carousel_observations == 2
+    assert audit.excluded_by_reason["snapshot_identity_mismatch"] == 1
 
 
 def test_viral_outlier_is_bounded_and_does_not_permanently_dominate():
@@ -338,3 +406,68 @@ def test_engagement_subsystem_unavailable_falls_back_to_cold_start(monkeypatch):
 
     assert model.confidence == 0
     assert model.useful_publications == 0
+
+
+def test_runtime_logging_uses_unambiguous_observation_name_and_funnel(monkeypatch, caplog):
+    history, snapshots = _dataset([{}])
+
+    class Storage:
+        def __init__(self):
+            self.last_snapshot_load_diagnostics = type("Diagnostics", (), {"invalid_snapshots": 0})()
+
+        def load_all_snapshots(self):
+            return snapshots
+
+    monkeypatch.setattr(main.history_tracker, "load_history_with_etag", lambda: (history, None))
+    monkeypatch.setattr(main, "InsightsStorage", Storage)
+    caplog.set_level("INFO")
+
+    model = main._load_engagement_model()
+
+    assert model.useful_carousel_observations == 1
+    assert "useful_carousel_observations=1" in caplog.text
+    assert "engagement_learning_funnel total_publication_records=1" in caplog.text
+
+
+def test_audit_weights_exactly_reproduce_effective_observations_and_confidence():
+    desired_effective = 0.3638
+    reach = (desired_effective / 26) * 750 / (1 - desired_effective / 26)
+    history, snapshots = _dataset([
+        {"posted_at": NOW, "reach": reach, "shares": 0, "saved": 0, "comments": 0, "likes": 0}
+        for _ in range(26)
+    ])
+
+    audit = analyze_engagement_learning(history, snapshots, now=NOW)
+
+    assert sum(item.final_observation_weight for item in audit.observations) == audit.effective_observations
+    assert audit.effective_observations == pytest.approx(0.3638)
+    assert audit.global_confidence == audit.effective_observations / (
+        audit.effective_observations + 8
+    )
+    assert audit.global_confidence == pytest.approx(0.0435, abs=0.0001)
+    assert audit.model.confidence == pytest.approx(0.0435, abs=0.0001)
+
+
+def test_audit_funnel_counts_publication_types_slots_and_exclusions():
+    history, snapshots = _dataset([{"target": 24}, {"target": 72}])
+    history["publications"].append({
+        "id": "single-1",
+        "type": "single",
+        "media_id": "single-media-1",
+        "artwork_ids": ["single-art-1"],
+        "posted_at": NOW.isoformat(),
+    })
+    snapshots.append({**_snapshot(0), "publication_id": "publication-0", "media_id": "wrong"})
+
+    audit = analyze_engagement_learning(history, snapshots, now=NOW)
+
+    assert audit.total_publication_records == 3
+    assert audit.carousel_publications == 2
+    assert audit.single_publications == 1
+    assert audit.valid_publication_media_identities == 3
+    assert audit.publications_with_snapshots == 2
+    assert audit.snapshot_slot_publications == {24: 1, 72: 1}
+    assert audit.selected_snapshot_slot_counts == {24: 1, 72: 1}
+    assert audit.mature_observations == 1
+    assert audit.provisional_observations == 1
+    assert audit.excluded_by_reason["snapshot_identity_mismatch"] == 1

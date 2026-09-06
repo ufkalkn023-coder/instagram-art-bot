@@ -18,17 +18,28 @@ def _client_error(code):
     return ClientError({"Error": {"Code": code, "Message": code}}, "operation")
 
 
-def _snapshot(publication_id="pub-1", media_id="media-1", target=24):
-    return {
+def _snapshot(
+    publication_id="pub-1",
+    media_id="media-1",
+    target=24,
+    *,
+    captured_at="2026-08-24T12:00:00Z",
+    metrics=None,
+    completion_status=None,
+):
+    snapshot = {
         "publication_id": publication_id,
         "media_id": media_id,
         "target_age_hours": target,
-        "captured_at": "2026-08-24T12:00:00Z",
+        "captured_at": captured_at,
         "actual_age_hours": 24.0,
-        "metrics": {"views": 0},
+        "metrics": {"views": 0} if metrics is None else metrics,
         "missing_metrics": ["reach"],
         "api_version": "v22.0",
     }
+    if completion_status:
+        snapshot["completion_status"] = completion_status
+    return snapshot
 
 
 class FakeS3:
@@ -87,7 +98,59 @@ def test_existing_partition_uses_etag_and_keys_slots_by_instagram_media():
     assert fake.put_calls[0]["IfMatch"] == "etag-1"
     with pytest.raises(InsightsStorageError, match="slot already exists"):
         storage.append_snapshot(key, data, etag, _snapshot())
-    storage.append_snapshot(key, data, etag, _snapshot(media_id="corrected-media"))
+    with pytest.raises(InsightsStorageError, match="Conflicting analytics snapshot identity"):
+        storage.append_snapshot(key, data, etag, _snapshot(media_id="corrected-media"))
+
+
+def test_partial_and_later_completion_are_append_only_and_roundtrip():
+    partial = _snapshot(completion_status="partial")
+    fake = FakeS3({
+        "insights/2026-08.json": json.dumps({"schema_version": 1, "snapshots": [partial]})
+    })
+    storage = InsightsStorage(fake, "bucket")
+    key, data, etag = storage.load_partition("2026-08-01T00:00:00Z")
+    completed = _snapshot(
+        captured_at="2026-08-24T13:00:00Z",
+        metrics={"reach": 8, "likes": 0},
+        completion_status="learning_complete",
+    )
+
+    storage.append_snapshot(key, data, etag, completed)
+
+    payload = json.loads(fake.put_calls[0]["Body"])
+    assert payload["snapshots"] == [partial, completed]
+    roundtrip = InsightsStorage(
+        FakeS3({"insights/2026-08.json": json.dumps(payload)}),
+        "bucket",
+    ).load_partition("2026-08-01T00:00:00Z")[1]
+    assert roundtrip == payload
+    with pytest.raises(InsightsStorageError, match="already complete"):
+        storage.append_snapshot(
+            key,
+            payload,
+            "new-etag",
+            _snapshot(captured_at="2026-08-24T14:00:00Z"),
+        )
+
+
+def test_concurrent_completion_preserves_the_existing_partial_attempt():
+    partial = _snapshot(completion_status="partial")
+    fake = FakeS3(
+        {"insights/2026-08.json": json.dumps({"schema_version": 1, "snapshots": [partial]})},
+        conflict=True,
+    )
+    storage = InsightsStorage(fake, "bucket")
+    key, data, etag = storage.load_partition("2026-08-01T00:00:00Z")
+    completed = _snapshot(
+        captured_at="2026-08-24T13:00:00Z",
+        metrics={"reach": 8, "likes": 0},
+        completion_status="learning_complete",
+    )
+
+    with pytest.raises(InsightsConcurrencyError):
+        storage.append_snapshot(key, data, etag, completed)
+
+    assert data["snapshots"] == [partial]
 
 
 def test_associations_use_conditional_deterministic_writes_and_reject_duplicates():
@@ -133,3 +196,22 @@ def test_all_snapshot_partitions_are_loaded_in_stable_order_and_nonpartitions_ig
     snapshots = InsightsStorage(fake, "bucket").load_all_snapshots()
 
     assert [snapshot["publication_id"] for snapshot in snapshots] == ["january", "august"]
+
+
+def test_load_all_snapshots_keeps_valid_entries_and_reports_malformed_entries(caplog):
+    valid = _snapshot()
+    malformed = {**_snapshot(publication_id="bad", media_id="bad-media"), "metrics": {"reach": "bad"}}
+    fake = FakeS3({
+        "insights/2026-08.json": json.dumps({
+            "schema_version": 1,
+            "snapshots": [valid, {}, malformed],
+        })
+    })
+    storage = InsightsStorage(fake, "bucket")
+
+    snapshots = storage.load_all_snapshots()
+
+    assert snapshots == [valid]
+    assert storage.last_snapshot_load_diagnostics.valid_snapshots == 1
+    assert storage.last_snapshot_load_diagnostics.invalid_snapshots == 2
+    assert "Skipped 2 malformed analytics snapshots" in caplog.text

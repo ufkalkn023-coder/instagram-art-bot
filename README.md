@@ -124,7 +124,7 @@ Devre dışı bırakma ve kaldırma:
 python3 scripts/install_insights_launchd.py uninstall
 ```
 
-Mac uykudayken veya offline iken daemon/polling yapılmaz. Sonraki saatlik koşu mevcut missed-slot politikasını uygular: o anda hâlâ açık olan en yeni 1h/6h/24h/72h/7d slotunu alır, kapanmış eski pencereleri compact `missed_slots` olarak raporlar ve Meta’yı agresif biçimde sorgulamaz.
+Mac uykudayken veya offline iken daemon/polling yapılmaz. Sonraki saatlik koşu mevcut missed-slot politikasını uygular: o anda hâlâ açık olan en yeni 1h/6h/24h/72h/7d slotunu alır, yeni fark edilen kapanmış pencereleri append-only terminal kayıtlarla işaretler ve `missed_slots` içinde yalnız o koşuda yeni fark edilenleri raporlar.
 
 Ambiguous veya unmatched sonuçlar yazılmaz; özet yalnız örneğin `[insights] ambiguous=1` gösterir. Sadece böyle istisnai bir Reel incelendikten sonra emergency fallback kullanılabilir:
 
@@ -134,11 +134,20 @@ python3 scripts/collect_insights.py --link LOCAL_REEL_ID INSTAGRAM_MEDIA_ID
 
 Manuel eşleme otomatik eşlemeye üstün gelir; başka bir manuel eşlemeyi sessizce değiştirmez. Snapshot’lar Reel’in UTC yayın ayına göre `insights/YYYY-MM.json` içinde ETag koşullu ve append-only tutulur.
 
-Hedef slotlar 1, 6, 24, 72 ve 168 saattir. Her slotun penceresi bir sonraki hedefe kadar açıktır; 168 saat slotu 30 güne kadar alınabilir. Gecikmiş koşu en yeni açık slotu alır ve önceki kapanmış pencereleri `missed_slots` olarak raporlar. Boş Meta verisi slotu tüketmez. Ham Meta metrikleri önce saklanır: `views`, `reach`, `likes`, `comments`, `saved`, `shares`, `total_interactions`, `ig_reels_video_view_total_time`, `ig_reels_avg_watch_time`, `clips_replays_count`, `ig_reels_aggregated_all_plays_count`. Desteklenmeyen metrikler ayrı izole edilerek eksik bırakılır; sıfır uydurulmaz. `save_rate`, `share_rate`, `like_rate` ve `comment_rate` yalnız pozitif `reach` varsa `metric / reach` olarak hesaplanır.
+Hedef slotlar 1, 6, 24, 72 ve 168 saattir. Her slotun penceresi bir sonraki hedefe kadar açıktır; 168 saat slotu 30 güne kadar alınabilir. Gecikmiş koşu en yeni açık slotu alır. Boş Meta verisi slotu tüketmez. `views` gibi nonempty fakat learning için pozitif `reach` ve en az bir engagement metriği taşımayan yanıtlar `partial` olarak append-only saklanır; aynı pencere içinde sonraki `learning_complete` denemesi eski ham kaydı overwrite etmeden eklenir. Tüm metriklerin kalıcı Meta code 100 ile reddedilmesi açık terminal kategori olarak saklanır ve tekrar sorgulanmaz. Ham Meta metrikleri önce saklanır: `views`, `reach`, `likes`, `comments`, `saved`, `shares`, `total_interactions`, `ig_reels_video_view_total_time`, `ig_reels_avg_watch_time`, `clips_replays_count`, `ig_reels_aggregated_all_plays_count`. Desteklenmeyen metrikler ayrı izole edilerek eksik bırakılır; sıfır uydurulmaz. `save_rate`, `share_rate`, `like_rate` ve `comment_rate` yalnız pozitif `reach` varsa `metric / reach` olarak hesaplanır.
 
 Mevcut günlük Insights workflow'u 03:00 UTC cron’unda çalışır. Analytics hataları publishing state'ini veya history lifecycle'ını etkileyemez. Facebook Login modu için token’da `instagram_basic`, `instagram_manage_insights` ve `pages_read_engagement` izinleri bulunmalıdır.
 
 Feed koşusu R2 history ile bütün `insights/YYYY-MM.json` partition'larını best-effort okur. Aynı publication için sırasıyla 72h, 168h ve 24h snapshot'ı seçilir; 1h/6h yalnız telemetry'dir. Share/save/comment/like oranları ve reach signal, account baseline'ına göre winsorize edilmiş bounded log normalization'dan geçer. Düşük reach, eksik metrik, 24h provisional maturity ve 180 günlük recency half-life effective weight'i azaltır. Artist, artist group, region, style/period, semantic family, museum/source, visual özellik, theme/format/count, cover/hook, slot/weekday ve preceding-post distance feature'ları global ortalamaya sample-size-aware shrink edilir. Model confidence sıfırdan kademeli büyür; cold start mevcut quality/editorial sıralamasını korur. Yaklaşık %10 seeded exploration yalnız normal teknik/kalite gate'lerinden geçmiş novelty adaylarına ayrılır.
+
+Learning funnel'ını Instagram veya R2 verisini değiştirmeden incelemek için:
+
+```console
+python3 scripts/audit_engagement_learning.py
+python3 scripts/audit_engagement_learning.py --verbose
+```
+
+Komut publication/media identity eşleşmelerini, 24h/72h/168h coverage'ını, exclusion nedenlerini, seçilen slotları, reach dağılımını, maturity durumunu, effective observation toplamını ve global confidence'ı raporlar. `--verbose` publication kimliklerini hash'leyerek her observation weight faktörünü gösterir.
 
 Her kesinleşen carousel `selection_model_version`, `engagement_model_version`, `carousel_theme`, `carousel_format`, `featured_count`, `cover_variant`, `caption_hook_type`, `publish_slot`, `exploration_selected`, `learned_score`, `engagement_confidence`, `quality_component`, `engagement_component`, `diversity_component`, `exploration_component` ve varsa `preceding_post_distance_minutes` alanlarını taşır. Eski publication kayıtlarında bu alanların bulunmaması geçerlidir.
 

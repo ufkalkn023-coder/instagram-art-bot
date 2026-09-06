@@ -1,13 +1,23 @@
 """Separate, ETag-protected R2 storage for Instagram Insights snapshots."""
 
 import json
+import logging
+import math
 import os
 import re
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any
 
 import boto3
 from botocore.exceptions import ClientError
+from src.insights_snapshot import (
+    SNAPSHOT_COMPLETION_STATUSES,
+    inferred_snapshot_status,
+    learning_snapshot_components,
+)
+
+logger = logging.getLogger(__name__)
 
 HISTORY_OBJECT_KEY = "posted_history.json"
 ASSOCIATION_OBJECT_KEY = "insights/media-associations.json"
@@ -24,6 +34,13 @@ class InsightsStorageError(Exception):
 
 class InsightsConcurrencyError(InsightsStorageError):
     """An R2 conditional write lost a concurrent update."""
+
+
+@dataclass(frozen=True)
+class SnapshotLoadDiagnostics:
+    partitions_loaded: int = 0
+    valid_snapshots: int = 0
+    invalid_snapshots: int = 0
 
 
 def parse_aware_timestamp(value: Any) -> datetime | None:
@@ -80,29 +97,83 @@ def _get_bucket_name() -> str:
 def _is_valid_snapshot(snapshot: Any) -> bool:
     if not isinstance(snapshot, dict):
         return False
-    if not isinstance(snapshot.get("publication_id"), str) or not snapshot["publication_id"]:
+    if (
+        not isinstance(snapshot.get("publication_id"), str)
+        or not snapshot["publication_id"].strip()
+    ):
         return False
-    if not isinstance(snapshot.get("media_id"), str) or not snapshot["media_id"]:
+    if not isinstance(snapshot.get("media_id"), str) or not snapshot["media_id"].strip():
         return False
-    if snapshot.get("target_age_hours") not in SNAPSHOT_SLOTS:
+    target = snapshot.get("target_age_hours")
+    if isinstance(target, bool) or target not in SNAPSHOT_SLOTS:
         return False
     if parse_aware_timestamp(snapshot.get("captured_at")) is None:
         return False
     actual_age = snapshot.get("age_seconds", snapshot.get("actual_age_hours"))
-    if isinstance(actual_age, bool) or not isinstance(actual_age, (int, float)) or actual_age < 0:
+    if (
+        isinstance(actual_age, bool)
+        or not isinstance(actual_age, (int, float))
+        or not math.isfinite(actual_age)
+        or actual_age < 0
+    ):
         return False
     metrics = snapshot.get("metrics")
-    if not isinstance(metrics, dict) or not metrics:
+    completion_status = snapshot.get("completion_status")
+    if completion_status is not None and completion_status not in SNAPSHOT_COMPLETION_STATUSES:
         return False
-    if any(not isinstance(key, str) or isinstance(value, bool) or not isinstance(value, (int, float)) for key, value in metrics.items()):
+    if not isinstance(metrics, dict):
+        return False
+    if not metrics and completion_status != "permanently_unavailable":
+        return False
+    if any(
+        not isinstance(key, str)
+        or not key.strip()
+        or isinstance(value, bool)
+        or not isinstance(value, (int, float))
+        or not math.isfinite(value)
+        or value < 0
+        for key, value in metrics.items()
+    ):
+        return False
+    learning_usable = learning_snapshot_components(metrics) is not None
+    if completion_status == "learning_complete" and not learning_usable:
+        return False
+    if completion_status in {"partial", "permanently_unavailable"} and learning_usable:
+        return False
+    if completion_status == "permanently_unavailable" and not snapshot.get(
+        "failure_category"
+    ):
         return False
     derived = snapshot.get("derived_metrics", {})
     if not isinstance(derived, dict) or any(
-        not isinstance(key, str) or isinstance(value, bool) or not isinstance(value, (int, float))
+        not isinstance(key, str)
+        or not key.strip()
+        or isinstance(value, bool)
+        or not isinstance(value, (int, float))
+        or not math.isfinite(value)
+        or value < 0
         for key, value in derived.items()
     ):
         return False
-    return isinstance(snapshot.get("missing_metrics"), list) and isinstance(snapshot.get("api_version"), str)
+    missing_metrics = snapshot.get("missing_metrics")
+    if not isinstance(missing_metrics, list) or any(
+        not isinstance(metric, str) or not metric.strip() for metric in missing_metrics
+    ):
+        return False
+    for field_name in ("requested_metrics", "returned_metrics", "diagnostics"):
+        values = snapshot.get(field_name)
+        if values is not None and (
+            not isinstance(values, list)
+            or any(not isinstance(value, str) or not value.strip() for value in values)
+        ):
+            return False
+    failure_category = snapshot.get("failure_category")
+    if failure_category is not None and (
+        not isinstance(failure_category, str) or not failure_category.strip()
+    ):
+        return False
+    api_version = snapshot.get("api_version")
+    return isinstance(api_version, str) and bool(api_version.strip())
 
 
 def _is_valid_association(association: Any) -> bool:
@@ -145,15 +216,30 @@ def _validated_analytics_object(data: Any) -> dict[str, Any]:
     snapshots = data.get("snapshots")
     if not isinstance(snapshots, list):
         raise InsightsStorageError("Malformed analytics snapshots")
-    seen_slots: dict[tuple[str, int], str] = {}
+    seen_media_slots: dict[tuple[str, int], str] = {}
+    seen_publication_slots: dict[tuple[str, int], str] = {}
+    seen_versions: set[tuple[str, str, int, str]] = set()
     for snapshot in snapshots:
         if not _is_valid_snapshot(snapshot):
             raise InsightsStorageError("Malformed analytics snapshot")
-        slot = (snapshot["media_id"], snapshot["target_age_hours"])
-        previous_publication = seen_slots.get(slot)
-        if previous_publication is not None:
-            raise InsightsStorageError("Duplicate analytics snapshot slot")
-        seen_slots[slot] = snapshot["publication_id"]
+        target = snapshot["target_age_hours"]
+        media_slot = (snapshot["media_id"], target)
+        publication_slot = (snapshot["publication_id"], target)
+        if seen_media_slots.get(media_slot, snapshot["publication_id"]) != snapshot["publication_id"]:
+            raise InsightsStorageError("Conflicting analytics snapshot identity")
+        if seen_publication_slots.get(publication_slot, snapshot["media_id"]) != snapshot["media_id"]:
+            raise InsightsStorageError("Conflicting analytics snapshot identity")
+        version = (
+            snapshot["publication_id"],
+            snapshot["media_id"],
+            target,
+            snapshot["captured_at"],
+        )
+        if version in seen_versions:
+            raise InsightsStorageError("Duplicate analytics snapshot version")
+        seen_media_slots[media_slot] = snapshot["publication_id"]
+        seen_publication_slots[publication_slot] = snapshot["media_id"]
+        seen_versions.add(version)
     return data
 
 
@@ -161,6 +247,7 @@ class InsightsStorage:
     def __init__(self, s3_client=None, bucket_name: str | None = None):
         self._s3 = s3_client if s3_client is not None else _get_r2_client()
         self._bucket = bucket_name if bucket_name is not None else _get_bucket_name()
+        self.last_snapshot_load_diagnostics = SnapshotLoadDiagnostics()
 
     def load_history(self) -> dict[str, Any]:
         try:
@@ -191,7 +278,7 @@ class InsightsStorage:
     def load_all_snapshots(self) -> list[dict[str, Any]]:
         """Read every monthly partition for rebuildable engagement learning.
 
-        Malformed individual snapshots are ignored by the learning layer. A
+        Malformed individual snapshots are ignored while valid peers are kept. A
         malformed partition or unavailable listing still raises here so callers
         can explicitly degrade to cold-start selection.
         """
@@ -225,6 +312,8 @@ class InsightsStorage:
                 raise InsightsStorageError("Analytics partition listing is incomplete")
 
         snapshots: list[dict[str, Any]] = []
+        invalid_snapshots = 0
+        partitions_loaded = 0
         for key in sorted(set(keys)):
             try:
                 response = self._s3.get_object(Bucket=self._bucket, Key=key)
@@ -245,8 +334,46 @@ class InsightsStorage:
             partition_snapshots = payload.get("snapshots")
             if not isinstance(partition_snapshots, list):
                 raise InsightsStorageError(f"Analytics partition {key} is malformed")
-            snapshots.extend(
-                snapshot for snapshot in partition_snapshots if isinstance(snapshot, dict)
+            partitions_loaded += 1
+            seen_media_slots: dict[tuple[str, int], str] = {}
+            seen_publication_slots: dict[tuple[str, int], str] = {}
+            seen_versions: set[tuple[str, str, int, str]] = set()
+            for snapshot in partition_snapshots:
+                if not _is_valid_snapshot(snapshot):
+                    invalid_snapshots += 1
+                    continue
+                target = snapshot["target_age_hours"]
+                media_slot = (snapshot["media_id"], target)
+                publication_slot = (snapshot["publication_id"], target)
+                version = (
+                    snapshot["publication_id"],
+                    snapshot["media_id"],
+                    target,
+                    snapshot["captured_at"],
+                )
+                if (
+                    seen_media_slots.get(media_slot, snapshot["publication_id"])
+                    != snapshot["publication_id"]
+                    or seen_publication_slots.get(publication_slot, snapshot["media_id"])
+                    != snapshot["media_id"]
+                    or version in seen_versions
+                ):
+                    invalid_snapshots += 1
+                    continue
+                seen_media_slots[media_slot] = snapshot["publication_id"]
+                seen_publication_slots[publication_slot] = snapshot["media_id"]
+                seen_versions.add(version)
+                snapshots.append(snapshot)
+        self.last_snapshot_load_diagnostics = SnapshotLoadDiagnostics(
+            partitions_loaded=partitions_loaded,
+            valid_snapshots=len(snapshots),
+            invalid_snapshots=invalid_snapshots,
+        )
+        if invalid_snapshots:
+            logger.warning(
+                "Skipped %d malformed analytics snapshots across %d partitions",
+                invalid_snapshots,
+                partitions_loaded,
             )
         return snapshots
 
@@ -286,19 +413,64 @@ class InsightsStorage:
                 raise InsightsConcurrencyError("Media association conditional write conflict") from exc
             raise InsightsStorageError("Unable to write media associations to R2") from exc
 
-    def append_snapshot(self, key: str, data: dict[str, Any], etag: str | None, snapshot: dict[str, Any]) -> None:
+    def append_snapshots(
+        self,
+        key: str,
+        data: dict[str, Any],
+        etag: str | None,
+        snapshots: list[dict[str, Any]],
+    ) -> None:
+        """Append one or more immutable attempts with a single conditional write."""
         _validated_analytics_object(data)
-        if not _is_valid_snapshot(snapshot):
-            raise InsightsStorageError("Attempted to store malformed analytics snapshot")
-        slot = (snapshot["media_id"], snapshot["target_age_hours"])
-        for existing in data["snapshots"]:
-            if (existing["media_id"], existing["target_age_hours"]) != slot:
-                continue
-            if existing["publication_id"] != snapshot["publication_id"]:
+        if not snapshots:
+            return
+        combined = list(data["snapshots"])
+        for snapshot in snapshots:
+            if not _is_valid_snapshot(snapshot):
+                raise InsightsStorageError("Attempted to store malformed analytics snapshot")
+            target = snapshot["target_age_hours"]
+            same_media_slot = [
+                existing
+                for existing in combined
+                if existing["media_id"] == snapshot["media_id"]
+                and existing["target_age_hours"] == target
+            ]
+            same_publication_slot = [
+                existing
+                for existing in combined
+                if existing["publication_id"] == snapshot["publication_id"]
+                and existing["target_age_hours"] == target
+            ]
+            if any(
+                existing["publication_id"] != snapshot["publication_id"]
+                for existing in same_media_slot
+            ) or any(
+                existing["media_id"] != snapshot["media_id"]
+                for existing in same_publication_slot
+            ):
                 raise InsightsStorageError("Conflicting analytics snapshot identity")
-            raise InsightsStorageError("Analytics snapshot slot already exists")
+            same_pair_slot = [
+                existing
+                for existing in same_media_slot
+                if existing["publication_id"] == snapshot["publication_id"]
+            ]
+            if any(
+                existing["captured_at"] == snapshot["captured_at"]
+                for existing in same_pair_slot
+            ):
+                raise InsightsStorageError("Analytics snapshot slot already exists at captured_at")
+            if any(
+                inferred_snapshot_status(existing)
+                in {"learning_complete", "permanently_unavailable"}
+                for existing in same_pair_slot
+            ):
+                raise InsightsStorageError("Analytics snapshot slot already complete")
+            combined.append(snapshot)
 
-        payload = {"schema_version": SNAPSHOT_SCHEMA_VERSION, "snapshots": [*data["snapshots"], snapshot]}
+        _validated_analytics_object(
+            {"schema_version": SNAPSHOT_SCHEMA_VERSION, "snapshots": combined}
+        )
+        payload = {"schema_version": SNAPSHOT_SCHEMA_VERSION, "snapshots": combined}
         kwargs: dict[str, Any] = {
             "Bucket": self._bucket,
             "Key": key,
@@ -315,3 +487,12 @@ class InsightsStorage:
             if exc.response.get("Error", {}).get("Code") in {"PreconditionFailed", "412"}:
                 raise InsightsConcurrencyError("Analytics conditional write conflict") from exc
             raise InsightsStorageError("Unable to write analytics partition to R2") from exc
+
+    def append_snapshot(
+        self,
+        key: str,
+        data: dict[str, Any],
+        etag: str | None,
+        snapshot: dict[str, Any],
+    ) -> None:
+        self.append_snapshots(key, data, etag, [snapshot])

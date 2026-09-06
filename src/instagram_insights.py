@@ -84,6 +84,20 @@ class InsightsResponse:
     missing_metrics: tuple[str, ...]
     api_calls: int = 1
     rate_limit_usage: dict[str, int | float] = field(default_factory=dict)
+    permanent_failure_category: str | None = None
+    permanently_failed_metrics: tuple[str, ...] = ()
+    diagnostics: tuple[str, ...] = ()
+
+    @property
+    def permanently_unavailable(self) -> bool:
+        return self.permanent_failure_category is not None
+
+
+@dataclass(frozen=True)
+class _MetricGroupResponse:
+    metrics: dict[str, int | float]
+    api_calls: int
+    permanent_failures: dict[str, str] = field(default_factory=dict)
 
 
 def _safe_media_suffix(media_id: str) -> str:
@@ -268,9 +282,13 @@ class InstagramInsightsClient:
             raise InstagramInsightsRequestError("Instagram read returned invalid JSON") from exc
         return response, payload, parse_rate_limit_headers(getattr(response, "headers", None))
 
-    def _raise_for_error(self, response, payload: Any, context: str, endpoint: str) -> None:
-        if response.status_code < 400:
-            return
+    def _meta_error_diagnostic(
+        self,
+        response,
+        payload: Any,
+        context: str,
+        endpoint: str,
+    ) -> tuple[str, int | None]:
         error = payload.get("error") if isinstance(payload, dict) else None
         error_code = _meta_error_number(error.get("code")) if isinstance(error, dict) else None
         error_subcode = _meta_error_number(error.get("error_subcode")) if isinstance(error, dict) else None
@@ -282,6 +300,17 @@ class InstagramInsightsClient:
             f"error_subcode={error_subcode if error_subcode is not None else 'unavailable'} "
             f"message={message} endpoint={_safe_endpoint(endpoint)} "
             f"api_version={config.INSTAGRAM_GRAPH_API_VERSION}"
+        )
+        return diagnostic, error_code
+
+    def _raise_for_error(self, response, payload: Any, context: str, endpoint: str) -> None:
+        if response.status_code < 400:
+            return
+        diagnostic, error_code = self._meta_error_diagnostic(
+            response,
+            payload,
+            context,
+            endpoint,
         )
         logger.warning("%s", diagnostic)
         if response.status_code == 401 or error_code == 190:
@@ -350,40 +379,69 @@ class InstagramInsightsClient:
         media_id: str,
         metrics: tuple[str, ...],
         usage: dict[str, int | float],
-    ) -> tuple[dict[str, int | float], int]:
+    ) -> _MetricGroupResponse:
+        endpoint = f"{config.GRAPH_API_BASE_URL}/{media_id}/insights"
         response, payload, response_usage = self._get(
-            f"{config.GRAPH_API_BASE_URL}/{media_id}/insights",
+            endpoint,
             {"metric": ",".join(metrics)},
             media_id,
         )
         _merge_usage(usage, response_usage)
         if response.status_code < 400:
-            return _parse_metrics(payload, metrics), 1
+            return _MetricGroupResponse(_parse_metrics(payload, metrics), 1)
 
         error = payload.get("error") if isinstance(payload, dict) else None
-        error_code = error.get("code") if isinstance(error, dict) else None
+        error_code = _meta_error_number(error.get("code")) if isinstance(error, dict) else None
         if response.status_code in {401, 403} or error_code in {10, 190, 200}:
-            self._raise_for_error(response, payload, "Insights", f"{config.GRAPH_API_BASE_URL}/{media_id}/insights")
+            self._raise_for_error(response, payload, "Insights", endpoint)
         if response.status_code != 400 or error_code != 100:
-            self._raise_for_error(response, payload, "Insights", f"{config.GRAPH_API_BASE_URL}/{media_id}/insights")
+            self._raise_for_error(response, payload, "Insights", endpoint)
         if len(metrics) == 1:
-            logger.info("Instagram metric unavailable: %s", metrics[0])
-            return {}, 1
+            diagnostic, _ = self._meta_error_diagnostic(
+                response,
+                payload,
+                f"Insights metric={metrics[0]}",
+                endpoint,
+            )
+            logger.info("Instagram metric permanently unavailable: %s", diagnostic)
+            return _MetricGroupResponse({}, 1, {metrics[0]: diagnostic})
         midpoint = len(metrics) // 2
-        left, left_calls = self._fetch_metric_group(media_id, metrics[:midpoint], usage)
-        right, right_calls = self._fetch_metric_group(media_id, metrics[midpoint:], usage)
-        return {**left, **right}, 1 + left_calls + right_calls
+        left = self._fetch_metric_group(media_id, metrics[:midpoint], usage)
+        right = self._fetch_metric_group(media_id, metrics[midpoint:], usage)
+        return _MetricGroupResponse(
+            metrics={**left.metrics, **right.metrics},
+            api_calls=1 + left.api_calls + right.api_calls,
+            permanent_failures={
+                **left.permanent_failures,
+                **right.permanent_failures,
+            },
+        )
 
     def fetch_media_insights(self, media_id: str) -> InsightsResponse:
         normalized = _validated_identifier(media_id, "Instagram media ID")
         usage: dict[str, int | float] = {}
-        metrics, api_calls = self._fetch_metric_group(normalized, TARGET_METRICS, usage)
-        returned_metrics = tuple(metric for metric in TARGET_METRICS if metric in metrics)
+        result = self._fetch_metric_group(normalized, TARGET_METRICS, usage)
+        returned_metrics = tuple(metric for metric in TARGET_METRICS if metric in result.metrics)
+        permanently_failed = tuple(
+            metric for metric in TARGET_METRICS if metric in result.permanent_failures
+        )
+        all_permanently_failed = len(permanently_failed) == len(TARGET_METRICS)
         return InsightsResponse(
-            metrics=metrics,
+            metrics=result.metrics,
             requested_metrics=TARGET_METRICS,
             returned_metrics=returned_metrics,
-            missing_metrics=tuple(metric for metric in TARGET_METRICS if metric not in metrics),
-            api_calls=api_calls,
+            missing_metrics=tuple(
+                metric for metric in TARGET_METRICS if metric not in result.metrics
+            ),
+            api_calls=result.api_calls,
             rate_limit_usage=usage,
+            permanent_failure_category=(
+                "all_metrics_permanently_unavailable"
+                if all_permanently_failed
+                else None
+            ),
+            permanently_failed_metrics=permanently_failed,
+            diagnostics=tuple(
+                result.permanent_failures[metric] for metric in permanently_failed
+            ),
         )

@@ -9,11 +9,12 @@ from __future__ import annotations
 
 import hashlib
 import math
-from collections import defaultdict
+from collections import Counter, defaultdict
 from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from src.insights_storage import parse_aware_timestamp
+from src.insights_snapshot import learning_snapshot_components
 
 
 MODEL_VERSION = "engagement_rates_v1"
@@ -79,6 +80,7 @@ class SelectionComponents:
 class _RawObservation:
     publication_id: str
     posted_at: datetime
+    target_age_hours: int
     reach: float
     components: Mapping[str, float]
     maturity_weight: float
@@ -87,9 +89,54 @@ class _RawObservation:
 
 @dataclass(frozen=True)
 class _ScoredObservation:
+    publication_id: str
+    target_age_hours: int
+    reach: float
     score: float
     weight: float
+    maturity_factor: float
+    recency_factor: float
+    reach_confidence_factor: float
+    metric_coverage_factor: float
     feature_keys: tuple[str, ...]
+
+
+@dataclass(frozen=True)
+class ObservationDiagnostic:
+    """Secret-free factors that exactly explain one observation's weight."""
+
+    publication_identifier: str
+    selected_target_age_hours: int
+    reach: float
+    maturity_factor: float
+    recency_factor: float
+    reach_confidence_factor: float
+    metric_coverage_factor: float
+    final_observation_weight: float
+
+
+@dataclass(frozen=True)
+class EngagementAudit:
+    """Read-only funnel and weight diagnostics for engagement learning."""
+
+    model: "EngagementModel"
+    total_publication_records: int = 0
+    carousel_publications: int = 0
+    single_publications: int = 0
+    valid_publication_media_identities: int = 0
+    publications_with_snapshots: int = 0
+    snapshot_slot_publications: Mapping[int, int] = field(default_factory=dict)
+    eligible_learning_observations: int = 0
+    excluded_by_reason: Mapping[str, int] = field(default_factory=dict)
+    selected_snapshot_slot_counts: Mapping[int, int] = field(default_factory=dict)
+    average_reach: float | None = None
+    minimum_reach: float | None = None
+    maximum_reach: float | None = None
+    mature_observations: int = 0
+    provisional_observations: int = 0
+    effective_observations: float = 0.0
+    global_confidence: float = 0.0
+    observations: tuple[ObservationDiagnostic, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -101,6 +148,11 @@ class EngagementModel:
     feature_estimates: Mapping[str, FeatureEstimate] = field(default_factory=dict)
     config: LearningConfig = field(default_factory=LearningConfig)
     version: str = MODEL_VERSION
+
+    @property
+    def useful_carousel_observations(self) -> int:
+        """Unambiguous name for the historical ``useful_publications`` field."""
+        return self.useful_publications
 
     @classmethod
     def cold_start(cls, config: LearningConfig | None = None) -> "EngagementModel":
@@ -258,13 +310,6 @@ def _stable_unit(seed: str, namespace: str) -> float:
     return int.from_bytes(hashlib.sha256(material).digest()[:8], "big") / 2**64
 
 
-def _number(value: object) -> float | None:
-    if isinstance(value, bool) or not isinstance(value, (int, float)):
-        return None
-    parsed = float(value)
-    return parsed if math.isfinite(parsed) and parsed >= 0 else None
-
-
 def _known(value: object) -> str | None:
     normalized = " ".join(str(value or "").split()).casefold()
     return normalized if normalized not in {"", "unknown", "none", "n/a"} else None
@@ -322,13 +367,14 @@ def context_feature_keys(context: Mapping[str, object]) -> tuple[str, ...]:
 
 
 def select_mature_snapshot(snapshots: Sequence[Mapping[str, object]]) -> Mapping[str, object] | None:
-    """Prefer a comparable 72h snapshot, then final 168h, then provisional 24h."""
+    """Prefer 72h, then 168h, then 24h, while skipping unusable snapshots."""
     for target in MATURE_SNAPSHOT_PREFERENCE:
         matching = [
             snapshot
             for snapshot in snapshots
             if snapshot.get("target_age_hours") == target
             and isinstance(snapshot.get("metrics"), Mapping)
+            and learning_snapshot_components(snapshot["metrics"]) is not None
         ]
         if matching:
             return max(
@@ -347,25 +393,6 @@ def _percentile(values: Sequence[float], fraction: float) -> float:
     upper = min(lower + 1, len(ordered) - 1)
     weight = position - lower
     return ordered[lower] + (ordered[upper] - ordered[lower]) * weight
-
-
-def _snapshot_components(metrics: Mapping[str, object]) -> tuple[float, dict[str, float]] | None:
-    reach = _number(metrics.get("reach"))
-    if reach is None or reach <= 0:
-        return None
-    components: dict[str, float] = {"reach_signal": reach}
-    for metric, output_name in (
-        ("shares", "share_rate"),
-        ("saved", "save_rate"),
-        ("comments", "comment_rate"),
-        ("likes", "like_rate"),
-    ):
-        value = _number(metrics.get(metric))
-        if value is not None:
-            components[output_name] = value / reach
-    if len(components) == 1:
-        return None
-    return reach, components
 
 
 def _preceding_distance_bucket(minutes: float | None) -> str | None:
@@ -404,15 +431,28 @@ def _publication_feature_keys(
     return tuple(dict.fromkeys(keys))
 
 
+@dataclass(frozen=True)
+class _RawObservationResult:
+    observations: tuple[_RawObservation, ...]
+    total_publication_records: int
+    carousel_publications: int
+    single_publications: int
+    valid_publication_media_identities: int
+    publications_with_snapshots: int
+    snapshot_slot_publications: Mapping[int, int]
+    excluded_by_reason: Mapping[str, int]
+
+
 def _raw_observations(
     history: Mapping[str, object],
     snapshots: Sequence[Mapping[str, object]],
     now: datetime,
-) -> list[_RawObservation]:
+) -> _RawObservationResult:
     raw_publications = history.get("publications", [])
     raw_artworks = history.get("posted_artworks", [])
     if not isinstance(raw_publications, list) or not isinstance(raw_artworks, list):
-        return []
+        return _RawObservationResult((), 0, 0, 0, 0, 0, {}, {"malformed_history": 1})
+    exclusions: Counter[str] = Counter()
     artworks_by_publication: dict[str, list[Mapping[str, object]]] = defaultdict(list)
     for artwork in raw_artworks:
         if not isinstance(artwork, Mapping):
@@ -420,39 +460,107 @@ def _raw_observations(
         publication_id = artwork.get("publication_id")
         if isinstance(publication_id, str):
             artworks_by_publication[publication_id].append(artwork)
-    snapshots_by_identity: dict[str, list[Mapping[str, object]]] = defaultdict(list)
+
+    carousel_publications = sum(
+        isinstance(item, Mapping) and item.get("type") == "carousel"
+        for item in raw_publications
+    )
+    single_publications = sum(
+        isinstance(item, Mapping) and item.get("type") == "single"
+        for item in raw_publications
+    )
+    publication_media: dict[str, str] = {}
+    media_publication: dict[str, str] = {}
+    identity_validity: dict[int, bool] = {}
+    valid_identity_count = 0
+    for publication in raw_publications:
+        if not isinstance(publication, Mapping):
+            exclusions["malformed_publication_record"] += 1
+            continue
+        publication_id = publication.get("id")
+        media_id = publication.get("media_id")
+        if not (
+            isinstance(publication_id, str)
+            and publication_id.strip()
+            and isinstance(media_id, str)
+            and media_id.strip()
+        ):
+            identity_validity[id(publication)] = False
+            exclusions["invalid_publication_media_identity"] += 1
+            continue
+        publication_id = publication_id.strip()
+        media_id = media_id.strip()
+        if publication_id in publication_media or media_id in media_publication:
+            identity_validity[id(publication)] = False
+            exclusions["duplicate_publication_media_identity"] += 1
+            continue
+        publication_media[publication_id] = media_id
+        media_publication[media_id] = publication_id
+        identity_validity[id(publication)] = True
+        valid_identity_count += 1
+
+    snapshots_by_pair: dict[tuple[str, str], list[Mapping[str, object]]] = defaultdict(list)
     for snapshot in snapshots:
         if not isinstance(snapshot, Mapping):
+            exclusions["malformed_snapshot"] += 1
             continue
-        for identity in (snapshot.get("publication_id"), snapshot.get("media_id")):
-            if isinstance(identity, str) and identity:
-                snapshots_by_identity[identity].append(snapshot)
+        snapshot_publication = snapshot.get("publication_id")
+        snapshot_media = snapshot.get("media_id")
+        if not (
+            isinstance(snapshot_publication, str)
+            and snapshot_publication
+            and isinstance(snapshot_media, str)
+            and snapshot_media
+        ):
+            exclusions["malformed_snapshot_identity"] += 1
+            continue
+        snapshot_publication = snapshot_publication.strip()
+        snapshot_media = snapshot_media.strip()
+        authoritative_media = publication_media.get(snapshot_publication)
+        authoritative_publication = media_publication.get(snapshot_media)
+        if (
+            authoritative_media is not None
+            and authoritative_media == snapshot_media
+            and authoritative_publication == snapshot_publication
+        ):
+            snapshots_by_pair[(snapshot_publication, snapshot_media)].append(snapshot)
+        elif authoritative_media is not None or authoritative_publication is not None:
+            exclusions["snapshot_identity_mismatch"] += 1
 
     valid_publications: list[tuple[datetime, Mapping[str, object]]] = []
     for publication in raw_publications:
         if not isinstance(publication, Mapping) or publication.get("type") != "carousel":
             continue
+        if not identity_validity.get(id(publication), False):
+            continue
         posted_at = parse_aware_timestamp(publication.get("posted_at"))
         if posted_at is None or posted_at > now:
-            continue
-        publication_id = publication.get("id")
-        media_id = publication.get("media_id")
-        if not isinstance(publication_id, str) or not isinstance(media_id, str):
+            exclusions[
+                "future_publication" if posted_at is not None else "invalid_publication_timestamp"
+            ] += 1
             continue
         valid_publications.append((posted_at, publication))
     valid_publications.sort(key=lambda item: (item[0], str(item[1].get("id"))))
 
     result: list[_RawObservation] = []
+    publications_with_snapshots = 0
+    slot_publications: Counter[int] = Counter()
     previous_posted_at: datetime | None = None
     for posted_at, publication in valid_publications:
-        publication_id = str(publication["id"])
-        candidates = [
-            *snapshots_by_identity.get(publication_id, ()),
-            *snapshots_by_identity.get(str(publication["media_id"]), ()),
-        ]
-        # A snapshot indexed by both identities must still be considered once.
-        unique = {(id(snapshot), str(snapshot.get("captured_at"))): snapshot for snapshot in candidates}
-        snapshot = select_mature_snapshot(tuple(unique.values()))
+        publication_id = str(publication["id"]).strip()
+        media_id = str(publication["media_id"]).strip()
+        candidates = snapshots_by_pair.get((publication_id, media_id), ())
+        if candidates:
+            publications_with_snapshots += 1
+            slot_publications.update(
+                {
+                    target
+                    for candidate in candidates
+                    if isinstance((target := candidate.get("target_age_hours")), int)
+                    and not isinstance(target, bool)
+                }
+            )
+        snapshot = select_mature_snapshot(candidates)
         preceding = (
             (posted_at - previous_posted_at).total_seconds() / 60
             if previous_posted_at is not None
@@ -460,20 +568,24 @@ def _raw_observations(
         )
         previous_posted_at = posted_at
         if snapshot is None:
+            exclusions["no_usable_snapshot" if candidates else "no_snapshot"] += 1
             continue
         metrics = snapshot.get("metrics")
-        parsed = _snapshot_components(metrics) if isinstance(metrics, Mapping) else None
+        parsed = learning_snapshot_components(metrics) if isinstance(metrics, Mapping) else None
         if parsed is None:
+            exclusions["no_usable_snapshot"] += 1
             continue
         reach, components = parsed
         target = snapshot.get("target_age_hours")
         maturity = SNAPSHOT_CONFIDENCE.get(target)
         if maturity is None:
+            exclusions["unsupported_snapshot_slot"] += 1
             continue
         result.append(
             _RawObservation(
                 publication_id=publication_id,
                 posted_at=posted_at,
+                target_age_hours=target,
                 reach=reach,
                 components=components,
                 maturity_weight=maturity,
@@ -485,7 +597,16 @@ def _raw_observations(
                 ),
             )
         )
-    return result
+    return _RawObservationResult(
+        observations=tuple(result),
+        total_publication_records=len(raw_publications),
+        carousel_publications=carousel_publications,
+        single_publications=single_publications,
+        valid_publication_media_identities=valid_identity_count,
+        publications_with_snapshots=publications_with_snapshots,
+        snapshot_slot_publications=dict(sorted(slot_publications.items())),
+        excluded_by_reason=dict(sorted(exclusions.items())),
+    )
 
 
 def _score_observations(
@@ -542,27 +663,27 @@ def _score_observations(
             * (0.5 + 0.5 * metric_coverage)
         )
         if weight > 0:
-            scored.append(_ScoredObservation(outcome, weight, observation.feature_keys))
+            scored.append(
+                _ScoredObservation(
+                    publication_id=observation.publication_id,
+                    target_age_hours=observation.target_age_hours,
+                    reach=observation.reach,
+                    score=outcome,
+                    weight=weight,
+                    maturity_factor=observation.maturity_weight,
+                    recency_factor=recency,
+                    reach_confidence_factor=reach_confidence,
+                    metric_coverage_factor=0.5 + 0.5 * metric_coverage,
+                    feature_keys=observation.feature_keys,
+                )
+            )
     return scored
 
 
-def build_engagement_model(
-    history: Mapping[str, object] | None,
-    snapshots: Sequence[Mapping[str, object]] | None,
-    *,
-    now: datetime | None = None,
-    config: LearningConfig | None = None,
+def _model_from_scored(
+    scored: Sequence[_ScoredObservation],
+    active_config: LearningConfig,
 ) -> EngagementModel:
-    """Build a rebuildable model from canonical history and Insights snapshots."""
-    active_config = config or LearningConfig()
-    timestamp = now or datetime.now(timezone.utc)
-    if timestamp.tzinfo is None or timestamp.utcoffset() is None:
-        raise ValueError("Learning time must be timezone-aware")
-    timestamp = timestamp.astimezone(timezone.utc)
-    if not isinstance(history, Mapping) or not snapshots:
-        return EngagementModel.cold_start(active_config)
-    observations = _raw_observations(history, snapshots, timestamp)
-    scored = _score_observations(observations, now=timestamp, config=active_config)
     if not scored:
         return EngagementModel.cold_start(active_config)
     total_weight = sum(item.weight for item in scored)
@@ -601,3 +722,94 @@ def build_engagement_model(
         feature_estimates=estimates,
         config=active_config,
     )
+
+
+def _anonymized_publication_identifier(publication_id: str) -> str:
+    return hashlib.sha256(publication_id.encode()).hexdigest()[:12]
+
+
+def analyze_engagement_learning(
+    history: Mapping[str, object] | None,
+    snapshots: Sequence[Mapping[str, object]] | None,
+    *,
+    now: datetime | None = None,
+    config: LearningConfig | None = None,
+) -> EngagementAudit:
+    """Build the model and a read-only, self-explaining learning funnel."""
+    active_config = config or LearningConfig()
+    timestamp = now or datetime.now(timezone.utc)
+    if timestamp.tzinfo is None or timestamp.utcoffset() is None:
+        raise ValueError("Learning time must be timezone-aware")
+    timestamp = timestamp.astimezone(timezone.utc)
+    if not isinstance(history, Mapping):
+        model = EngagementModel.cold_start(active_config)
+        return EngagementAudit(model=model, excluded_by_reason={"malformed_history": 1})
+    snapshot_values = snapshots if isinstance(snapshots, Sequence) else ()
+    raw = _raw_observations(history, snapshot_values, timestamp)
+    scored = _score_observations(
+        raw.observations,
+        now=timestamp,
+        config=active_config,
+    )
+    model = _model_from_scored(scored, active_config)
+    total_weight = sum(item.weight for item in scored)
+    exact_confidence = (
+        total_weight / (total_weight + active_config.global_confidence_observations)
+        if total_weight > 0
+        else 0.0
+    )
+    selected_slots = Counter(item.target_age_hours for item in scored)
+    reaches = [item.reach for item in scored]
+    exclusions = Counter(raw.excluded_by_reason)
+    zero_weight_count = len(raw.observations) - len(scored)
+    if zero_weight_count:
+        exclusions["zero_observation_weight"] += zero_weight_count
+    observation_diagnostics = tuple(
+        ObservationDiagnostic(
+            publication_identifier=_anonymized_publication_identifier(item.publication_id),
+            selected_target_age_hours=item.target_age_hours,
+            reach=item.reach,
+            maturity_factor=item.maturity_factor,
+            recency_factor=item.recency_factor,
+            reach_confidence_factor=item.reach_confidence_factor,
+            metric_coverage_factor=item.metric_coverage_factor,
+            final_observation_weight=item.weight,
+        )
+        for item in scored
+    )
+    return EngagementAudit(
+        model=model,
+        total_publication_records=raw.total_publication_records,
+        carousel_publications=raw.carousel_publications,
+        single_publications=raw.single_publications,
+        valid_publication_media_identities=raw.valid_publication_media_identities,
+        publications_with_snapshots=raw.publications_with_snapshots,
+        snapshot_slot_publications=raw.snapshot_slot_publications,
+        eligible_learning_observations=len(scored),
+        excluded_by_reason=dict(sorted(exclusions.items())),
+        selected_snapshot_slot_counts=dict(sorted(selected_slots.items())),
+        average_reach=sum(reaches) / len(reaches) if reaches else None,
+        minimum_reach=min(reaches) if reaches else None,
+        maximum_reach=max(reaches) if reaches else None,
+        mature_observations=sum(item.target_age_hours in {72, 168} for item in scored),
+        provisional_observations=sum(item.target_age_hours == 24 for item in scored),
+        effective_observations=total_weight,
+        global_confidence=exact_confidence,
+        observations=observation_diagnostics,
+    )
+
+
+def build_engagement_model(
+    history: Mapping[str, object] | None,
+    snapshots: Sequence[Mapping[str, object]] | None,
+    *,
+    now: datetime | None = None,
+    config: LearningConfig | None = None,
+) -> EngagementModel:
+    """Build a rebuildable model from canonical history and Insights snapshots."""
+    return analyze_engagement_learning(
+        history,
+        snapshots,
+        now=now,
+        config=config,
+    ).model

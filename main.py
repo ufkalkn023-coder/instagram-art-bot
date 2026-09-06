@@ -47,7 +47,7 @@ from src.editorial_experiments import (
     canonical_publish_slot,
     select_caption_hook_type,
 )
-from src.engagement_learning import EngagementModel, build_engagement_model
+from src.engagement_learning import EngagementModel, analyze_engagement_learning
 from src.insights_storage import InsightsStorage
 from src.carousel_themes import (
     CarouselFormat,
@@ -261,8 +261,10 @@ def _load_engagement_model() -> EngagementModel:
     """Best-effort optimization layer; publishing remains safe without Insights."""
     try:
         history, _ = history_tracker.load_history_with_etag()
-        snapshots = InsightsStorage().load_all_snapshots()
-        model = build_engagement_model(history, snapshots)
+        storage = InsightsStorage()
+        snapshots = storage.load_all_snapshots()
+        audit = analyze_engagement_learning(history, snapshots)
+        model = audit.model
     except Exception as error:
         logger.warning(
             "engagement_learning_unavailable error=%s fallback=quality_editorial",
@@ -270,13 +272,26 @@ def _load_engagement_model() -> EngagementModel:
         )
         return EngagementModel.cold_start()
     logger.info(
-        "engagement_model_loaded version=%s publications=%s effective_observations=%.3f "
-        "confidence=%.3f global_score=%.2f",
+        "engagement_model_loaded version=%s useful_carousel_observations=%s "
+        "effective_observations=%.3f confidence=%.3f global_score=%.2f",
         model.version,
-        model.useful_publications,
+        model.useful_carousel_observations,
         model.effective_observations,
         model.confidence,
         model.global_score,
+    )
+    logger.info(
+        "engagement_learning_funnel total_publication_records=%s carousel_publications=%s "
+        "valid_publication_media_identities=%s publications_with_snapshots=%s "
+        "eligible_learning_observations=%s snapshot_identity_mismatches=%s "
+        "invalid_loaded_snapshots=%s",
+        audit.total_publication_records,
+        audit.carousel_publications,
+        audit.valid_publication_media_identities,
+        audit.publications_with_snapshots,
+        audit.eligible_learning_observations,
+        audit.excluded_by_reason.get("snapshot_identity_mismatch", 0),
+        storage.last_snapshot_load_diagnostics.invalid_snapshots,
     )
     return model
 
