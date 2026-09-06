@@ -292,7 +292,6 @@ saklayarak görünen iddiaların seçilen setle karşılaştırılmasını sağl
 | `CLOUDFLARE_R2_BUCKET_NAME` | Production history ve R2 media için gerekli | History ve media bucket’ı |
 | `CLOUDFLARE_R2_PUBLIC_URL` | R2 media upload kullanılıyorsa gerekli | Instagram’ın erişeceği R2 public URL tabanı |
 | `GOOGLE_GEMINI_API_KEY` | Opsiyonel | Gemini caption/alt-text üretimi; yoksa fallback kullanılır |
-| `RIJKSMUSEUM_API_KEY` | Opsiyonel | Rijksmuseum adapter’ını etkinleştirir; yoksa bu kaynak atlanır |
 | `SMITHSONIAN_API_KEY` | Opsiyonel | Smithsonian Open Access adapter'ını etkinleştirir |
 | `EUROPEANA_API_KEY` | Opsiyonel | Europeana adapter'ını etkinleştirir |
 | `ARTFOLIO_SELECTION_SEED` | Opsiyonel | Seçim RNG’si için açık seed |
@@ -305,7 +304,7 @@ belgesine bakın.
 
 Instagram publish ile R2-backed history zorunludur. `CLOUDFLARE_R2_PUBLIC_URL`, carousel media upload akışında gerekir.
 
-Production startup’ta Instagram ve beş R2 değişkeni (`ACCOUNT_ID`, access key, secret key, bucket ve public URL) **required** kabul edilir ve eksik adlar secret değerleri yazdırılmadan tek tanıda raporlanır. Gemini template fallback sunduğu ve Rijksmuseum adapter’ı anahtar yokken devre dışı kaldığı için bu entegrasyonlar optional kalır.
+Production startup’ta Instagram ve beş R2 değişkeni (`ACCOUNT_ID`, access key, secret key, bucket ve public URL) **required** kabul edilir ve eksik adlar secret değerleri yazdırılmadan tek tanıda raporlanır. Gemini template fallback sunduğu için optional kalır; Rijksmuseum Data Services adapter’ı anahtarsız çalışır.
 
 Normal outbound isteklerin tümü bounded timeout kullanır. R2 connect/read sınırları 10/30 saniyedir; SDK-level retry kapalıdır. Media upload yalnız transient network, rate-limit ve 5xx hatalarında en fazla üç loglanan uygulama denemesi yapar; permanent 4xx/config hataları hemen durur. Gemini isteği 60 saniye ve tek attempt ile sınırlıdır; hata halinde deterministic template fallback kullanılır. Instagram yalnız transient container/status hatalarını üç bounded attempt ile tekrarlar; publish sınırındaki belirsiz sonuç otomatik retry edilmez.
 

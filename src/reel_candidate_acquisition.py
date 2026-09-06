@@ -53,7 +53,6 @@ logger = logging.getLogger(__name__)
 # availability note here makes an expected operational omission visible in the
 # acquisition manifest without changing adapter behavior.
 _REQUIRED_CREDENTIAL_ENV = {
-    "rijksmuseum": "RIJKSMUSEUM_API_KEY",
     "smithsonian": "SMITHSONIAN_API_KEY",
     "europeana": "EUROPEANA_API_KEY",
 }

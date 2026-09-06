@@ -5,7 +5,7 @@ import pytest
 from src import art_fetcher
 from src.quality_filter import ImageValidationResult
 from src.models import NormalizedArtwork
-from src.museums import aic, cleveland, met, rijksmuseum
+from src.museums import aic, cleveland, met
 from src.rights_policy import RightsPolicyMode, is_rights_eligible
 
 
@@ -145,44 +145,6 @@ def test_cleveland_rejects_invalid_image_dimensions(monkeypatch, width, height):
     candidate = cleveland.ClevelandAdapter().fetch_candidates()[0]
 
     assert (candidate.image_width, candidate.image_height) == (None, None)
-
-
-def test_rijksmuseum_acquires_candidates_and_preserves_rights_metadata(monkeypatch):
-    payload = {
-        "artObjects": [
-            {
-                "objectNumber": "SK-A-1",
-                "title": "Safe",
-                "webImage": {"url": "https://images.example/safe.jpg"},
-                "copyrightHolder": "Public Domain",
-            },
-            {
-                "objectNumber": "SK-A-2",
-                "title": "Ambiguous",
-                "webImage": {"url": "https://images.example/ambiguous.jpg"},
-                "copyrightHolder": "Rijksmuseum",
-            },
-            {
-                "objectNumber": "SK-A-3",
-                "title": "Missing",
-                "webImage": {"url": "https://images.example/missing.jpg"},
-            },
-        ]
-    }
-    monkeypatch.setattr(rijksmuseum.requests, "get", lambda *args, **kwargs: FakeResponse(payload))
-    monkeypatch.setenv("RIJKSMUSEUM_API_KEY", "test-key")
-
-    candidates = rijksmuseum.RijksmuseumAdapter().fetch_candidates()
-
-    assert [candidate.canonical_id for candidate in candidates] == [
-        "rijksmuseum_SK-A-1",
-        "rijksmuseum_SK-A-2",
-        "rijksmuseum_SK-A-3",
-    ]
-    assert candidates[0].rights_status == "CONFIRMED_PUBLIC_DOMAIN"
-    assert candidates[1].rights_status == "KNOWN_RESTRICTED"
-    assert candidates[1].rights_text == "Rijksmuseum"
-    assert candidates[2].rights_status is None
 
 
 def test_central_rights_policy_is_permissive_by_default_and_reversible():

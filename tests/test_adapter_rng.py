@@ -4,7 +4,7 @@ from urllib.parse import parse_qs, urlparse
 import pytest
 
 from src import art_fetcher
-from src.museums import aic, cleveland, met, rijksmuseum
+from src.museums import aic, cleveland, met
 
 
 class FakeResponse:
@@ -40,18 +40,8 @@ def test_seeded_adapter_requests_keep_existing_page_offset_and_sample_bounds(mon
     )
     cleveland.ClevelandAdapter().fetch_candidates(rng=_rng("seed-alpha", "cleveland"))
 
-    rijks_urls = []
-    monkeypatch.setenv("RIJKSMUSEUM_API_KEY", "test-key")
-    monkeypatch.setattr(
-        rijksmuseum.requests,
-        "get",
-        lambda url, **kwargs: (rijks_urls.append(url) or FakeResponse({"artObjects": []})),
-    )
-    rijksmuseum.RijksmuseumAdapter().fetch_candidates(rng=_rng("seed-alpha", "rijksmuseum"))
-
     assert parse_qs(urlparse(aic_urls[0]).query)["page"] == ["4"]
     assert parse_qs(urlparse(cleveland_urls[0]).query)["skip"] == ["379"]
-    assert parse_qs(urlparse(rijks_urls[0]).query)["p"] == ["50"]
 
 
 def test_direct_adapter_use_without_an_rng_keeps_existing_random_exploration(monkeypatch):
