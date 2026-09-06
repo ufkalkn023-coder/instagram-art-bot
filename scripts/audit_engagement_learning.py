@@ -20,6 +20,11 @@ from src.engagement_learning import (  # noqa: E402
     analyze_engagement_learning,
 )
 from src.insights_storage import InsightsStorage, parse_aware_timestamp  # noqa: E402
+from src.local_credentials import (  # noqa: E402
+    ENGAGEMENT_AUDIT_PROFILE,
+    credential_variables,
+    load_keychain_credentials,
+)
 
 
 def _load_json(path: Path) -> Any:
@@ -149,6 +154,17 @@ def run(argv: list[str] | None = None) -> int:
         if now is None:
             parser.error("--now must be an ISO-8601 timestamp with a timezone")
     try:
+        if args.history is None or args.snapshots is None:
+            credential_status = load_keychain_credentials(ENGAGEMENT_AUDIT_PROFILE)
+            missing = [
+                variable
+                for variable in credential_variables(ENGAGEMENT_AUDIT_PROFILE)
+                if not credential_status[variable]
+            ]
+            if missing:
+                raise ValueError(
+                    "Missing engagement-audit credentials: " + ", ".join(missing)
+                )
         history, snapshots, invalid_count = _load_inputs(args.history, args.snapshots)
         audit = analyze_engagement_learning(history, snapshots, now=now)
     except (OSError, ValueError, json.JSONDecodeError) as exc:

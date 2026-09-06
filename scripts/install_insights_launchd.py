@@ -14,10 +14,15 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from src.local_credentials import (
-    REQUIRED_CREDENTIALS,
+from src.local_credentials import (  # noqa: E402
+    COLLECTOR_CREDENTIALS,
+    COLLECTOR_PROFILE,
+    ENGAGEMENT_AUDIT_PROFILE,
+    CredentialProfileName,
+    credential_variables,
+    format_credential_status,
+    keychain_credential_available,
     keychain_service,
-    read_keychain_credential,
 )
 
 LABEL = "com.artfolio.instagram-insights"
@@ -74,7 +79,11 @@ def install(reels_root: Path) -> None:
         raise RuntimeError(f"Collector script is missing under {ROOT}")
     if not (reels_root / "data" / "reel-production-history.json").is_file():
         raise RuntimeError(f"Artfolio Reels production history is missing under {reels_root}")
-    missing = [variable for variable in REQUIRED_CREDENTIALS if not read_keychain_credential(variable)]
+    missing = [
+        variable
+        for variable in COLLECTOR_CREDENTIALS
+        if not keychain_credential_available(variable, profile=COLLECTOR_PROFILE)
+    ]
     if missing:
         raise RuntimeError(
             "Keychain credentials are missing; run configure-keychain first: " + ", ".join(missing)
@@ -104,15 +113,15 @@ def uninstall() -> None:
     print(f"[insights] launchd=UNINSTALLED plist={PLIST_PATH}")
 
 
-def configure_keychain(force: bool = False) -> None:
+def configure_keychain(profile: CredentialProfileName, force: bool = False) -> None:
     if sys.platform != "darwin":
         raise RuntimeError("Keychain configuration requires macOS")
     account = getpass.getuser()
-    for variable in REQUIRED_CREDENTIALS:
-        if not force and read_keychain_credential(variable):
-            print(f"[insights] {variable}=SET")
+    for variable in credential_variables(profile):
+        if not force and keychain_credential_available(variable, profile=profile):
+            print(f"[{profile}] {variable}=AVAILABLE")
             continue
-        print(f"[insights] Enter {variable} in the secure Keychain prompt.")
+        print(f"[{profile}] Enter {variable} in the secure Keychain prompt.")
         result = subprocess.run(
             [
                 "/usr/bin/security",
@@ -121,19 +130,36 @@ def configure_keychain(force: bool = False) -> None:
                 "-a",
                 account,
                 "-s",
-                keychain_service(variable),
+                keychain_service(profile, variable),
                 "-w",
             ],
             check=False,
         )
         if result.returncode:
             raise RuntimeError(f"Keychain update failed for {variable}")
-        print(f"[insights] {variable}=SET")
+        print(f"[{profile}] {variable}=AVAILABLE")
+
+
+def credential_status(profile: CredentialProfileName) -> dict[str, bool]:
+    return {
+        variable: keychain_credential_available(variable, profile=profile)
+        for variable in credential_variables(profile)
+    }
 
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("action", choices=("install", "uninstall", "configure-keychain", "status"))
+    parser.add_argument(
+        "action",
+        choices=(
+            "install",
+            "uninstall",
+            "configure-keychain",
+            "status",
+            "configure-audit-keychain",
+            "audit-status",
+        ),
+    )
     parser.add_argument("--reels-root", type=Path, default=DEFAULT_REELS_ROOT)
     parser.add_argument("--force", action="store_true", help="Replace existing Keychain values during configuration")
     args = parser.parse_args()
@@ -143,11 +169,23 @@ def main() -> int:
         elif args.action == "uninstall":
             uninstall()
         elif args.action == "configure-keychain":
-            configure_keychain(force=args.force)
+            configure_keychain(COLLECTOR_PROFILE, force=args.force)
+        elif args.action == "configure-audit-keychain":
+            configure_keychain(ENGAGEMENT_AUDIT_PROFILE, force=args.force)
+        elif args.action == "audit-status":
+            print(
+                format_credential_status(
+                    ENGAGEMENT_AUDIT_PROFILE,
+                    credential_status(ENGAGEMENT_AUDIT_PROFILE),
+                )
+            )
         else:
-            status = {variable: bool(read_keychain_credential(variable)) for variable in REQUIRED_CREDENTIALS}
-            for variable in REQUIRED_CREDENTIALS:
-                print(f"[insights] {variable}={'SET' if status[variable] else 'MISSING'}")
+            print(
+                format_credential_status(
+                    COLLECTOR_PROFILE,
+                    credential_status(COLLECTOR_PROFILE),
+                )
+            )
             print(f"[insights] launchd={'INSTALLED' if PLIST_PATH.is_file() else 'MISSING'}")
     except (OSError, RuntimeError) as exc:
         print(f"[insights] error={exc}", file=sys.stderr)

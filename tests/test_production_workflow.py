@@ -11,6 +11,15 @@ JOB_NAME = "post-to-instagram"
 SCHEDULE_FLAG = "ARTFOLIO_PRODUCTION_SCHEDULE_ENABLED"
 CONFIRMATION = "PUBLISH_TO_INSTAGRAM"
 CAROUSEL_CRON = "0 5,10,15,20 * * *"
+EXPECTED_PRODUCTION_SECRET_NAMES = {
+    "INSTAGRAM_ACCOUNT_ID",
+    "INSTAGRAM_ACCESS_TOKEN",
+    "CLOUDFLARE_R2_ACCOUNT_ID",
+    "CLOUDFLARE_R2_ACCESS_KEY_ID",
+    "CLOUDFLARE_R2_SECRET_ACCESS_KEY",
+    "CLOUDFLARE_R2_BUCKET_NAME",
+    "CLOUDFLARE_R2_PUBLIC_URL",
+}
 
 
 def _workflow() -> dict:
@@ -106,3 +115,19 @@ def test_production_workflow_retains_operational_safety_gates():
     assert steps["Validate production configuration"]["run"] == (
         "python main.py --validate-production-config"
     )
+
+
+def test_production_workflow_secret_names_are_unchanged_and_keychain_independent():
+    steps = _steps_by_name()
+    validation_environment = steps["Validate production configuration"]["env"]
+    publish_environment = steps[
+        "Fetch artwork, process image, and post to Instagram"
+    ]["env"]
+
+    assert set(validation_environment) == EXPECTED_PRODUCTION_SECRET_NAMES
+    assert EXPECTED_PRODUCTION_SECRET_NAMES.issubset(publish_environment)
+    for variable in EXPECTED_PRODUCTION_SECRET_NAMES:
+        expected = "${{ secrets." + variable + " }}"
+        assert validation_environment[variable] == expected
+        assert publish_environment[variable] == expected
+    assert all("keychain" not in step.get("run", "").lower() for step in steps.values())

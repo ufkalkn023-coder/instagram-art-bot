@@ -105,7 +105,12 @@ python3 scripts/collect_insights.py --check-secrets
 
 Normal akışta kullanıcı Instagram permalink’i, media ID’si veya Reel eşlemesi girmez. Kullanıcı Reel’i Instagram Edits ile yayınladıktan sonra saatlik yerel koşu yeni owned Reel/video medyasını keşfeder; üretim zaman penceresindeki yerel Artfolio kayıtlarıyla önce birebir caption, sonra normalize caption, son olarak güçlü title + artist + zaman kanıtıyla global one-to-one eşleştirir. Yalnız tek ve yüksek güvenli aday R2’de `insights/media-associations.json` objesine yazılır. Kalıcı eşlemeler sonraki koşularda önceliklidir ve aynı Reel veya Instagram media ID ikinci kez bağlanamaz.
 
-Yerel Mac için gerekli secret’lar launchd plist’ine veya repo dosyalarına yazılmaz. Bir kerelik Keychain kurulumu, güvenli tanı ve LaunchAgent kurulumu:
+Yerel Mac credential’ları launchd plist’ine veya repo dosyalarına yazılmaz. Yerel operasyonlar iki ayrı Keychain profili kullanır:
+
+- **Collector:** `com.artfolio.instagram-insights.*`; Instagram account/token ile dört R2 alanını içerir ve kullandığı R2 credential’ı Object Read & Write yetkili olmalıdır.
+- **Engagement audit:** `com.artfolio.engagement-audit.*`; yalnız dört R2 alanını içerir, Instagram credential’ı içermez ve kullandığı R2 credential’ı Object Read Only olmalıdır.
+
+Collector için bir kerelik Keychain kurulumu, güvenli durum kontrolü ve LaunchAgent kurulumu:
 
 ```console
 cd /Users/ufuk/Desktop/instagram-art-bot-push
@@ -114,9 +119,11 @@ python3 scripts/collect_insights.py --check-secrets
 python3 scripts/install_insights_launchd.py install
 ```
 
-`configure-keychain`, her eksik değer için macOS Keychain’in gizli giriş prompt’unu açar; değer komut satırı argümanına, shell history’ye veya log’a girmez. Mevcut process environment değerleri interaktif çalıştırmada önceliklidir, fakat LaunchAgent yalnız Keychain kayıtlarını yükler. Installer idempotent olarak `~/Library/LaunchAgents/com.artfolio.instagram-insights.plist` dosyasını günceller ve user LaunchAgent’ı yeniden yükler. Her login/reboot sonrasında ve en fazla saatte bir tek-seferlik collector çalışır. Dönen operasyon log’ları `~/Library/Logs/Artfolio/instagram-insights.log` altında 1 MiB + üç backup ile sınırlıdır.
+`configure-keychain`, yalnız collector profilini yapılandırır ve her eksik değer için macOS Keychain’in gizli giriş prompt’unu açar; değer komut satırı argümanına, shell history’ye veya log’a girmez. Mevcut process environment değerleri interaktif çalıştırmada önceliklidir, fakat LaunchAgent yalnız `com.artfolio.instagram-insights.*` kayıtlarını yükler. Installer idempotent olarak `~/Library/LaunchAgents/com.artfolio.instagram-insights.plist` dosyasını günceller ve user LaunchAgent’ı yeniden yükler. Her login/reboot sonrasında ve en fazla saatte bir tek-seferlik collector çalışır. Dönen operasyon log’ları `~/Library/Logs/Artfolio/instagram-insights.log` altında 1 MiB + üç backup ile sınırlıdır.
 
-Bir credential’ı daha sonra değiştirmek için `python3 scripts/install_insights_launchd.py configure-keychain --force` kullanılır. Log’da `Operation not permitted` görülürse LaunchAgent’ın kullandığı Python interpreter’a macOS Privacy & Security ayarlarından Desktop erişimi verilmelidir.
+Bir collector credential’ını daha sonra değiştirmek için `python3 scripts/install_insights_launchd.py configure-keychain --force` kullanılır. Log’da `Operation not permitted` görülürse LaunchAgent’ın kullandığı Python interpreter’a macOS Privacy & Security ayarlarından Desktop erişimi verilmelidir.
+
+> **UYARI:** Read-only audit credential’larını collector namespace’i olan `com.artfolio.instagram-insights.*` altına KURMAYIN. Collector R2’ye conditional `PutObject` yazar ve Object Read & Write credential gerektirir.
 
 Devre dışı bırakma ve kaldırma:
 
@@ -143,11 +150,15 @@ Feed koşusu R2 history ile bütün `insights/YYYY-MM.json` partition'larını b
 Learning funnel'ını Instagram veya R2 verisini değiştirmeden incelemek için:
 
 ```console
+python3 scripts/install_insights_launchd.py configure-audit-keychain
+python3 scripts/install_insights_launchd.py audit-status
 python3 scripts/audit_engagement_learning.py
 python3 scripts/audit_engagement_learning.py --verbose
 ```
 
-Komut publication/media identity eşleşmelerini, 24h/72h/168h coverage'ını, exclusion nedenlerini, seçilen slotları, reach dağılımını, maturity durumunu, effective observation toplamını ve global confidence'ı raporlar. `--verbose` publication kimliklerini hash'leyerek her observation weight faktörünü gösterir.
+`configure-audit-keychain`, yalnız `com.artfolio.engagement-audit.*` altında `CLOUDFLARE_R2_ACCOUNT_ID`, `CLOUDFLARE_R2_ACCESS_KEY_ID`, `CLOUDFLARE_R2_SECRET_ACCESS_KEY` ve `CLOUDFLARE_R2_BUCKET_NAME` alanlarını güvenli Keychain prompt’larıyla kurar. `audit-status` değerleri göstermeden yalnız `AVAILABLE`/`MISSING` durumunu raporlar. Audit bu profilden collector namespace’ine fallback yapmaz ve Instagram credential’ı yüklemez. Her iki yerel komutta da mevcut process environment değerleri seçilen Keychain profilinden önce gelir; environment değişkenleri credential rolü metadata’sı taşımadığından doğru rolü sağlamak çağıranın sorumluluğundadır.
+
+Komut publication/media identity eşleşmelerini, 24h/72h/168h coverage'ını, exclusion nedenlerini, seçilen slotları, reach dağılımını, maturity durumunu, effective observation toplamını ve global confidence'ı raporlar. `--verbose` publication kimliklerini hash'leyerek her observation weight faktörünü gösterir. Production R2’den okurken audit yalnız `GetObject` ve `ListObjectsV2` yollarını kullanır; `PutObject`, `DeleteObject` veya başka bir write yolu çağırmaz. `--history` ve `--snapshots` birlikte yerel dosya gösterdiğinde Keychain’e erişmez.
 
 Her kesinleşen carousel `selection_model_version`, `engagement_model_version`, `carousel_theme`, `carousel_format`, `featured_count`, `cover_variant`, `caption_hook_type`, `publish_slot`, `exploration_selected`, `learned_score`, `engagement_confidence`, `quality_component`, `engagement_component`, `diversity_component`, `exploration_component` ve varsa `preceding_post_distance_minutes` alanlarını taşır. Eski publication kayıtlarında bu alanların bulunmaması geçerlidir.
 

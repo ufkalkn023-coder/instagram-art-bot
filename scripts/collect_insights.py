@@ -12,11 +12,19 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from src.insights_collector import InsightsCollector, format_summary, manual_association
-from src.insights_storage import InsightsStorage, InsightsStorageError
-from src.instagram_insights import InstagramInsightsClient, InstagramInsightsConfigurationError, InstagramInsightsError
-from src.local_credentials import format_credential_status, load_keychain_credentials
-from src.reel_analytics import load_local_reels
+from src.insights_collector import InsightsCollector, format_summary, manual_association  # noqa: E402
+from src.insights_storage import InsightsStorage, InsightsStorageError  # noqa: E402
+from src.instagram_insights import (  # noqa: E402
+    InstagramInsightsClient,
+    InstagramInsightsConfigurationError,
+    InstagramInsightsError,
+)
+from src.local_credentials import (  # noqa: E402
+    COLLECTOR_PROFILE,
+    format_credential_status,
+    load_keychain_credentials,
+)
+from src.reel_analytics import load_local_reels  # noqa: E402
 
 
 def _default_reels_root() -> Path:
@@ -47,9 +55,9 @@ def main() -> int:
     parser.add_argument("--link", nargs=2, metavar=("LOCAL_REEL_ID", "INSTAGRAM_MEDIA_ID"), help="Persist a manual media association")
     args = parser.parse_args()
     _configure_logging(args.log_file)
-    credential_status = load_keychain_credentials()
+    credential_status = load_keychain_credentials(COLLECTOR_PROFILE)
     if args.check_secrets:
-        print(format_credential_status(credential_status))
+        print(format_credential_status(COLLECTOR_PROFILE, credential_status))
         return 0
 
     try:
