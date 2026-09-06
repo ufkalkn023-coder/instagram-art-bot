@@ -61,7 +61,7 @@ def test_r2_workflow_uses_python_310_and_the_hashed_development_lock():
     setup = steps["Set up Python 3.10"]
     install = steps["Install locked development dependencies"]
 
-    assert setup["uses"] == "actions/setup-python@v5"
+    assert setup["uses"] == "actions/setup-python@v6"
     assert setup["with"]["python-version"] == "3.10"
     assert setup["with"]["cache-dependency-path"] == "requirements-dev.lock"
     assert install["run"] == (
