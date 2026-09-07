@@ -21,8 +21,10 @@ OUTPUT_VIDEO_PATH = os.path.join(DATA_DIR, "output_reels.mp4")
 OUTPUT_RAW_IMAGE_PATH = os.path.join(DATA_DIR, "raw_artwork.jpg")
 TEMP_AUDIO_PATH = os.path.join(DATA_DIR, "temp_audio.ogg")
 
-# API Base URLs - Metropolitan Museum of Art (no IP restrictions)
+# API Base URLs - Metropolitan Museum of Art (no IP restrictions).
+# Object details remain on v1; search is independently versioned and paginated.
 MET_API_BASE = "https://collectionapi.metmuseum.org/public/collection/v1"
+MET_SEARCH_API_BASE = "https://collectionapi.metmuseum.org/public/collection/v1.1"
 
 # Gemini AI Settings
 GEMINI_MODEL = "gemini-3.7-flash"

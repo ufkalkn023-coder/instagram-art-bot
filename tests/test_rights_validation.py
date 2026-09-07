@@ -64,7 +64,7 @@ def test_aic_preserves_rights_and_uses_public_domain_derivative_only_when_allowe
 def test_met_acquisition_is_not_gated_by_public_domain_flag(monkeypatch, is_public_domain):
     responses = iter(
         [
-            FakeResponse({"objectIDs": [1]}),
+            FakeResponse({"total": 1, "objectIDs": [1]}),
             FakeResponse(
                 {
                     "isPublicDomain": is_public_domain,

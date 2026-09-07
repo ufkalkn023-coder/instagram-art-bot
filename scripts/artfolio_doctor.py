@@ -78,6 +78,7 @@ R2_VARIABLES = (
 )
 INSTAGRAM_VARIABLES = ("INSTAGRAM_ACCOUNT_ID", "INSTAGRAM_ACCESS_TOKEN")
 LOW_LEARNING_CONFIDENCE = 0.10
+MET_SOURCE_PROBE_LIMIT = 5
 
 
 class Status(str, Enum):
@@ -1049,8 +1050,9 @@ def check_sources(*, quick: bool) -> CheckResult:
             source_results[source_id] = {"state": "SKIPPED", "reason": unavailable}
             continue
         try:
+            probe_limit = MET_SOURCE_PROBE_LIMIT if source_id == "met" else 1
             candidates = adapter.fetch_candidates(
-                limit=1,
+                limit=probe_limit,
                 query="painting",
                 rng=random.Random(f"artfolio-doctor:{source_id}"),
             )

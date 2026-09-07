@@ -119,6 +119,37 @@ def test_quick_mode_skips_external_source_probes(monkeypatch):
     assert result.details["probes_run"] == 0
 
 
+def test_full_doctor_uses_small_bounded_met_candidate_probe(monkeypatch):
+    observed_limits = {}
+
+    class ProbeAdapter:
+        source_failure_category = None
+
+        def __init__(self, source_id):
+            self.source_id = source_id
+
+        def unavailable_reason(self):
+            return None
+
+        def fetch_candidates(self, *, limit, query, rng):
+            observed_limits[self.source_id] = limit
+            if self.source_id == "met":
+                return [object()] if limit > 1 else []
+            return [object()]
+
+    monkeypatch.setattr(
+        doctor,
+        "get_museum_adapters",
+        lambda: [ProbeAdapter("met"), ProbeAdapter("aic")],
+    )
+
+    result = doctor.check_sources(quick=False)
+
+    assert result.status is Status.HEALTHY
+    assert result.details["sources"]["met"]["state"] == "OK"
+    assert observed_limits == {"met": doctor.MET_SOURCE_PROBE_LIMIT, "aic": 1}
+
+
 def test_permissive_rights_policy_is_critical():
     environment = {
         **{name: "configured" for name in REQUIRED_PRODUCTION_VARIABLES},

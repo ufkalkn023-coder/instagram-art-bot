@@ -20,7 +20,7 @@ class FakeResponse:
 def test_met_http_failure_identifies_object_operation(monkeypatch):
     responses = iter(
         (
-            FakeResponse({"objectIDs": [123]}),
+            FakeResponse({"total": 1, "objectIDs": [123]}),
             type(
                 "ForbiddenResponse",
                 (),
