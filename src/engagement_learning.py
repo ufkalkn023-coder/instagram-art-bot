@@ -103,6 +103,14 @@ class _ScoredObservation:
 
 
 @dataclass(frozen=True)
+class _OutcomeCalibration:
+    """Train-fitted outcome normalization reused by temporal evaluation."""
+
+    baselines: Mapping[str, float]
+    bounds: Mapping[str, tuple[float, float]]
+
+
+@dataclass(frozen=True)
 class ObservationDiagnostic:
     """Secret-free factors that exactly explain one observation's weight."""
 
@@ -566,18 +574,18 @@ def _raw_observations(
     )
 
 
-def _score_observations(
+def _fit_outcome_calibration(
     observations: Sequence[_RawObservation],
-    *,
-    now: datetime,
-    config: LearningConfig,
-) -> list[_ScoredObservation]:
-    if not observations:
-        return []
+) -> _OutcomeCalibration:
+    """Fit the production outcome normalization on one observation set."""
     baselines: dict[str, float] = {}
     bounds: dict[str, tuple[float, float]] = {}
     for component in OUTCOME_WEIGHTS:
-        values = [item.components[component] for item in observations if component in item.components]
+        values = [
+            item.components[component]
+            for item in observations
+            if component in item.components
+        ]
         if not values:
             continue
         lower = _percentile(values, 0.05)
@@ -585,6 +593,21 @@ def _score_observations(
         clipped = [max(lower, min(upper, value)) for value in values]
         baselines[component] = sum(clipped) / len(clipped)
         bounds[component] = (lower, upper)
+    return _OutcomeCalibration(baselines=baselines, bounds=bounds)
+
+
+def _score_observations(
+    observations: Sequence[_RawObservation],
+    *,
+    now: datetime,
+    config: LearningConfig,
+    calibration: _OutcomeCalibration | None = None,
+) -> list[_ScoredObservation]:
+    if not observations:
+        return []
+    active_calibration = calibration or _fit_outcome_calibration(observations)
+    baselines = active_calibration.baselines
+    bounds = active_calibration.bounds
 
     scored: list[_ScoredObservation] = []
     for observation in observations:
