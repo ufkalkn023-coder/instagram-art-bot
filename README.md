@@ -124,6 +124,18 @@ python3 scripts/install_insights_launchd.py install
 
 `--health-check` yalnız GET/read işlemleriyle collector profil bütünlüğünü, Instagram media read erişimini, R2 history read erişimini, bucket yapılandırmasını ve son yerel collector başarısının tazeliğini kontrol eder. Saatlik schedule için `HEALTHY <= 2h`, `STALE > 2h` ve `CRITICAL > 6h` eşikleri kullanılır. Read-only preflight, R2 `PutObject` yetkisini kanıtlamaz; yalnız gerekli write yapılandırmasının mevcut olduğunu raporlar. Aktif collector R2 key pair'i audit profilindeki key pair ile aynıysa rol ayrımı ihlali olarak `INVALID_ROLE_COLLISION` raporlanır ve normal collector koşusu R2/Instagram mutation sınırından önce fail-closed durur.
 
+Tüm production sağlık yüzeylerini tek read-only komutta incelemek için:
+
+```console
+python3 scripts/artfolio_doctor.py
+python3 scripts/artfolio_doctor.py --json
+python3 scripts/artfolio_doctor.py --quick
+```
+
+Doctor; repository/config/rights durumunu, publication lifecycle özetini, iki credential profilinin ayrımını, collector tazeliğini, LaunchAgent sözleşmesini, engagement-learning funnel ve kalibrasyonunu, R2 LIST/GET ile Instagram GET erişimini raporlar. Normal mod ayrıca her müze adapter'ında en fazla bir adaylık hafif metadata probe'u çalıştırır; `--quick` bu dış müze probe'larını tamamen atlar. JSON modu stdout'a yalnız deterministic JSON yazar. Exit code `0=HEALTHY`, `1=DEGRADED`, `2=CRITICAL` anlamına gelir.
+
+Doctor hiçbir Instagram container/publish endpoint'ini, publication reconciliation'ı, R2 `PutObject`/`DeleteObject` yolunu, Keychain yazısını veya LaunchAgent değişikliğini çağırmaz. Credential değerleri çıktıya dahil edilmez. Collector write yetkisi sentetik write yapılmadan kanıtlanamayacağı için `CONFIGURED_PERMISSION_NOT_PROVEN` olarak bilgi amaçlı gösterilir ve tek başına hata sayılmaz.
+
 Bir collector credential’ını daha sonra değiştirmek için `python3 scripts/install_insights_launchd.py configure-keychain --force` kullanılır. Log’da `Operation not permitted` görülürse LaunchAgent’ın kullandığı Python interpreter’a macOS Privacy & Security ayarlarından Desktop erişimi verilmelidir.
 
 > **UYARI:** Read-only audit credential’larını collector namespace’i olan `com.artfolio.instagram-insights.*` altına KURMAYIN. Collector R2’ye conditional `PutObject` yazar ve Object Read & Write credential gerektirir.
