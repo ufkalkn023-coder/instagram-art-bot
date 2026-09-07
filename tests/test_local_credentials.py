@@ -7,6 +7,7 @@ from src.local_credentials import (
     COLLECTOR_PROFILE,
     ENGAGEMENT_AUDIT_CREDENTIALS,
     ENGAGEMENT_AUDIT_PROFILE,
+    active_r2_credential_matches_keychain_profile,
     credential_variables,
     format_credential_status,
     keychain_credential_available,
@@ -141,6 +142,43 @@ def test_status_output_never_contains_values():
         f"[engagement-audit] {variable}=AVAILABLE" for variable in R2_CREDENTIALS
     }
     assert all(secret not in output for secret in secrets.values())
+
+
+def test_active_r2_profile_collision_is_detected_without_copying_values():
+    environment = {
+        "CLOUDFLARE_R2_ACCESS_KEY_ID": "shared-access",
+        "CLOUDFLARE_R2_SECRET_ACCESS_KEY": "shared-secret",
+    }
+
+    assert active_r2_credential_matches_keychain_profile(
+        ENGAGEMENT_AUDIT_PROFILE,
+        environment,
+        reader=lambda variable, *, profile: environment[variable],
+    )
+    assert environment == {
+        "CLOUDFLARE_R2_ACCESS_KEY_ID": "shared-access",
+        "CLOUDFLARE_R2_SECRET_ACCESS_KEY": "shared-secret",
+    }
+
+
+def test_active_r2_profile_collision_requires_complete_matching_key_pair():
+    environment = {
+        "CLOUDFLARE_R2_ACCESS_KEY_ID": "collector-access",
+        "CLOUDFLARE_R2_SECRET_ACCESS_KEY": "collector-secret",
+    }
+
+    assert not active_r2_credential_matches_keychain_profile(
+        ENGAGEMENT_AUDIT_PROFILE,
+        environment,
+        reader=lambda variable, *, profile: (
+            "audit-access" if variable.endswith("ACCESS_KEY_ID") else "audit-secret"
+        ),
+    )
+    assert not active_r2_credential_matches_keychain_profile(
+        ENGAGEMENT_AUDIT_PROFILE,
+        environment,
+        reader=lambda variable, *, profile: None,
+    )
 
 
 def test_keychain_read_uses_only_selected_service_and_not_secret_arguments():

@@ -48,6 +48,8 @@ def test_audit_command_uses_local_inputs_read_only_and_anonymizes_verbose_ids(
     output = capsys.readouterr().out
     assert result == 0
     assert "eligible_learning_observations=1" in output
+    assert "usable_publications=1" in output
+    assert "current_learned_influence=" in output
     assert "selected_snapshot_slots=24h=0,72h=1,168h=0" in output
     assert "verbose_weight_sum=" in output
     assert "sensitive-publication-id" not in output

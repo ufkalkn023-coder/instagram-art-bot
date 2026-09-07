@@ -116,10 +116,13 @@ Collector için bir kerelik Keychain kurulumu, güvenli durum kontrolü ve Launc
 cd /Users/ufuk/Desktop/instagram-art-bot-push
 python3 scripts/install_insights_launchd.py configure-keychain
 python3 scripts/collect_insights.py --check-secrets
+python3 scripts/collect_insights.py --health-check
 python3 scripts/install_insights_launchd.py install
 ```
 
 `configure-keychain`, yalnız collector profilini yapılandırır ve her eksik değer için macOS Keychain’in gizli giriş prompt’unu açar; değer komut satırı argümanına, shell history’ye veya log’a girmez. Mevcut process environment değerleri interaktif çalıştırmada önceliklidir, fakat LaunchAgent yalnız `com.artfolio.instagram-insights.*` kayıtlarını yükler. Installer idempotent olarak `~/Library/LaunchAgents/com.artfolio.instagram-insights.plist` dosyasını günceller ve user LaunchAgent’ı yeniden yükler. Her login/reboot sonrasında ve en fazla saatte bir tek-seferlik collector çalışır. Dönen operasyon log’ları `~/Library/Logs/Artfolio/instagram-insights.log` altında 1 MiB + üç backup ile sınırlıdır.
+
+`--health-check` yalnız GET/read işlemleriyle collector profil bütünlüğünü, Instagram media read erişimini, R2 history read erişimini, bucket yapılandırmasını ve son yerel collector başarısının tazeliğini kontrol eder. Saatlik schedule için `HEALTHY <= 2h`, `STALE > 2h` ve `CRITICAL > 6h` eşikleri kullanılır. Read-only preflight, R2 `PutObject` yetkisini kanıtlamaz; yalnız gerekli write yapılandırmasının mevcut olduğunu raporlar. Aktif collector R2 key pair'i audit profilindeki key pair ile aynıysa rol ayrımı ihlali olarak `INVALID_ROLE_COLLISION` raporlanır ve normal collector koşusu R2/Instagram mutation sınırından önce fail-closed durur.
 
 Bir collector credential’ını daha sonra değiştirmek için `python3 scripts/install_insights_launchd.py configure-keychain --force` kullanılır. Log’da `Operation not permitted` görülürse LaunchAgent’ın kullandığı Python interpreter’a macOS Privacy & Security ayarlarından Desktop erişimi verilmelidir.
 

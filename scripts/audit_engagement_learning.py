@@ -86,6 +86,7 @@ def _render_text(
         f"publications_with_snapshots={audit.publications_with_snapshots}",
         f"snapshot_slot_publications={_slot_text(audit.snapshot_slot_publications)}",
         f"eligible_learning_observations={audit.eligible_learning_observations}",
+        f"usable_publications={audit.model.useful_carousel_observations}",
         f"excluded_by_reason={exclusions}",
         f"selected_snapshot_slots={_slot_text(audit.selected_snapshot_slot_counts)}",
         f"reach={reach_text}",
@@ -93,6 +94,8 @@ def _render_text(
         f"provisional_observations={audit.provisional_observations}",
         f"effective_observations={audit.effective_observations!r}",
         f"global_confidence={audit.global_confidence!r}",
+        "current_learned_influence="
+        f"{audit.model.config.mature_engagement_weight * audit.global_confidence!r}",
         f"invalid_loaded_snapshots={invalid_loaded_snapshots}",
     ]
     if verbose:
@@ -123,6 +126,7 @@ def _render_json(audit: EngagementAudit, invalid_loaded_snapshots: int) -> str:
         "publications_with_snapshots": audit.publications_with_snapshots,
         "snapshot_slot_publications": audit.snapshot_slot_publications,
         "eligible_learning_observations": audit.eligible_learning_observations,
+        "usable_publications": audit.model.useful_carousel_observations,
         "excluded_by_reason": audit.excluded_by_reason,
         "selected_snapshot_slot_counts": audit.selected_snapshot_slot_counts,
         "average_reach": audit.average_reach,
@@ -132,6 +136,9 @@ def _render_json(audit: EngagementAudit, invalid_loaded_snapshots: int) -> str:
         "provisional_observations": audit.provisional_observations,
         "effective_observations": audit.effective_observations,
         "global_confidence": audit.global_confidence,
+        "current_learned_influence": (
+            audit.model.config.mature_engagement_weight * audit.global_confidence
+        ),
         "invalid_loaded_snapshots": invalid_loaded_snapshots,
         "observations": [item.__dict__ for item in audit.observations],
     }

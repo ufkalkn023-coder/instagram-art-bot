@@ -1,5 +1,6 @@
 import plistlib
 import sys
+from datetime import datetime, timezone
 from pathlib import Path
 
 import pytest
@@ -16,6 +17,7 @@ from src.local_credentials import (
     format_credential_status,
     load_keychain_credentials,
 )
+from src.insights_health import freshness_state, inspect_collector_log
 
 
 def test_launchd_plist_is_hourly_absolute_and_contains_no_secret_values(tmp_path):
@@ -96,6 +98,61 @@ def test_collect_insights_explicitly_requests_collector_profile(monkeypatch, cap
     assert collect_insights.main() == 0
     assert requested_profiles == [COLLECTOR_PROFILE]
     assert "engagement-audit" not in capsys.readouterr().out
+
+
+def test_collector_health_log_tracks_success_and_consecutive_failures(tmp_path):
+    log_path = tmp_path / "collector.log"
+    log_path.write_text(
+        "2026-09-07 01:00:00,000 INFO __main__: \n"
+        "[insights] media_discovered=3\n"
+        "2026-09-07 02:00:00,000 ERROR __main__: Insights collector could not start: redacted\n"
+        "2026-09-07 03:00:00,000 ERROR __main__: Insights collector could not start: redacted\n",
+        encoding="utf-8",
+    )
+
+    health = inspect_collector_log(log_path, local_timezone=timezone.utc)
+
+    assert health.last_success == datetime(2026, 9, 7, 1, tzinfo=timezone.utc)
+    assert health.last_failure == datetime(2026, 9, 7, 3, tzinfo=timezone.utc)
+    assert health.consecutive_failures == 2
+    assert freshness_state(
+        health.last_success,
+        now=datetime(2026, 9, 7, 4, tzinfo=timezone.utc),
+        consecutive_failures=health.consecutive_failures,
+    ) == ("STALE", 3.0)
+
+
+def test_health_check_is_read_only_and_flags_role_collision(monkeypatch, tmp_path, capsys):
+    calls = []
+
+    class Storage:
+        def load_history(self):
+            calls.append("r2_get")
+            return {"publications": []}
+
+    class Client:
+        def discover_recent_media(self):
+            calls.append("instagram_get")
+
+    monkeypatch.setattr(collect_insights, "InsightsStorage", Storage)
+    monkeypatch.setattr(collect_insights, "InstagramInsightsClient", Client)
+    monkeypatch.setattr(
+        collect_insights,
+        "active_collector_r2_credential_matches_audit_profile",
+        lambda: True,
+    )
+    monkeypatch.setattr(collect_insights, "_launchagent_failure_count", lambda: None)
+
+    result = collect_insights._run_health_check(
+        {variable: True for variable in COLLECTOR_CREDENTIALS},
+        log_path=tmp_path / "missing.log",
+    )
+
+    output = capsys.readouterr().out
+    assert result == 1
+    assert calls == ["r2_get", "instagram_get"]
+    assert "INVALID_ROLE_COLLISION" in output
+    assert "Overall: CRITICAL" in output
 
 
 def test_launchagent_collector_path_cannot_consume_audit_profile():

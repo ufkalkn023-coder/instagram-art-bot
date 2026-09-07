@@ -135,6 +135,40 @@ def load_keychain_credentials(
     return status
 
 
+def active_r2_credential_matches_keychain_profile(
+    profile: CredentialProfileName,
+    environment: MutableMapping[str, str] | None = None,
+    *,
+    reader: Callable[..., str | None] = read_keychain_credential,
+) -> bool:
+    """Return whether the active R2 key pair duplicates another local profile.
+
+    This is a role-separation guard, not a fallback: values from ``profile`` are
+    compared in memory and are never copied into the active environment.
+    """
+    target = os.environ if environment is None else environment
+    names = (
+        "CLOUDFLARE_R2_ACCESS_KEY_ID",
+        "CLOUDFLARE_R2_SECRET_ACCESS_KEY",
+    )
+    active = tuple(target.get(name, "").strip() for name in names)
+    stored = tuple((reader(name, profile=profile) or "").strip() for name in names)
+    return all(active) and all(stored) and active == stored
+
+
+def active_collector_r2_credential_matches_audit_profile(
+    environment: MutableMapping[str, str] | None = None,
+    *,
+    reader: Callable[..., str | None] = read_keychain_credential,
+) -> bool:
+    """Detect unsafe local role reuse without exposing the audit profile to callers."""
+    return active_r2_credential_matches_keychain_profile(
+        ENGAGEMENT_AUDIT_PROFILE,
+        environment,
+        reader=reader,
+    )
+
+
 def format_credential_status(
     profile: CredentialProfileName,
     status: dict[str, bool],
