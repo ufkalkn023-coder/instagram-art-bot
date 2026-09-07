@@ -13,6 +13,7 @@ from botocore.exceptions import ClientError
 from pydantic import ValidationError
 from typing import Any, Callable, Dict, Iterable, Mapping, Sequence, Set, Tuple, TypeVar
 from src.carousel_themes import CarouselFormat, ThemeFamily, ThemeHistorySlot
+from src.engagement_features import EngagementFeatureVector
 from src.carousel_policy import (
     MAX_FEATURED_WORKS,
     MAX_TOTAL_SLIDES,
@@ -809,6 +810,8 @@ def _reservation_record(
     publication_metadata: Mapping[str, Any] | None = None,
 ) -> Dict[str, Any]:
     artwork_id = normalize_artwork_id(artwork_data["id"])
+    engagement_features = EngagementFeatureVector.from_candidate(artwork_data)
+    canonical_features = engagement_features.model_dump(exclude_none=True)
     record = {
         "id": artwork_id,
         "title": artwork_data.get("title"),
@@ -818,16 +821,19 @@ def _reservation_record(
         "visual_category": artwork_data.get("visual_category", "other"),
         "medium": artwork_data.get("medium", "other"),
         "period": artwork_data.get("period", "unknown"),
+        "period_or_style": engagement_features.period_or_style or "UNKNOWN",
+        "style_or_period": engagement_features.period_or_style or "UNKNOWN",
         "region": artwork_data.get("region", "unknown"),
-        "published_orientation": artwork_data.get(
-            "published_orientation", "UNKNOWN"
-        ),
-        "normalized_artist_key": artwork_data.get("normalized_artist_key"),
-        "semantic_family": artwork_data.get("semantic_family", "UNKNOWN"),
-        "visual_tone": artwork_data.get("visual_tone", "UNKNOWN"),
-        "visual_color_family": artwork_data.get(
-            "visual_color_family", "UNKNOWN"
-        ),
+        "artist_group": engagement_features.artist_group or "UNKNOWN",
+        "published_orientation": engagement_features.orientation or "UNKNOWN",
+        "orientation": engagement_features.orientation or "UNKNOWN",
+        "normalized_artist_key": engagement_features.artist_group,
+        "semantic_family": engagement_features.semantic_family or "UNKNOWN",
+        "visual_tone": engagement_features.luminance_bucket or "UNKNOWN",
+        "luminance_bucket": engagement_features.luminance_bucket or "UNKNOWN",
+        "visual_color_family": engagement_features.dominant_color or "UNKNOWN",
+        "dominant_color": engagement_features.dominant_color or "UNKNOWN",
+        "engagement_features": canonical_features,
         "quality_score": artwork_data.get("quality_score"),
         "measurement_coverage": artwork_data.get("measurement_coverage"),
         "selection_score": artwork_data.get("selection_score"),
@@ -838,6 +844,7 @@ def _reservation_record(
         "diversity_component": artwork_data.get("diversity_component"),
         "exploration_component": artwork_data.get("exploration_component"),
         "exploration_selected": artwork_data.get("exploration_selected"),
+        "engagement_applied": artwork_data.get("engagement_applied", False),
         "source": artwork_data.get("source"),
         "artwork_url": artwork_data.get("artwork_url"),
         "credit_line": artwork_data.get("credit_line"),

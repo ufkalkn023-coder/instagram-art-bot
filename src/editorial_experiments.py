@@ -10,7 +10,7 @@ from src.carousel_themes import CarouselFormat, CarouselThemeDefinition
 
 
 SELECTION_MODEL_VERSION = "carousel_learning_v1"
-ENGAGEMENT_MODEL_VERSION = "engagement_rates_v1"
+ENGAGEMENT_MODEL_VERSION = "engagement_rates_v2"
 
 
 class CoverVariant(str, Enum):

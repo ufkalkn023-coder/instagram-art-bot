@@ -371,6 +371,97 @@ def test_set_score_applies_bounded_learned_engagement_prediction():
     assert learned.total == baseline.total + 4.0
 
 
+def test_cold_start_learning_path_preserves_complete_optimizer_result(monkeypatch, tmp_path):
+    theme = _theme()
+
+    def run(model):
+        candidates = [
+            NormalizedArtwork(
+                source="aic",
+                source_id=str(index),
+                title=f"Reading Artwork {index}",
+                artist_name=f"Artist {index}",
+                creation_date=str(1600 + index * 25),
+                medium="Oil on canvas" if index % 2 else "Watercolor",
+                classification="Painting",
+                style_or_period="Impressionism",
+                museum_name=f"Museum {index % 4}",
+                image_url=f"https://images.example/{index}.jpg",
+                region="europe",
+                is_public_domain=True,
+                rights_status="CONFIRMED_PUBLIC_DOMAIN",
+            )
+            for index in range(12)
+        ]
+
+        class Adapter:
+            source_id = "test"
+
+            def fetch_candidates(self, **kwargs):
+                return candidates
+
+        result = art_fetcher.fetch_themed_artworks(
+            set(),
+            "reading art",
+            count=8,
+            color_tone="warm",
+            selection_run_seed=SelectionRunSeed("cold-start-parity", "test"),
+            theme_definition=theme,
+            return_acquisition=True,
+            acquisition_policy=ThemeAcquisitionPolicy(
+                max_primary_queries=1,
+                max_secondary_queries=0,
+                minimum_safe_pool=9,
+            ),
+            engagement_model=model,
+            engagement_context={
+                "carousel_theme": theme.id,
+                "previous_post_spacing_bucket": "3h_to_6h",
+            },
+            exploration_selected=False,
+            adapters=(Adapter(),),
+        )
+        return result
+
+    monkeypatch.setattr(art_fetcher.config, "DATA_DIR", str(tmp_path))
+    monkeypatch.setattr(art_fetcher, "calculate_quality_score", lambda *args: 90.0)
+    monkeypatch.setattr("src.theme_acquisition.calculate_quality_score", lambda *args: 90.0)
+
+    def download(url, output_path, **kwargs):
+        Path(output_path).write_bytes(b"validated test double")
+        return ImageValidationResult(
+            True, width=1600, height=1200, image_format="JPEG", reason="ok"
+        )
+
+    monkeypatch.setattr(
+        art_fetcher, "validate_and_download_image_with_metadata", download
+    )
+
+    disabled = run(None)
+    cold_start = run(EngagementModel.cold_start())
+
+    assert [artwork["id"] for artwork in cold_start.artworks] == [
+        artwork["id"] for artwork in disabled.artworks
+    ]
+    assert [artwork["selection_score"] for artwork in cold_start.artworks] == [
+        artwork["selection_score"] for artwork in disabled.artworks
+    ]
+    assert cold_start.set_optimization.breakdown == disabled.set_optimization.breakdown
+    assert cold_start.set_optimization.set_score == disabled.set_optimization.set_score
+    assert all("learned_score" not in artwork for artwork in cold_start.artworks)
+    assert all("engagement_applied" not in artwork for artwork in cold_start.artworks)
+
+
+def test_learned_score_without_explicit_application_does_not_switch_optimizer_branch():
+    theme = _theme()
+    baseline = _artwork(1)
+    stale_sentinel = {**baseline, "learned_score": 50.0}
+
+    assert build_selection_features(stale_sentinel, theme).individual_strength == (
+        build_selection_features(baseline, theme).individual_strength
+    )
+
+
 def test_structured_fetch_validates_a_finalist_pool_then_returns_typed_set_result(
     monkeypatch, tmp_path
 ):

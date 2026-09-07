@@ -2,6 +2,7 @@ from datetime import datetime
 from typing import Literal, Optional
 
 from pydantic import BaseModel, Field, field_validator, model_validator
+from src.engagement_features import EngagementFeatureVector, SpacingBucket
 from src.region import REGION_UNKNOWN, normalize_region
 
 
@@ -35,6 +36,8 @@ class CarouselExperimentMetadata(BaseModel):
     diversity_component: float = Field(..., ge=-10, le=10)
     exploration_component: float = Field(..., ge=0, le=100)
     preceding_post_distance_minutes: Optional[float] = Field(default=None, ge=0)
+    previous_post_spacing_bucket: Optional[SpacingBucket] = None
+    engagement_features: Optional[EngagementFeatureVector] = None
 
 
 def normalize_artwork_id(artwork_id: str) -> str:
@@ -91,6 +94,8 @@ class PublicationRecord(BaseModel):
     diversity_component: Optional[float] = Field(default=None, ge=-10, le=10)
     exploration_component: Optional[float] = Field(default=None, ge=0, le=100)
     preceding_post_distance_minutes: Optional[float] = Field(default=None, ge=0)
+    previous_post_spacing_bucket: Optional[SpacingBucket] = None
+    engagement_features: Optional[EngagementFeatureVector] = None
 
     @field_validator("id", "media_id", "posted_at")
     @classmethod

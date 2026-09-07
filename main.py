@@ -47,6 +47,10 @@ from src.editorial_experiments import (
     canonical_publish_slot,
     select_caption_hook_type,
 )
+from src.engagement_features import (
+    EngagementFeatureVector,
+    previous_post_spacing_bucket,
+)
 from src.engagement_learning import EngagementModel, analyze_engagement_learning
 from src.insights_storage import InsightsStorage
 from src.carousel_themes import (
@@ -298,18 +302,26 @@ def _load_engagement_model() -> EngagementModel:
 
 def _preceding_post_distance_minutes(now: datetime) -> float | None:
     try:
-        publications = history_tracker.get_recent_publications(limit=1)
+        publications = history_tracker.get_recent_publications()
     except Exception as error:
         logger.warning(
             "preceding_post_distance_unavailable error=%s",
             type(error).__name__,
         )
         return None
-    if not publications:
+    previous_carousel = next(
+        (
+            publication
+            for publication in reversed(publications)
+            if publication.get("type") == "carousel"
+        ),
+        None,
+    )
+    if previous_carousel is None:
         return None
     try:
         posted_at = datetime.fromisoformat(
-            str(publications[-1]["posted_at"]).replace("Z", "+00:00")
+            str(previous_carousel["posted_at"]).replace("Z", "+00:00")
         )
     except (KeyError, TypeError, ValueError):
         return None
@@ -326,6 +338,8 @@ def run_carousel_post(args):
     selection_run_seed = art_fetcher.resolve_selection_run_seed()
     run_time = datetime.now(timezone.utc)
     publish_slot = canonical_publish_slot(run_time)
+    preceding_distance = _preceding_post_distance_minutes(run_time)
+    spacing_bucket = previous_post_spacing_bucket(preceding_distance)
     engagement_model = _load_engagement_model()
     exploration_selected = engagement_model.exploration_selected(
         selection_run_seed.value
@@ -334,6 +348,8 @@ def run_carousel_post(args):
         "publish_slot": publish_slot,
         "publication_weekday": run_time.strftime("%A").casefold(),
         "cover_variant": CoverVariant.EDITORIAL.value,
+        "preceding_post_distance_minutes": preceding_distance,
+        "previous_post_spacing_bucket": spacing_bucket,
     }
     theme_history = history_tracker.get_recent_carousel_theme_history()
     theme_registry = get_default_theme_registry()
@@ -835,7 +851,9 @@ def run_carousel_post(args):
         exploration_selected=exploration_selected,
         diversity_component=diversity_adjustment,
     )
-    preceding_distance = _preceding_post_distance_minutes(run_time)
+    canonical_publication_features = EngagementFeatureVector.from_context(
+        final_engagement_context
+    )
     publication_metadata = {
         "selection_model_version": SELECTION_MODEL_VERSION,
         "engagement_model_version": ENGAGEMENT_MODEL_VERSION,
@@ -852,8 +870,14 @@ def run_carousel_post(args):
         "engagement_component": selection_components.engagement_component,
         "diversity_component": selection_components.diversity_component,
         "exploration_component": selection_components.exploration_component,
+        "engagement_features": canonical_publication_features.model_dump(
+            exclude_none=True
+        ),
         **(
-            {"preceding_post_distance_minutes": round(preceding_distance, 3)}
+            {
+                "preceding_post_distance_minutes": round(preceding_distance, 3),
+                "previous_post_spacing_bucket": spacing_bucket,
+            }
             if preceding_distance is not None
             else {}
         ),

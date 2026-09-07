@@ -13,6 +13,10 @@ from src.engagement_learning import (
     candidate_feature_keys,
     select_mature_snapshot,
 )
+from src.engagement_features import (
+    EngagementFeatureVector,
+    previous_post_spacing_bucket,
+)
 from src.editorial_experiments import canonical_publish_slot
 
 
@@ -140,7 +144,7 @@ def test_no_insights_empty_history_and_legacy_publication_degrade_safely():
     model = build_engagement_model(history, snapshots, now=NOW)
 
     assert model.useful_publications == 1
-    assert model.version == "engagement_rates_v1"
+    assert model.version == "engagement_rates_v2"
     assert not any(key.startswith("theme:") for key in model.feature_estimates)
 
 
@@ -358,6 +362,91 @@ def test_cold_start_blend_is_quality_led_and_learning_increases_gradually():
     assert components.final_score == 82
     assert components.engagement_component == 0
     assert components.quality_component == 82
+
+
+def test_canonical_context_uses_the_same_persisted_spacing_bucket_for_train_and_serve():
+    assert previous_post_spacing_bucket(300) == "3h_to_6h"
+    serving = EngagementFeatureVector.from_context(
+        {
+            "carousel_theme": "winter_light",
+            "preceding_post_distance_minutes": 300,
+        }
+    )
+    persisted = EngagementFeatureVector.from_context(
+        {"engagement_features": serving.model_dump(exclude_none=True)}
+    )
+
+    assert persisted == serving
+    assert "previous_post_spacing_bucket:3h_to_6h" in serving.context_feature_keys()
+
+
+def test_serving_spacing_uses_previous_carousel_and_is_available_before_selection(
+    monkeypatch,
+):
+    monkeypatch.setattr(
+        main.history_tracker,
+        "get_recent_publications",
+        lambda: [
+            {
+                "type": "carousel",
+                "posted_at": (NOW - timedelta(hours=5)).isoformat(),
+            },
+            {
+                "type": "single",
+                "posted_at": (NOW - timedelta(hours=1)).isoformat(),
+            },
+        ],
+    )
+
+    minutes = main._preceding_post_distance_minutes(NOW)
+    selection_context = EngagementFeatureVector.from_context(
+        {
+            "preceding_post_distance_minutes": minutes,
+            "previous_post_spacing_bucket": previous_post_spacing_bucket(minutes),
+        }
+    )
+
+    assert minutes == 300
+    assert selection_context.previous_post_spacing_bucket == "3h_to_6h"
+
+
+def test_training_prefers_persisted_planned_spacing_over_later_publish_timestamp():
+    history, snapshots = _dataset(
+        [
+            {"posted_at": NOW - timedelta(days=2)},
+            {"posted_at": NOW - timedelta(days=1)},
+        ]
+    )
+    history["publications"][1].update(
+        {
+            "preceding_post_distance_minutes": 300,
+            "previous_post_spacing_bucket": "3h_to_6h",
+        }
+    )
+
+    model = build_engagement_model(history, snapshots, now=NOW)
+
+    assert "previous_post_spacing_bucket:3h_to_6h" in model.feature_estimates
+    assert "previous_post_spacing_bucket:12h_plus" not in model.feature_estimates
+
+
+def test_malformed_or_missing_canonical_features_fail_soft():
+    vector = EngagementFeatureVector.from_candidate(
+        {
+            "artist": "Unknown",
+            "semantic_family": "UNKNOWN",
+            "visual_color_family": None,
+        }
+    )
+    context = EngagementFeatureVector.from_context(
+        {
+            "featured_count": "not-a-count",
+            "previous_post_spacing_bucket": "not-a-bucket",
+        }
+    )
+
+    assert vector.candidate_feature_keys() == ()
+    assert context.context_feature_keys() == ()
 
 
 def test_malformed_history_unknown_features_and_multiple_artists_are_safe():

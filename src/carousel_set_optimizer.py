@@ -68,7 +68,7 @@ class ArtworkSelectionFeatures:
 
     @property
     def individual_strength(self) -> float:
-        if "learned_score" in self.artwork:
+        if self.artwork.get("engagement_applied") is True:
             return round(max(0.0, min(100.0, self.candidate_score)), 4)
         return round(
             0.70 * self.theme_relevance

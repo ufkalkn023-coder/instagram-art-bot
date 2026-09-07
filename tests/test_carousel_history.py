@@ -3,7 +3,17 @@ from datetime import datetime, timezone
 import pytest
 
 from src import history_tracker
+from src.artwork_visual_features import (
+    ArtworkOrientation,
+    ArtworkVisualFeatures,
+    ContrastBucket,
+    DominantColorFamily,
+    LuminanceBucket,
+)
 from src.carousel_themes import CarouselFormat, ThemeFamily
+from src.engagement_features import EngagementFeatureVector
+from src.engagement_learning import candidate_feature_keys
+from src.models import PublicationRecord
 
 
 def _artwork(identifier):
@@ -25,7 +35,7 @@ def _publication():
 def _experiment_metadata(featured_count=8):
     return {
         "selection_model_version": "carousel_learning_v1",
-        "engagement_model_version": "engagement_rates_v1",
+        "engagement_model_version": "engagement_rates_v2",
         "carousel_theme": "winter_light",
         "carousel_format": "LIGHT_STUDY",
         "featured_count": featured_count,
@@ -40,6 +50,17 @@ def _experiment_metadata(featured_count=8):
         "diversity_component": -1.0,
         "exploration_component": 0.0,
         "preceding_post_distance_minutes": 300.0,
+        "previous_post_spacing_bucket": "3h_to_6h",
+        "engagement_features": {
+            "theme": "winter_light",
+            "format": "LIGHT_STUDY",
+            "featured_count": featured_count,
+            "cover_variant": "editorial",
+            "caption_hook": "curiosity",
+            "publish_slot": "slot_2",
+            "weekday": "monday",
+            "previous_post_spacing_bucket": "3h_to_6h",
+        },
     }
 
 
@@ -68,6 +89,65 @@ def test_carousel_reservation_atomically_records_cover_and_featured_roles(monkey
     assert {record["cover_artwork_id"] for record in records} == {cover["id"]}
     assert all(record["featured_artwork_ids"] == [art["id"] for art in featured] for record in records)
     assert history_tracker.get_posted_ids() == {cover["id"], *[art["id"] for art in featured]}
+
+
+def test_candidate_features_round_trip_through_history_for_training(monkeypatch):
+    history, _ = _history_backend(monkeypatch)
+    cover, featured = _publication()
+    visual = ArtworkVisualFeatures(
+        width=1200,
+        height=800,
+        aspect_ratio=1.5,
+        orientation=ArtworkOrientation.LANDSCAPE,
+        mean_luminance=122.0,
+        luminance_bucket=LuminanceBucket.MID,
+        mean_saturation=0.5,
+        dominant_color_family=DominantColorFamily.BLUE,
+        contrast_bucket=ContrastBucket.MEDIUM,
+    )
+    candidate = {
+        **featured[0],
+        "artist": "Claude Monet",
+        "artist_group": "Impressionist circle",
+        "source": "aic",
+        "style_or_period": "Impressionism",
+        "visual_category": "landscape",
+        "visual_features": visual,
+    }
+    featured[0] = candidate
+
+    history_tracker.reserve_carousel(cover, featured)
+
+    record = history["posted_artworks"][1]
+    serving = EngagementFeatureVector.from_candidate(candidate)
+    training = EngagementFeatureVector.from_candidate(record)
+    assert training == serving
+    assert candidate_feature_keys(record) == candidate_feature_keys(candidate)
+    assert record["period_or_style"] == "Impressionism"
+    assert record["semantic_family"] == "landscape"
+    assert record["dominant_color"] == "BLUE"
+    assert record["luminance_bucket"] == "MID"
+    assert record["orientation"] == "LANDSCAPE"
+
+
+def test_legacy_publication_and_artwork_without_canonical_features_remain_valid():
+    publication = PublicationRecord.model_validate(
+        {
+            "id": "legacy-publication",
+            "type": "carousel",
+            "media_id": "legacy-media",
+            "artwork_ids": ["cover", "featured"],
+            "posted_at": "2026-08-01T12:00:00Z",
+        }
+    )
+    legacy = EngagementFeatureVector.from_candidate(
+        {"id": "aic_legacy", "artist": "Unknown Artist", "period": "unknown"}
+    )
+
+    assert publication.engagement_features is None
+    assert legacy.artist is None
+    assert legacy.period_or_style is None
+    assert legacy.candidate_feature_keys() == ("source:aic",)
 
 
 @pytest.mark.parametrize("featured_count", [5, 6, 8])

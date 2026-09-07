@@ -13,11 +13,12 @@ from collections import Counter, defaultdict
 from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
+from src.engagement_features import EngagementFeatureVector
 from src.insights_storage import parse_aware_timestamp
 from src.insights_snapshot import learning_snapshot_components
 
 
-MODEL_VERSION = "engagement_rates_v1"
+MODEL_VERSION = "engagement_rates_v2"
 MATURE_SNAPSHOT_PREFERENCE = (72, 168, 24)
 SNAPSHOT_CONFIDENCE = {24: 0.45, 72: 1.0, 168: 1.0}
 OUTCOME_WEIGHTS = {
@@ -216,6 +217,10 @@ class EngagementModel:
         sample = int.from_bytes(hashlib.sha256(material).digest()[:8], "big") / 2**64
         return sample < self.config.exploration_rate
 
+    def can_influence_selection(self, *, exploration_selected: bool) -> bool:
+        """Return whether learning or explicit exploration may change a baseline."""
+        return self.confidence > 0 or exploration_selected
+
     def blend_candidate_score(
         self,
         *,
@@ -310,60 +315,12 @@ def _stable_unit(seed: str, namespace: str) -> float:
     return int.from_bytes(hashlib.sha256(material).digest()[:8], "big") / 2**64
 
 
-def _known(value: object) -> str | None:
-    normalized = " ".join(str(value or "").split()).casefold()
-    return normalized if normalized not in {"", "unknown", "none", "n/a"} else None
-
-
-def _feature(kind: str, value: object) -> str | None:
-    normalized = _known(value)
-    return f"{kind}:{normalized}" if normalized else None
-
-
-def _source_from_artwork(artwork: Mapping[str, object]) -> str | None:
-    explicit = _known(artwork.get("source"))
-    if explicit:
-        return explicit
-    canonical_id = artwork.get("id")
-    if isinstance(canonical_id, str) and "_" in canonical_id:
-        return canonical_id.split("_", 1)[0].casefold()
-    return None
-
-
 def candidate_feature_keys(artwork: Mapping[str, object]) -> tuple[str, ...]:
-    visual = artwork.get("visual_features")
-    visual_color = artwork.get("visual_color_family")
-    visual_luminance = artwork.get("visual_tone")
-    if visual is not None:
-        visual_color = getattr(getattr(visual, "dominant_color_family", None), "value", visual_color)
-        visual_luminance = getattr(getattr(visual, "luminance_bucket", None), "value", visual_luminance)
-    values = (
-        _feature("artist", artwork.get("artist", artwork.get("artist_name"))),
-        _feature("artist_group", artwork.get("artist_group")),
-        _feature("region", artwork.get("region")),
-        _feature("style_period", artwork.get("style_or_period", artwork.get("period"))),
-        _feature("semantic_family", artwork.get("semantic_family", artwork.get("visual_category"))),
-        _feature("museum", artwork.get("museum", artwork.get("museum_name"))),
-        _feature("source", _source_from_artwork(artwork)),
-        _feature("visual_color", visual_color),
-        _feature("visual_luminance", visual_luminance),
-        _feature("orientation", artwork.get("published_orientation")),
-    )
-    return tuple(dict.fromkeys(value for value in values if value))
+    return EngagementFeatureVector.from_candidate(artwork).candidate_feature_keys()
 
 
 def context_feature_keys(context: Mapping[str, object]) -> tuple[str, ...]:
-    values = (
-        _feature("theme", context.get("carousel_theme", context.get("theme"))),
-        _feature("format", context.get("carousel_format")),
-        _feature("featured_count", context.get("featured_count")),
-        _feature("cover_variant", context.get("cover_variant")),
-        _feature("caption_hook", context.get("caption_hook_type")),
-        _feature("publish_slot", context.get("publish_slot")),
-        _feature("weekday", context.get("publication_weekday")),
-        _feature("preceding_distance", context.get("preceding_distance_bucket")),
-    )
-    return tuple(value for value in values if value)
+    return EngagementFeatureVector.from_context(context).context_feature_keys()
 
 
 def select_mature_snapshot(snapshots: Sequence[Mapping[str, object]]) -> Mapping[str, object] | None:
@@ -395,25 +352,22 @@ def _percentile(values: Sequence[float], fraction: float) -> float:
     return ordered[lower] + (ordered[upper] - ordered[lower]) * weight
 
 
-def _preceding_distance_bucket(minutes: float | None) -> str | None:
-    if minutes is None or minutes < 0:
-        return None
-    if minutes < 180:
-        return "under_3h"
-    if minutes < 360:
-        return "3h_to_6h"
-    if minutes < 720:
-        return "6h_to_12h"
-    return "12h_plus"
-
-
 def _publication_feature_keys(
     publication: Mapping[str, object],
     artworks: Sequence[Mapping[str, object]],
     posted_at: datetime,
     preceding_minutes: float | None,
 ) -> tuple[str, ...]:
+    recorded_preceding = publication.get("preceding_post_distance_minutes")
+    preceding_value = (
+        recorded_preceding
+        if isinstance(recorded_preceding, (int, float))
+        and not isinstance(recorded_preceding, bool)
+        and recorded_preceding >= 0
+        else preceding_minutes
+    )
     context = {
+        "engagement_features": publication.get("engagement_features"),
         "carousel_theme": publication.get("carousel_theme", publication.get("theme")),
         "carousel_format": publication.get("carousel_format"),
         "featured_count": publication.get("featured_count") or max(0, len(artworks) - 1),
@@ -421,7 +375,10 @@ def _publication_feature_keys(
         "caption_hook_type": publication.get("caption_hook_type"),
         "publish_slot": publication.get("publish_slot"),
         "publication_weekday": posted_at.strftime("%A").casefold(),
-        "preceding_distance_bucket": _preceding_distance_bucket(preceding_minutes),
+        "previous_post_spacing_bucket": publication.get(
+            "previous_post_spacing_bucket"
+        ),
+        "preceding_post_distance_minutes": preceding_value,
     }
     keys = list(context_feature_keys(context))
     for artwork in artworks:

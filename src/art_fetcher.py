@@ -1212,19 +1212,16 @@ def _select_acquired_theme_artworks(
             candidate_dict.pop("theme_relevance_score", None)
             candidate_dict.pop("theme_relevance_breakdown", None)
         candidate_dict["visual_features"] = visual_features
-        if engagement_model is not None:
+        if engagement_model is not None and engagement_model.can_influence_selection(
+            exploration_selected=exploration_selected
+        ):
             prediction = engagement_model.score_candidate(
                 candidate_dict,
                 engagement_context or {},
             )
-            quality_editorial = (
-                float(candidate_dict.get("quality_score") or 0.0)
-                if not acquisition.policy.require_theme_relevance
-                else 0.65 * float(candidate_dict.get("theme_relevance_score") or 0.0)
-                + 0.35 * float(candidate_dict.get("quality_score") or 0.0)
-            )
+            heuristic_score = float(candidate_dict.get("selection_score") or 0.0)
             components = engagement_model.blend_candidate_score(
-                quality_editorial_score=quality_editorial,
+                quality_editorial_score=heuristic_score,
                 prediction=prediction,
                 exploration_selected=exploration_selected,
             )
@@ -1238,6 +1235,7 @@ def _select_acquired_theme_artworks(
                     "diversity_component": components.diversity_component,
                     "exploration_component": components.exploration_component,
                     "exploration_selected": exploration_selected,
+                    "engagement_applied": True,
                 }
             )
         validated_artworks.append(candidate_dict)
