@@ -3,6 +3,8 @@
 from collections.abc import Mapping
 import os
 
+from src.rights_policy import RIGHTS_POLICY_ENV, RightsPolicyMode, resolve_rights_policy
+
 
 REQUIRED_PRODUCTION_VARIABLES = (
     "INSTAGRAM_ACCOUNT_ID",
@@ -42,9 +44,21 @@ def validate_production_configuration(
     missing = [
         name for name in REQUIRED_PRODUCTION_VARIABLES if not environment.get(name, "").strip()
     ]
+    if not environment.get(RIGHTS_POLICY_ENV, "").strip():
+        missing.append(RIGHTS_POLICY_ENV)
     if missing:
         raise ProductionConfigurationError(
             "Missing required production configuration: " + ", ".join(missing)
+        )
+
+    try:
+        rights_policy = resolve_rights_policy(environment)
+    except ValueError as error:
+        raise ProductionConfigurationError(str(error)) from error
+    if rights_policy is not RightsPolicyMode.STRICT_PUBLIC_DOMAIN:
+        raise ProductionConfigurationError(
+            f"{RIGHTS_POLICY_ENV} must be "
+            f"{RightsPolicyMode.STRICT_PUBLIC_DOMAIN.value} for production publishing"
         )
 
     optional_status: dict[str, str] = {}

@@ -57,6 +57,7 @@ jobs:
 
       - name: Validate production configuration
         env:
+          ARTFOLIO_RIGHTS_POLICY: strict_public_domain
           INSTAGRAM_ACCOUNT_ID: ${{ secrets.INSTAGRAM_ACCOUNT_ID }}
           INSTAGRAM_ACCESS_TOKEN: ${{ secrets.INSTAGRAM_ACCESS_TOKEN }}
           CLOUDFLARE_R2_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_R2_ACCOUNT_ID }}
@@ -68,6 +69,7 @@ jobs:
 
       - name: Fetch artwork, process image, and post to Instagram
         env:
+          ARTFOLIO_RIGHTS_POLICY: strict_public_domain
           INSTAGRAM_ACCOUNT_ID: ${{ secrets.INSTAGRAM_ACCOUNT_ID }}
           INSTAGRAM_ACCESS_TOKEN: ${{ secrets.INSTAGRAM_ACCESS_TOKEN }}
           GOOGLE_GEMINI_API_KEY: ${{ secrets.GOOGLE_GEMINI_API_KEY }}

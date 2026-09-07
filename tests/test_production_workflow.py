@@ -20,6 +20,8 @@ EXPECTED_PRODUCTION_SECRET_NAMES = {
     "CLOUDFLARE_R2_BUCKET_NAME",
     "CLOUDFLARE_R2_PUBLIC_URL",
 }
+RIGHTS_POLICY_VARIABLE = "ARTFOLIO_RIGHTS_POLICY"
+PRODUCTION_RIGHTS_POLICY = "strict_public_domain"
 
 
 def _workflow() -> dict:
@@ -117,15 +119,19 @@ def test_production_workflow_retains_operational_safety_gates():
     )
 
 
-def test_production_workflow_secret_names_are_unchanged_and_keychain_independent():
+def test_production_workflow_sets_strict_rights_policy_and_keeps_secrets_unchanged():
     steps = _steps_by_name()
     validation_environment = steps["Validate production configuration"]["env"]
     publish_environment = steps[
         "Fetch artwork, process image, and post to Instagram"
     ]["env"]
 
-    assert set(validation_environment) == EXPECTED_PRODUCTION_SECRET_NAMES
+    assert set(validation_environment) == EXPECTED_PRODUCTION_SECRET_NAMES | {
+        RIGHTS_POLICY_VARIABLE
+    }
     assert EXPECTED_PRODUCTION_SECRET_NAMES.issubset(publish_environment)
+    assert validation_environment[RIGHTS_POLICY_VARIABLE] == PRODUCTION_RIGHTS_POLICY
+    assert publish_environment[RIGHTS_POLICY_VARIABLE] == PRODUCTION_RIGHTS_POLICY
     for variable in EXPECTED_PRODUCTION_SECRET_NAMES:
         expected = "${{ secrets." + variable + " }}"
         assert validation_environment[variable] == expected

@@ -6,7 +6,7 @@ Bu proje, müze API'lerinden gelen eserleri hak bilgisini koruyarak seçer, güv
 
 - Art Institute of Chicago, Metropolitan Museum of Art, Cleveland Museum of Art,
   Rijksmuseum, Smithsonian Institution ve Europeana kaynaklarından eser adayları toplar.
-- Varsayılan `ARTFOLIO_RIGHTS_POLICY=permissive` modunda public-domain durumunu hard gate yapmaz; `is_public_domain`, `rights_status`, `rights_text`, `copyright_notice`, `credit_line`, source ve eser URL'sini telemetry/attribution olarak korur. `strict_public_domain` önceki konservatif uygunluğu merkezi olarak geri getirir.
+- Production publish yalnız açıkça ayarlanmış `ARTFOLIO_RIGHTS_POLICY=strict_public_domain` ile başlar; yalnız doğrulanmış public-domain/open-access eserleri kabul eder. Production dışı araçlarda geriye uyumluluk için env verilmezse `permissive` davranış korunur. Her iki mod da `is_public_domain`, `rights_status`, `rights_text`, `copyright_notice`, `credit_line`, source ve eser URL'sini telemetry/attribution olarak korur.
 - Duplicate, hak-policy, kalite ve tema uyumluluğu filtrelerinden geçen görselleri güvenli biçimde indirir; HTTPS-only erişim, private-network/SSRF koruması, redirect yeniden doğrulaması, sınırlı indirme ve Pillow doğrulaması uygular.
 - Chicago kaynağında yalnız açıkça public-domain eserler 1686px IIIF türevini kullanır; diğerleri API'nin meşru 843px analysis türevinde kalır. AIC IIIF istekleri süreç içinde tekilleştirilip yaklaşık saniyede bir isteğe sınırlandırılır ve `AIC-User-Agent` ile tanımlanır.
 - Carousel featured eserlerini ortak 1080×1350 (4:5) editorial canvas üzerinde, tam eseri contain ederek ve tek kez compositing yaparak gösterir. Boş alan carousel boyunca ortak deterministic nötr gallery field'dır; crop, stretch, blurred clone veya metadata overlay yoktur.
@@ -304,7 +304,7 @@ saklayarak görünen iddiaların seçilen setle karşılaştırılmasını sağl
 | `INSTAGRAM_ACCOUNT_ID` | Production publish için gerekli | Instagram Business/Creator account ID |
 | `INSTAGRAM_ACCESS_TOKEN` | Production publish için gerekli | Meta Graph API erişim token’ı |
 | `INSTAGRAM_GRAPH_API_VERSION` | Opsiyonel | Ortak Graph API sürümünü override eder (varsayılan `v22.0`) |
-| `ARTFOLIO_RIGHTS_POLICY` | Opsiyonel | `permissive` (varsayılan) veya `strict_public_domain` |
+| `ARTFOLIO_RIGHTS_POLICY` | Production publish için gerekli | Production'da yalnız `strict_public_domain`; production dışı çağrılarda env yoksa geriye uyumlu `permissive` default |
 | `ARTFOLIO_REELS_ROOT` | Opsiyonel | Varsayılan sibling konumunda değilse Artfolio Reels repo yolu |
 | `CLOUDFLARE_R2_ACCOUNT_ID` | Production history ve R2 media için gerekli | R2 account ID |
 | `CLOUDFLARE_R2_ACCESS_KEY_ID` | Production history ve R2 media için gerekli | R2 access key |

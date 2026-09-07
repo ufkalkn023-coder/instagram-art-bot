@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+from collections.abc import Mapping
 from enum import Enum
 from typing import Protocol
 
@@ -23,9 +24,9 @@ class RightsMetadata(Protocol):
 
 
 def resolve_rights_policy(
-    environment: dict[str, str] | None = None,
+    environment: Mapping[str, str] | None = None,
 ) -> RightsPolicyMode:
-    """Return the configured feed policy; production defaults to permissive."""
+    """Return the configured policy; non-production callers default to permissive."""
     values = os.environ if environment is None else environment
     configured = values.get(RIGHTS_POLICY_ENV, RightsPolicyMode.PERMISSIVE.value)
     try:

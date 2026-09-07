@@ -9,13 +9,20 @@ import main
 from src import gemini_ai, history_tracker, image_processor, instagram_poster
 from src.production_config import (
     OPTIONAL_INTEGRATION_VARIABLES,
+    ProductionConfigurationError,
     REQUIRED_PRODUCTION_VARIABLES,
+    validate_production_configuration,
 )
+from src.rights_policy import RIGHTS_POLICY_ENV, RightsPolicyMode
 
 
 def _set_required_environment(monkeypatch):
     for name in REQUIRED_PRODUCTION_VARIABLES:
         monkeypatch.setenv(name, "configured")
+    monkeypatch.setenv(
+        RIGHTS_POLICY_ENV,
+        RightsPolicyMode.STRICT_PUBLIC_DOMAIN.value,
+    )
 
 
 def _clear_environment(monkeypatch):
@@ -24,6 +31,14 @@ def _clear_environment(monkeypatch):
     for names in OPTIONAL_INTEGRATION_VARIABLES.values():
         for name in names:
             monkeypatch.delenv(name, raising=False)
+    monkeypatch.delenv(RIGHTS_POLICY_ENV, raising=False)
+
+
+def _production_environment() -> dict[str, str]:
+    return {
+        **{name: "configured" for name in REQUIRED_PRODUCTION_VARIABLES},
+        RIGHTS_POLICY_ENV: RightsPolicyMode.STRICT_PUBLIC_DOMAIN.value,
+    }
 
 
 def _mock_reconciliation(monkeypatch, calls=None):
@@ -59,6 +74,31 @@ def test_dry_run_main_does_not_require_production_credentials(monkeypatch):
 
     assert main.main(["--dry-run"]) == 0
     assert calls == [True]
+
+
+def test_strict_public_domain_policy_passes_production_validation():
+    assert validate_production_configuration(_production_environment()) == {
+        "gemini": "disabled"
+    }
+
+
+def test_missing_rights_policy_fails_production_validation():
+    environment = _production_environment()
+    del environment[RIGHTS_POLICY_ENV]
+
+    with pytest.raises(ProductionConfigurationError, match=RIGHTS_POLICY_ENV):
+        validate_production_configuration(environment)
+
+
+def test_permissive_rights_policy_fails_production_validation():
+    environment = _production_environment()
+    environment[RIGHTS_POLICY_ENV] = RightsPolicyMode.PERMISSIVE.value
+
+    with pytest.raises(
+        ProductionConfigurationError,
+        match="strict_public_domain for production publishing",
+    ):
+        validate_production_configuration(environment)
 
 
 def test_missing_required_configuration_fails_before_production_path(
