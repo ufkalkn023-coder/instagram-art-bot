@@ -100,7 +100,7 @@ def test_stale_pending_expires_without_instagram_lookup(monkeypatch):
 
 
 @pytest.mark.parametrize("featured_count", [5, 6, 8])
-def test_parent_published_status_atomically_confirms_whole_carousel(
+def test_parent_published_status_without_media_identity_keeps_whole_carousel_ambiguous(
     monkeypatch, featured_count
 ):
     records = _carousel(featured_count=featured_count)
@@ -117,9 +117,9 @@ def test_parent_published_status_atomically_confirms_whole_carousel(
     )
 
     assert calls == [("parent-1", "token")]
-    assert {record["status"] for record in records} == {"PUBLISHED"}
+    assert {record["status"] for record in records} == {"AMBIGUOUS"}
     assert len(uploads) == 1
-    assert summary.confirmed_published == 1
+    assert summary.still_ambiguous == 1
 
 
 @pytest.mark.parametrize("featured_count", [5, 6, 8])
@@ -232,7 +232,7 @@ def test_confirmed_not_published_cleans_only_after_expired_cas_persists(
     assert summary.cleanup_failures == 0
 
 
-def test_reconciliation_published_ambiguous_and_error_outcomes_retain_media(
+def test_reconciliation_status_only_published_ambiguous_and_error_outcomes_retain_media(
     monkeypatch,
 ):
     records = [
@@ -276,7 +276,7 @@ def test_reconciliation_published_ambiguous_and_error_outcomes_retain_media(
         access_token="token", now=NOW
     )
 
-    assert records[0]["status"] == "PUBLISHED"
+    assert records[0]["status"] == "AMBIGUOUS"
     assert records[1]["status"] == "AMBIGUOUS"
     assert records[2]["status"] == "PUBLISHING"
     assert summary.cleanup_inspected == 0
@@ -393,9 +393,9 @@ def test_reconciliation_error_preserves_safe_state_and_scan_continues(monkeypatc
     )
 
     assert first["status"] == "PUBLISHING"
-    assert second["status"] == "PUBLISHED"
+    assert second["status"] == "AMBIGUOUS"
     assert summary.errors == 1
-    assert summary.confirmed_published == 1
+    assert summary.still_ambiguous == 1
 
 
 def test_inconsistent_carousel_container_metadata_is_not_reconciled(monkeypatch):
@@ -438,53 +438,41 @@ def test_durable_publish_response_confirms_without_network_call(monkeypatch):
     assert summary.confirmed_published == 1
 
 
-def test_status_only_reconciliation_remains_readable_without_inventing_media_id(
-    monkeypatch,
-):
-    existing = {
-        "id": "aic_existing",
-        "publication_id": "existing-publication",
-        "publication_type": "single",
-        "status": "PUBLISHED",
-        "media_id": "media-existing",
-    }
+def test_published_container_without_media_identity_stays_ambiguous(monkeypatch):
     reconciled = _single()
-    history = {
-        "posted_artworks": [existing, reconciled],
-        "publications": [
-            {
-                "id": "existing-publication",
-                "type": "single",
-                "media_id": "media-existing",
-                "artwork_ids": ["aic_existing"],
-                "posted_at": "2026-08-25T12:00:00Z",
-            }
-        ],
-        "grid_publication_count": 1,
-    }
-    monkeypatch.setattr(
-        history_tracker, "load_history_with_etag", lambda: (history, '"etag"')
-    )
-    monkeypatch.setattr(history_tracker, "_upload_history", lambda *args: None)
+    assert "media_id" not in reconciled
+    assert "publish_response_media_id" not in reconciled
+    history, _ = _backend(monkeypatch, [reconciled])
     monkeypatch.setattr(
         publication_reconciliation.instagram_poster,
         "get_container_status",
         lambda *args: "PUBLISHED",
+    )
+    monkeypatch.setattr(
+        publication_reconciliation.instagram_poster,
+        "_publish_container",
+        lambda *args: pytest.fail("reconciliation must not call media_publish"),
     )
 
     summary = publication_reconciliation.reconcile_publications(
         access_token="token", now=NOW
     )
 
-    assert summary.confirmed_published == 1
-    assert reconciled["status"] == "PUBLISHED"
+    assert reconciled["status"] == "AMBIGUOUS"
     assert "media_id" not in reconciled
-    assert [item["id"] for item in history_tracker.get_recent_history()] == [
-        "aic_1",
-        "aic_existing",
-    ]
-    assert len(history["publications"]) == 1
-    assert history["grid_publication_count"] == 1
+    assert "publish_response_media_id" not in reconciled
+    assert history.get("publications", []) == []
+    assert history_tracker.get_posted_ids() == {"aic_1"}
+    assert summary.confirmed_published == 0
+    assert summary.still_ambiguous == 1
+    assert summary.results == (
+        publication_reconciliation.PublicationReconciliationResult(
+            publication_id="single-1",
+            previous_status="PUBLISHING",
+            outcome=publication_reconciliation.ReconciliationOutcome.STILL_AMBIGUOUS,
+            evidence="container_status:PUBLISHED_media_identity_missing",
+        ),
+    )
 
 
 def test_publish_response_survives_final_confirmation_failure(monkeypatch):

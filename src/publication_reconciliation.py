@@ -161,17 +161,16 @@ def _reconcile_unit(
     if container_status == "PUBLISHED":
         history_tracker.record_reconciliation_result(
             unit.artwork_ids,
-            target_status=history_tracker.PublicationStatus.PUBLISHED,
-            result=ReconciliationOutcome.CONFIRMED_PUBLISHED.value,
-            evidence="container_status:PUBLISHED",
-            authoritative=True,
+            target_status=history_tracker.PublicationStatus.AMBIGUOUS,
+            result=ReconciliationOutcome.STILL_AMBIGUOUS.value,
+            evidence="container_status:PUBLISHED_media_identity_missing",
             expected_status=unit.status,
             now=now,
         )
         return _result(
             unit,
-            ReconciliationOutcome.CONFIRMED_PUBLISHED,
-            "container_status:PUBLISHED",
+            ReconciliationOutcome.STILL_AMBIGUOUS,
+            "container_status:PUBLISHED_media_identity_missing",
         )
 
     if container_status in {"ERROR", "EXPIRED"}:
