@@ -948,6 +948,17 @@ def run_carousel_post(args):
             )
             raise RuntimeError("Instagram publisher skipped the durable publication boundary")
         logger.info("publish_complete mode=carousel media_id=%s", carousel_id)
+    except instagram_poster.InstagramPrePublishBoundaryError:
+        history_tracker.mark_publication_not_published(
+            plan.publication_ids,
+            "pre_publish_boundary_failure",
+            authoritative=True,
+        )
+        _cleanup_authoritatively_expired_media(
+            publication_id,
+            reason="pre_publish_boundary_failure",
+        )
+        raise
     except instagram_poster.InstagramPublishAmbiguousError:
         logger.error("Instagram carousel publish result is ambiguous; preserving duplicate locks.")
         try:

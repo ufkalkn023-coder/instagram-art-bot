@@ -57,6 +57,10 @@ class InstagramPublishAmbiguousError(InstagramAPIError):
     """Publishing may have succeeded but no media ID was safely obtained."""
 
 
+class InstagramPrePublishBoundaryError(InstagramAPIError):
+    """The durable pre-publish callback failed before media_publish began."""
+
+
 class InstagramCredentialFormatError(ValueError):
     """Instagram credentials are missing or unsafe for an HTTP request."""
 
@@ -346,7 +350,12 @@ def post_to_instagram_graph_api(
     )
     _wait_until_finished(container_id, access_token)
     if before_publish is not None:
-        before_publish(container_id, ())
+        try:
+            before_publish(container_id, ())
+        except Exception as error:
+            raise InstagramPrePublishBoundaryError(
+                "The durable pre-publish callback failed before media_publish."
+            ) from error
     media_id = _publish_container(account_id, access_token, container_id)
     logger.info(f"Successfully published {media_type} post. Media ID: {media_id}")
     return media_id
@@ -428,7 +437,12 @@ def post_carousel_to_instagram_graph_api(
     )
     _wait_until_finished(carousel_id, access_token)
     if before_publish is not None:
-        before_publish(carousel_id, tuple(child_container_ids))
+        try:
+            before_publish(carousel_id, tuple(child_container_ids))
+        except Exception as error:
+            raise InstagramPrePublishBoundaryError(
+                "The durable pre-publish callback failed before media_publish."
+            ) from error
     media_id = _publish_container(account_id, access_token, carousel_id)
     logger.info(f"Successfully published carousel. Media ID: {media_id}")
     return media_id

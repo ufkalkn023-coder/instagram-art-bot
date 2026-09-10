@@ -164,3 +164,76 @@ def test_ambiguous_carousel_marks_every_reservation_and_reraises(monkeypatch):
     ]
     assert [item["status"] for item in history["posted_artworks"]] == ["AMBIGUOUS"] * 9
     assert confirmed == []
+
+
+def test_durable_before_publish_failure_expires_and_cleans_up_without_publishing(
+    monkeypatch,
+):
+    artworks = [_artwork(f"aic_{index}") for index in range(1, 9)]
+    cover = _cover()
+    history = {"posted_artworks": []}
+    cleanup_calls = []
+    container_ids = iter(
+        [*(f"child-{index}" for index in range(9)), "parent-container"]
+    )
+
+    monkeypatch.setenv("INSTAGRAM_ACCOUNT_ID", "account")
+    monkeypatch.setenv("INSTAGRAM_ACCESS_TOKEN", "token")
+    monkeypatch.setattr(main.history_tracker, "get_posted_ids", lambda: set())
+    monkeypatch.setattr(main.history_tracker, "get_grid_color_tone", lambda: "warm")
+    monkeypatch.setattr(
+        main.history_tracker, "confirm_carousel_publication", lambda *args: None
+    )
+    monkeypatch.setattr(
+        main.history_tracker, "load_history_with_etag", lambda: (history, "etag")
+    )
+    monkeypatch.setattr(main.history_tracker, "_upload_history", lambda value, etag: None)
+    monkeypatch.setattr(main.art_fetcher, "fetch_themed_artworks", lambda *args, **kwargs: artworks)
+    monkeypatch.setattr(main, "select_editorial_cover", lambda **kwargs: cover)
+    monkeypatch.setattr(main.gemini_ai, "analyze_carousel", lambda *args, **kwargs: None)
+    monkeypatch.setattr(main, "create_carousel_editorial_cover", lambda **kwargs: "cover-post.jpg")
+    monkeypatch.setattr(
+        main,
+        "render_carousel_featured_artwork",
+        lambda *args, **kwargs: SimpleNamespace(output_path="post.jpg"),
+    )
+    monkeypatch.setattr(
+        main.image_processor,
+        "upload_temp_media",
+        lambda path, publication_id: _owned_upload(path, publication_id),
+    )
+    monkeypatch.setattr(
+        instagram_poster,
+        "_create_container",
+        lambda *args, **kwargs: next(container_ids),
+    )
+    monkeypatch.setattr(instagram_poster, "_wait_until_finished", lambda *args: None)
+    monkeypatch.setattr(
+        instagram_poster,
+        "_publish_container",
+        lambda *args: pytest.fail("media_publish must not run after before_publish fails"),
+    )
+
+    start_attempt = history_tracker.start_publication_attempt
+
+    def durable_write_then_lost_response(*args, **kwargs):
+        start_attempt(*args, **kwargs)
+        raise OSError("history write response lost")
+
+    monkeypatch.setattr(
+        main.history_tracker, "start_publication_attempt", durable_write_then_lost_response
+    )
+    monkeypatch.setattr(
+        main.r2_media,
+        "cleanup_publication_media",
+        lambda publication_id, *, reason: cleanup_calls.append((publication_id, reason))
+        or SimpleNamespace(complete=False),
+    )
+
+    with pytest.raises(instagram_poster.InstagramPrePublishBoundaryError):
+        main.run_carousel_post(SimpleNamespace(dry_run=False, image_url=None, pinterest=False))
+
+    publication_id = history["posted_artworks"][0]["publication_id"]
+    assert [item["status"] for item in history["posted_artworks"]] == ["EXPIRED"] * 9
+    assert all(item["status"] != "AMBIGUOUS" for item in history["posted_artworks"])
+    assert cleanup_calls == [(publication_id, "pre_publish_boundary_failure")]
