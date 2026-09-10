@@ -1293,6 +1293,7 @@ def _finalize_publication_history(
     publication_id: str | None,
     theme: str | None,
     content_type: str | None,
+    permalink: str | None = None,
     *,
     allowed_statuses: frozenset[PublicationStatus] = frozenset(
         {PublicationStatus.PUBLISHING}
@@ -1456,6 +1457,26 @@ def _finalize_publication_history(
             raise CorruptedHistoryError(
                 f"Publication artwork state is inconsistent: {stable_publication_id}"
             )
+        if permalink is not None:
+            existing_permalink = existing_publication.get("permalink")
+            if existing_permalink is None:
+                PublicationRecord.model_validate(
+                    {**existing_publication, "permalink": permalink}
+                )
+                for item in target_records:
+                    artwork_permalink = item.get("permalink")
+                    if artwork_permalink is not None and artwork_permalink != permalink:
+                        raise CorruptedHistoryError(
+                            f"Conflicting publication permalink: {stable_publication_id}"
+                        )
+                existing_publication["permalink"] = permalink
+                for item in target_records:
+                    item["permalink"] = permalink
+                return existing_publication, True
+            if existing_permalink != permalink:
+                raise CorruptedHistoryError(
+                    f"Conflicting publication permalink: {stable_publication_id}"
+                )
         return existing_publication, False
 
     if any(publication["media_id"] == media_id for publication in publications):
@@ -1484,6 +1505,7 @@ def _finalize_publication_history(
         posted_at=posted_at,
         theme=theme,
         content_type=content_type,
+        permalink=permalink,
         **experiment_metadata,
     ).model_dump(exclude_none=True)
     for item in target_records:
@@ -1493,6 +1515,8 @@ def _finalize_publication_history(
         item["posted_at"] = posted_at
         item["publication_id"] = stable_publication_id
         item["publication_type"] = publication_type
+        if permalink is not None:
+            item["permalink"] = permalink
 
     history.setdefault("publications", []).append(publication)
     new_grid_count = grid_count + 1
@@ -1515,6 +1539,7 @@ def confirm_artworks_and_record_publication(
     publication_id: str | None = None,
     theme: str | None = None,
     content_type: str | None = None,
+    permalink: str | None = None,
 ) -> Dict[str, Any]:
     """Confirm lifecycle rows and append one publication in one bounded CAS."""
     canonical_ids = [normalize_artwork_id(value) for value in artwork_ids]
@@ -1539,6 +1564,7 @@ def confirm_artworks_and_record_publication(
             publication_id,
             theme,
             content_type,
+            permalink,
         )
         if not changed:
             return publication
@@ -1616,6 +1642,8 @@ def confirm_carousel_publication(
     cover_artwork_id: str,
     featured_artwork_ids: Sequence[str],
     media_id: str,
+    *,
+    permalink: str | None = None,
 ) -> int:
     """Finalize all variable-length role-bearing carousel records atomically."""
     cover_id = normalize_artwork_id(cover_artwork_id)
@@ -1630,8 +1658,9 @@ def confirm_carousel_publication(
             f"{MIN_FEATURED_WORKS} and {MAX_FEATURED_WORKS} distinct featured artworks"
         )
 
+    finalization_kwargs = {"permalink": permalink} if permalink is not None else {}
     publication = confirm_artworks_and_record_publication(
-        [cover_id, *featured_ids], media_id, "carousel"
+        [cover_id, *featured_ids], media_id, "carousel", **finalization_kwargs
     )
     return len(publication["artwork_ids"])
 
@@ -1919,6 +1948,7 @@ def record_reconciliation_result(
                 publication_id,
                 theme,
                 content_type,
+                None,
                 allowed_statuses=frozenset(
                     {PublicationStatus.PUBLISHING, PublicationStatus.AMBIGUOUS}
                 ),

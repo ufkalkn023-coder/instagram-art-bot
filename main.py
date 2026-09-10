@@ -7,6 +7,7 @@ from datetime import datetime, timezone
 from enum import Enum
 from pathlib import Path
 from typing import Sequence
+from urllib.parse import urlsplit
 
 import config
 from src.aic_image_policy import get_aic_image_request_policy
@@ -182,6 +183,31 @@ def _handle_pre_meta_staging_failure(
                 publication_id,
                 type(error).__name__,
             )
+
+
+def _get_published_instagram_permalink(
+    media_id: str, access_token: str | None
+) -> str | None:
+    """Best-effort HTTPS permalink lookup after a proven media publish."""
+    try:
+        permalink = instagram_poster.get_instagram_permalink(media_id, access_token or "")
+    except Exception as error:
+        logger.warning(
+            "instagram_permalink_lookup_failed media_id=%s error=%s",
+            media_id,
+            type(error).__name__,
+        )
+        return None
+    if not isinstance(permalink, str) or permalink != permalink.strip():
+        return None
+    try:
+        parsed = urlsplit(permalink)
+        if parsed.scheme != "https" or not parsed.netloc:
+            return None
+        parsed.port
+    except ValueError:
+        return None
+    return permalink
 
 
 def _log_carousel_dry_run_success(plan: CarouselPlan, artifact_paths: list[str]) -> None:
@@ -997,10 +1023,13 @@ def run_carousel_post(args):
             "Failed to record Instagram carousel media ID before final history confirmation; "
             "the durable parent-container lock remains."
         )
+    permalink = _get_published_instagram_permalink(carousel_id, access_token)
+    finalization_kwargs = {"permalink": permalink} if permalink is not None else {}
     history_tracker.confirm_carousel_publication(
         plan.cover.canonical_id,
         plan.featured_ids,
         carousel_id,
+        **finalization_kwargs,
     )
     logger.info("history_confirmed mode=carousel count=%s", len(plan.publication_ids))
 

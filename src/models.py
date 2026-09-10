@@ -1,5 +1,6 @@
 from datetime import datetime
 from typing import Literal, Optional
+from urllib.parse import urlsplit
 
 from pydantic import BaseModel, Field, field_validator, model_validator
 from src.engagement_features import EngagementFeatureVector, SpacingBucket
@@ -78,6 +79,7 @@ class PublicationRecord(BaseModel):
     posted_at: str = Field(..., min_length=1)
     theme: Optional[str] = None
     content_type: Optional[str] = None
+    permalink: Optional[str] = None
     selection_model_version: Optional[str] = None
     engagement_model_version: Optional[str] = None
     carousel_theme: Optional[str] = None
@@ -104,6 +106,22 @@ class PublicationRecord(BaseModel):
         if not normalized:
             raise ValueError("must not be empty")
         return normalized
+
+    @field_validator("permalink")
+    @classmethod
+    def require_https_permalink(cls, value: Optional[str]) -> Optional[str]:
+        if value is None:
+            return None
+        if value != value.strip():
+            raise ValueError("must be a trimmed HTTPS URL")
+        try:
+            parsed = urlsplit(value)
+            if parsed.scheme != "https" or not parsed.netloc:
+                raise ValueError("must be an HTTPS URL")
+            parsed.port
+        except ValueError as exc:
+            raise ValueError("must be an HTTPS URL") from exc
+        return value
 
     @field_validator("posted_at")
     @classmethod

@@ -105,7 +105,19 @@ def _install_copy_and_render(monkeypatch, calls):
     )
 
 
-def test_carousel_media_and_caption_order_are_cover_then_featured_one_through_eight(monkeypatch):
+@pytest.mark.parametrize(
+    ("permalink_result", "expected_permalink"),
+    (
+        ("https://www.instagram.com/p/example/", "https://www.instagram.com/p/example/"),
+        (None, None),
+        ("http://www.instagram.com/p/example/", None),
+        (RuntimeError("lookup failed"), None),
+    ),
+    ids=("valid_permalink", "lookup_returns_none", "non_https_permalink", "lookup_raises"),
+)
+def test_carousel_finalizes_successful_publish_when_permalink_is_available_or_missing(
+    monkeypatch, permalink_result, expected_permalink
+):
     calls = []
     featured, cover = _install_reads_and_selection(monkeypatch, calls)
     _install_copy_and_render(monkeypatch, calls)
@@ -113,6 +125,7 @@ def test_carousel_media_and_caption_order_are_cover_then_featured_one_through_ei
     protected = []
     published = []
     confirmed = []
+    permalink_lookup_media_ids = []
     monkeypatch.setattr(
         main.history_tracker,
         "reserve_carousel",
@@ -131,6 +144,13 @@ def test_carousel_media_and_caption_order_are_cover_then_featured_one_through_ei
         lambda ids, *args: protected.extend(ids) or 9,
     )
     monkeypatch.setattr(main.history_tracker, "record_publish_response", lambda *args: 9)
+    def get_permalink(media_id, access_token):
+        permalink_lookup_media_ids.append(media_id)
+        if isinstance(permalink_result, Exception):
+            raise permalink_result
+        return permalink_result
+
+    monkeypatch.setattr(main.instagram_poster, "get_instagram_permalink", get_permalink)
 
     def publish(**kwargs):
         kwargs["before_publish"]("parent-1", tuple(f"child-{index}" for index in range(9)))
@@ -145,7 +165,7 @@ def test_carousel_media_and_caption_order_are_cover_then_featured_one_through_ei
     monkeypatch.setattr(
         main.history_tracker,
         "confirm_carousel_publication",
-        lambda *args: confirmed.append(args) or 9,
+        lambda *args, **kwargs: confirmed.append((args, kwargs)) or 9,
     )
     monkeypatch.setattr(
         main.r2_media,
@@ -170,6 +190,7 @@ def test_carousel_media_and_caption_order_are_cover_then_featured_one_through_ei
         "slot_4",
     }
     assert protected == [cover.canonical_id, *[art["id"] for art in featured]]
+    assert len(published) == 1
     assert published[0]["media_urls"] == [
         "https://media.example/carousel_cover.jpg",
         *[f"https://media.example/carousel_{index:02d}.jpg" for index in range(1, 9)],
@@ -180,7 +201,13 @@ def test_carousel_media_and_caption_order_are_cover_then_featured_one_through_ei
     assert "8. Featured Title 8" in caption
     assert "COVER IDENTITY" not in caption
     assert caption.startswith("Women Reading\n")
-    assert confirmed == [(cover.canonical_id, tuple(art["id"] for art in featured), "media-1")]
+    assert permalink_lookup_media_ids == ["media-1"]
+    assert confirmed == [
+        (
+            (cover.canonical_id, tuple(art["id"] for art in featured), "media-1"),
+            ({"permalink": expected_permalink} if expected_permalink is not None else {}),
+        )
+    ]
 
 
 @pytest.mark.parametrize(("failure_attempt", "expected_rollbacks"), ((1, 0), (4, 3)))

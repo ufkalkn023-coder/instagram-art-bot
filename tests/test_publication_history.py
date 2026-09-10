@@ -163,6 +163,138 @@ def test_single_finalization_writes_one_artwork_one_publication_and_preserves_to
     assert len(uploads) == 1
 
 
+def test_finalization_persists_optional_https_permalink_with_publication_and_artwork_history(
+    monkeypatch,
+):
+    history = {
+        "posted_artworks": [
+            _locked_artwork("aic_1", "publication-single", "single")
+        ],
+    }
+    uploads = []
+    _install_history(monkeypatch, history, uploads)
+
+    publication = history_tracker.confirm_artworks_and_record_publication(
+        ["aic_1"],
+        "media-single",
+        "single",
+        publication_id="publication-single",
+        permalink="https://www.instagram.com/p/example/",
+    )
+
+    assert publication["media_id"] == "media-single"
+    assert publication["permalink"] == "https://www.instagram.com/p/example/"
+    assert history["posted_artworks"][0]["status"] == "PUBLISHED"
+    assert history["posted_artworks"][0]["media_id"] == "media-single"
+    assert (
+        history["posted_artworks"][0]["permalink"]
+        == "https://www.instagram.com/p/example/"
+    )
+    assert len(uploads) == 1
+
+
+def test_finalization_without_permalink_preserves_published_media_identity(monkeypatch):
+    history = {
+        "posted_artworks": [
+            _locked_artwork("aic_1", "publication-single", "single")
+        ],
+    }
+    uploads = []
+    _install_history(monkeypatch, history, uploads)
+
+    publication = history_tracker.confirm_artworks_and_record_publication(
+        ["aic_1"],
+        "media-single",
+        "single",
+        publication_id="publication-single",
+    )
+
+    artwork = history["posted_artworks"][0]
+    assert publication["media_id"] == "media-single"
+    assert "permalink" not in publication
+    assert artwork["status"] == "PUBLISHED"
+    assert artwork["media_id"] == "media-single"
+    assert "permalink" not in artwork
+    assert len(uploads) == 1
+
+
+def test_finalization_backfills_permalink_on_existing_publication_without_incrementing_grid(
+    monkeypatch,
+):
+    history = {
+        "posted_artworks": [
+            _locked_artwork("aic_1", "publication-single", "single")
+        ],
+    }
+    uploads = []
+    _install_history(monkeypatch, history, uploads)
+
+    first = history_tracker.confirm_artworks_and_record_publication(
+        ["aic_1"],
+        "media-single",
+        "single",
+        publication_id="publication-single",
+    )
+    second = history_tracker.confirm_artworks_and_record_publication(
+        ["aic_1"],
+        "media-single",
+        "single",
+        publication_id="publication-single",
+        permalink="https://www.instagram.com/p/backfilled/",
+    )
+    third = history_tracker.confirm_artworks_and_record_publication(
+        ["aic_1"],
+        "media-single",
+        "single",
+        publication_id="publication-single",
+        permalink="https://www.instagram.com/p/backfilled/",
+    )
+
+    assert len(history["publications"]) == 1
+    assert history["grid_publication_count"] == 1
+    assert second["id"] == first["id"]
+    assert second["media_id"] == first["media_id"]
+    assert second["posted_at"] == first["posted_at"]
+    assert second["permalink"] == "https://www.instagram.com/p/backfilled/"
+    assert third == second
+    assert (
+        history["posted_artworks"][0]["permalink"]
+        == "https://www.instagram.com/p/backfilled/"
+    )
+    assert len(uploads) == 2
+
+
+def test_finalization_rejects_conflicting_permalink_for_existing_publication(monkeypatch):
+    history = {
+        "posted_artworks": [
+            _locked_artwork("aic_1", "publication-single", "single")
+        ],
+    }
+    uploads = []
+    _install_history(monkeypatch, history, uploads)
+
+    history_tracker.confirm_artworks_and_record_publication(
+        ["aic_1"],
+        "media-single",
+        "single",
+        publication_id="publication-single",
+        permalink="https://www.instagram.com/p/original/",
+    )
+
+    with pytest.raises(history_tracker.CorruptedHistoryError, match="permalink"):
+        history_tracker.confirm_artworks_and_record_publication(
+            ["aic_1"],
+            "media-single",
+            "single",
+            publication_id="publication-single",
+            permalink="https://www.instagram.com/p/conflict/",
+        )
+
+    assert history["publications"][0]["permalink"] == "https://www.instagram.com/p/original/"
+    assert history["posted_artworks"][0]["permalink"] == "https://www.instagram.com/p/original/"
+    assert len(uploads) == 1
+
+
 def test_eight_artwork_carousel_finalizes_as_exactly_one_publication(monkeypatch):
     artwork_ids = [f"aic_{index}" for index in range(8)]
     history = {
