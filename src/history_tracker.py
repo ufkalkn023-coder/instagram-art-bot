@@ -1670,10 +1670,18 @@ def list_unresolved_publication_units(
     limit: int,
     now: datetime | None = None,
     max_age: timedelta | None = None,
+    publication_id: str | None = None,
 ) -> list[PublicationUnit]:
     """Return bounded unresolved publication units, newest first."""
     if limit < 1:
         raise ValueError("Publication reconciliation limit must be positive")
+    if publication_id is not None:
+        if (
+            not isinstance(publication_id, str)
+            or not publication_id
+            or publication_id != publication_id.strip()
+        ):
+            raise ValueError("Publication ID must be a non-empty trimmed string")
     reference_time = now or datetime.now(timezone.utc)
     if reference_time.tzinfo is None or reference_time.utcoffset() is None:
         raise ValueError("Reconciliation time must be timezone-aware")
@@ -1689,7 +1697,7 @@ def list_unresolved_publication_units(
             PublicationStatus.PENDING.value,
             PublicationStatus.PUBLISHING.value,
             PublicationStatus.AMBIGUOUS.value,
-        }:
+        } and (publication_id is None or _publication_key(item) == publication_id):
             unresolved_keys.add(_publication_key(item))
 
     for item in reversed(history.get("posted_artworks", [])):
@@ -1902,6 +1910,7 @@ def record_reconciliation_result(
     authoritative: bool = False,
     expected_status: PublicationStatus | None = None,
     now: datetime | None = None,
+    permalink: str | None = None,
 ) -> int:
     """Atomically record one publication-level reconciliation result."""
     reconciled_at = _utc_timestamp(now)
@@ -1948,7 +1957,7 @@ def record_reconciliation_result(
                 publication_id,
                 theme,
                 content_type,
-                None,
+                permalink,
                 allowed_statuses=frozenset(
                     {PublicationStatus.PUBLISHING, PublicationStatus.AMBIGUOUS}
                 ),

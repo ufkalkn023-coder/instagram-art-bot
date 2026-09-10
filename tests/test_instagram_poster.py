@@ -70,6 +70,29 @@ def test_credential_validation_rejects_empty_control_characters_and_never_expose
     assert secret not in caplog.text
 
 
+def test_explicit_media_identity_read_uses_only_the_operator_supplied_media_node(
+    monkeypatch,
+):
+    calls = []
+
+    def get(*args, **kwargs):
+        calls.append((args, kwargs))
+        return FakeResponse(200, {"id": "media-1"})
+
+    monkeypatch.setattr(instagram_poster.requests, "get", get)
+    monkeypatch.setattr(
+        instagram_poster.requests,
+        "post",
+        lambda *args, **kwargs: pytest.fail("identity validation must not publish media"),
+    )
+
+    assert instagram_poster.get_instagram_media_id("media-1", " token ") == "media-1"
+    assert len(calls) == 1
+    assert calls[0][1]["url"].endswith("/media-1")
+    assert calls[0][1]["params"] == {"fields": "id"}
+    assert calls[0][1]["headers"] == {"Authorization": "Bearer token"}
+
+
 @pytest.mark.parametrize("status", ["ERROR", "EXPIRED", "UNEXPECTED"])
 def test_non_finished_status_stops_before_publish(monkeypatch, status):
     post_calls = []

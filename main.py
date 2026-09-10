@@ -1053,6 +1053,14 @@ def main(argv: list[str] | None = None) -> int:
         action="store_true",
         help="Reconcile existing publication lifecycle state without creating or publishing media",
     )
+    parser.add_argument(
+        "--recover-publication-id",
+        help="Explicit unresolved publication ID to recover after Graph identity verification",
+    )
+    parser.add_argument(
+        "--recover-media-id",
+        help="Explicit Instagram media ID that must match the Graph identity response",
+    )
     args = parser.parse_args(argv)
 
     existing_artifacts: set[Path] | None = None
@@ -1065,6 +1073,33 @@ def main(argv: list[str] | None = None) -> int:
                     f"{name}:{status}"
                     for name, status in sorted(optional_status.items())
                 ),
+            )
+            return 0
+
+        recovery_requested = (
+            args.recover_publication_id is not None
+            or args.recover_media_id is not None
+        )
+        if recovery_requested:
+            if args.dry_run or args.reconcile_publications:
+                raise ValueError(
+                    "operator media-ID recovery cannot be combined with --dry-run or --reconcile-publications"
+                )
+            if not args.recover_publication_id or not args.recover_media_id:
+                raise ValueError(
+                    "operator media-ID recovery requires both --recover-publication-id and --recover-media-id"
+                )
+            validate_reconciliation_configuration()
+            result = publication_reconciliation.recover_publication_media_id(
+                publication_id=args.recover_publication_id,
+                media_id=args.recover_media_id,
+                access_token=os.environ.get("INSTAGRAM_ACCESS_TOKEN", ""),
+            )
+            logger.info(
+                "operator_media_id_recovery_complete publication_id=%s result=%s evidence=%s",
+                result.publication_id,
+                result.outcome.value,
+                result.evidence,
             )
             return 0
 

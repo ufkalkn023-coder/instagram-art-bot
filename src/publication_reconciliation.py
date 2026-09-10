@@ -4,6 +4,7 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from enum import Enum
 import logging
+from urllib.parse import urlsplit
 
 from src import history_tracker, instagram_poster, r2_media
 
@@ -198,6 +199,113 @@ def _reconcile_unit(
         now=now,
     )
     return _result(unit, ReconciliationOutcome.STILL_AMBIGUOUS, evidence)
+
+
+def _best_effort_permalink(media_id: str, access_token: str) -> str | None:
+    try:
+        permalink = instagram_poster.get_instagram_permalink(media_id, access_token)
+    except Exception as error:
+        logger.warning(
+            "operator_media_id_recovery_permalink_failed error=%s",
+            type(error).__name__,
+        )
+        return None
+    if not isinstance(permalink, str) or permalink != permalink.strip():
+        return None
+    try:
+        parsed = urlsplit(permalink)
+        if parsed.scheme != "https" or not parsed.netloc:
+            return None
+        parsed.port
+    except ValueError:
+        return None
+    return permalink
+
+
+def recover_publication_media_id(
+    *,
+    publication_id: str,
+    media_id: str,
+    access_token: str,
+    now: datetime | None = None,
+) -> PublicationReconciliationResult:
+    """Finalize one operator-identified published unit without publishing media."""
+    if (
+        not isinstance(publication_id, str)
+        or not publication_id
+        or publication_id != publication_id.strip()
+    ):
+        raise ValueError("Publication ID must be a non-empty trimmed string")
+    if not isinstance(media_id, str) or not media_id or media_id != media_id.strip():
+        raise ValueError("Instagram media ID must be a non-empty trimmed string")
+    if not access_token:
+        raise ValueError("Instagram access token is required for recovery")
+    reconciliation_time = now or datetime.now(timezone.utc)
+    if reconciliation_time.tzinfo is None or reconciliation_time.utcoffset() is None:
+        raise ValueError("Recovery time must be timezone-aware")
+    reconciliation_time = reconciliation_time.astimezone(timezone.utc)
+    units = history_tracker.list_unresolved_publication_units(
+        limit=1,
+        now=reconciliation_time,
+        max_age=None,
+        publication_id=publication_id,
+    )
+    if len(units) != 1:
+        raise ValueError("Publication must currently be unresolved")
+    unit = units[0]
+    if unit.status not in {
+        history_tracker.PublicationStatus.PUBLISHING,
+        history_tracker.PublicationStatus.AMBIGUOUS,
+    }:
+        raise ValueError("Publication must currently be PUBLISHING or AMBIGUOUS")
+    if not unit.container_id or unit.container_id != unit.container_id.strip():
+        raise ValueError("Publication requires a durable container ID for recovery")
+    container_status = instagram_poster.get_container_status(
+        unit.container_id, access_token
+    )
+    if container_status != "PUBLISHED":
+        raise ValueError("Publication container status must be PUBLISHED for recovery")
+    try:
+        returned_media_id = instagram_poster.get_instagram_media_id(
+            media_id, access_token
+        )
+    except Exception as error:
+        raise ValueError("Operator-supplied Instagram media ID could not be verified") from error
+    if returned_media_id != media_id:
+        raise ValueError("Operator-supplied Instagram media ID did not match Graph identity")
+
+    history_tracker.record_reconciliation_result(
+        unit.artwork_ids,
+        target_status=history_tracker.PublicationStatus.PUBLISHED,
+        result=ReconciliationOutcome.CONFIRMED_PUBLISHED.value,
+        evidence="operator_supplied_media_id_verified",
+        media_id=media_id,
+        expected_status=unit.status,
+        now=reconciliation_time,
+    )
+    permalink = _best_effort_permalink(media_id, access_token)
+    if permalink is not None:
+        try:
+            history_tracker.record_reconciliation_result(
+                unit.artwork_ids,
+                target_status=history_tracker.PublicationStatus.PUBLISHED,
+                result=ReconciliationOutcome.CONFIRMED_PUBLISHED.value,
+                evidence="operator_supplied_media_id_verified",
+                media_id=media_id,
+                expected_status=history_tracker.PublicationStatus.PUBLISHED,
+                now=reconciliation_time,
+                permalink=permalink,
+            )
+        except Exception as error:
+            logger.warning(
+                "operator_media_id_recovery_permalink_persistence_failed error=%s",
+                type(error).__name__,
+            )
+    return _result(
+        unit,
+        ReconciliationOutcome.CONFIRMED_PUBLISHED,
+        "operator_supplied_media_id_verified",
+    )
 
 
 def reconcile_publications(

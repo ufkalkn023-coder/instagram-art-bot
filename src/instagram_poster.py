@@ -1,6 +1,7 @@
 from typing import Any, Callable, Optional
 import logging
 import time
+from urllib.parse import quote
 
 import requests
 
@@ -314,6 +315,28 @@ def get_container_status(container_id: str, access_token: str) -> str:
     }:
         raise InstagramAPIError("Instagram container reconciliation status is missing or unknown.")
     return status
+
+
+def get_instagram_media_id(media_id: str, access_token: str) -> str:
+    """Read the identity of one explicitly supplied Instagram media node."""
+    if not isinstance(media_id, str) or media_id != media_id.strip() or not media_id:
+        raise ValueError("Instagram media ID must be a non-empty trimmed string")
+    if _contains_control_character(media_id):
+        raise ValueError("Instagram media ID contains an invalid control character")
+    _, access_token = validate_instagram_credentials(
+        "media_identity_lookup", access_token
+    )
+    payload = _request_json(
+        requests.get,
+        "explicit media identity lookup",
+        retry_transient=True,
+        max_attempts=RECONCILIATION_RETRY_ATTEMPTS,
+        timeout_seconds=RECONCILIATION_HTTP_TIMEOUT_SECONDS,
+        url=f"{config.GRAPH_API_BASE_URL}/{quote(media_id, safe='')}",
+        params={"fields": "id"},
+        headers=_auth_headers(access_token),
+    )
+    return _require_id(payload, "explicit media identity lookup")
 
 
 def _validate_credentials(account_id: str, access_token: str) -> None:

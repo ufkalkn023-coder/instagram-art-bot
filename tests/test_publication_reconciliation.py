@@ -475,6 +475,209 @@ def test_published_container_without_media_identity_stays_ambiguous(monkeypatch)
     )
 
 
+def test_operator_media_id_recovery_finalizes_one_published_unresolved_publication(
+    monkeypatch,
+):
+    record = _single("AMBIGUOUS")
+    history, uploads = _backend(monkeypatch, [record])
+    monkeypatch.setattr(
+        publication_reconciliation.instagram_poster,
+        "get_container_status",
+        lambda container_id, token: "PUBLISHED",
+    )
+    monkeypatch.setattr(
+        publication_reconciliation.instagram_poster,
+        "get_instagram_media_id",
+        lambda media_id, token: media_id,
+        raising=False,
+    )
+    monkeypatch.setattr(
+        publication_reconciliation.instagram_poster,
+        "get_instagram_permalink",
+        lambda media_id, token: "https://www.instagram.com/p/recovered/",
+    )
+    monkeypatch.setattr(
+        publication_reconciliation.instagram_poster,
+        "_publish_container",
+        lambda *args: pytest.fail("operator recovery must not call media_publish"),
+    )
+
+    result = publication_reconciliation.recover_publication_media_id(
+        publication_id="single-1",
+        media_id="media-recovered-1",
+        access_token="token",
+        now=NOW,
+    )
+
+    assert result.outcome is publication_reconciliation.ReconciliationOutcome.CONFIRMED_PUBLISHED
+    assert result.evidence == "operator_supplied_media_id_verified"
+    assert record["status"] == "PUBLISHED"
+    assert record["media_id"] == "media-recovered-1"
+    assert record["publish_response_media_id"] == "media-recovered-1"
+    assert record["permalink"] == "https://www.instagram.com/p/recovered/"
+    assert history["publications"] == [
+        {
+            "id": "single-1",
+            "type": "single",
+            "media_id": "media-recovered-1",
+            "artwork_ids": ["aic_1"],
+            "posted_at": record["posted_at"],
+            "permalink": "https://www.instagram.com/p/recovered/",
+        }
+    ]
+    assert history["grid_publication_count"] == 1
+    assert len(uploads) == 2
+
+
+@pytest.mark.parametrize(
+    ("container_status", "identity_result"),
+    [
+        ("PUBLISHED", OSError("media ID is unreadable")),
+        ("PUBLISHED", "different-media-id"),
+        ("ERROR", None),
+    ],
+    ids=("unreadable_media_id", "mismatched_media_id", "container_not_published"),
+)
+def test_operator_media_id_recovery_rejects_unverified_identity_without_mutating_history(
+    monkeypatch, container_status, identity_result
+):
+    record = _single("AMBIGUOUS")
+    history, uploads = _backend(monkeypatch, [record])
+    monkeypatch.setattr(
+        publication_reconciliation.instagram_poster,
+        "get_container_status",
+        lambda container_id, token: container_status,
+    )
+
+    def read_media_id(media_id, token):
+        if isinstance(identity_result, Exception):
+            raise identity_result
+        if isinstance(identity_result, str):
+            return identity_result
+        pytest.fail("media ID lookup requires container status PUBLISHED")
+
+    monkeypatch.setattr(
+        publication_reconciliation.instagram_poster,
+        "get_instagram_media_id",
+        read_media_id,
+        raising=False,
+    )
+    monkeypatch.setattr(
+        publication_reconciliation.instagram_poster,
+        "_publish_container",
+        lambda *args: pytest.fail("operator recovery must not call media_publish"),
+    )
+
+    with pytest.raises(ValueError):
+        publication_reconciliation.recover_publication_media_id(
+            publication_id="single-1",
+            media_id="media-recovered-1",
+            access_token="token",
+            now=NOW,
+        )
+
+    assert record["status"] == "AMBIGUOUS"
+    assert "media_id" not in record
+    assert "publish_response_media_id" not in record
+    assert history.get("publications", []) == []
+    assert history_tracker.get_posted_ids() == {"aic_1"}
+    assert history.get("grid_publication_count") is None
+    assert uploads == []
+
+
+def test_operator_media_id_recovery_keeps_finalization_when_permalink_lookup_fails(
+    monkeypatch,
+):
+    record = _single("AMBIGUOUS")
+    history, _ = _backend(monkeypatch, [record])
+    monkeypatch.setattr(
+        publication_reconciliation.instagram_poster,
+        "get_container_status",
+        lambda container_id, token: "PUBLISHED",
+    )
+    monkeypatch.setattr(
+        publication_reconciliation.instagram_poster,
+        "get_instagram_media_id",
+        lambda media_id, token: media_id,
+        raising=False,
+    )
+    monkeypatch.setattr(
+        publication_reconciliation.instagram_poster,
+        "get_instagram_permalink",
+        lambda media_id, token: (_ for _ in ()).throw(OSError("unavailable")),
+    )
+
+    publication_reconciliation.recover_publication_media_id(
+        publication_id="single-1",
+        media_id="media-recovered-1",
+        access_token="token",
+        now=NOW,
+    )
+
+    assert record["status"] == "PUBLISHED"
+    assert history["publications"][0]["media_id"] == "media-recovered-1"
+    assert "permalink" not in history["publications"][0]
+
+
+def test_operator_media_id_recovery_requires_a_durable_container_id(monkeypatch):
+    record = _single("AMBIGUOUS", container_id=" ")
+    history, _ = _backend(monkeypatch, [record])
+    monkeypatch.setattr(
+        publication_reconciliation.instagram_poster,
+        "get_container_status",
+        lambda *args: pytest.fail("an empty durable container ID must not be queried"),
+    )
+
+    with pytest.raises(ValueError, match="durable container"):
+        publication_reconciliation.recover_publication_media_id(
+            publication_id="single-1",
+            media_id="media-recovered-1",
+            access_token="token",
+            now=NOW,
+        )
+
+    assert record["status"] == "AMBIGUOUS"
+    assert history.get("publications", []) == []
+
+
+def test_operator_media_id_recovery_cli_runs_only_explicit_recovery(monkeypatch):
+    monkeypatch.setattr(main, "validate_reconciliation_configuration", lambda: None)
+    recovered = []
+    monkeypatch.setattr(
+        main.publication_reconciliation,
+        "recover_publication_media_id",
+        lambda **kwargs: recovered.append(kwargs)
+        or publication_reconciliation.PublicationReconciliationResult(
+            publication_id="single-1",
+            previous_status="AMBIGUOUS",
+            outcome=publication_reconciliation.ReconciliationOutcome.CONFIRMED_PUBLISHED,
+            evidence="operator_supplied_media_id_verified",
+        ),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        main,
+        "run_carousel_post",
+        lambda args: pytest.fail("operator recovery must not acquire or publish media"),
+    )
+
+    assert main.main(
+        [
+            "--recover-publication-id",
+            "single-1",
+            "--recover-media-id",
+            "media-recovered-1",
+        ]
+    ) == 0
+    assert recovered == [
+        {
+            "publication_id": "single-1",
+            "media_id": "media-recovered-1",
+            "access_token": "",
+        }
+    ]
+
+
 def test_publish_response_survives_final_confirmation_failure(monkeypatch):
     record = _single()
     history = {"posted_artworks": [record]}
