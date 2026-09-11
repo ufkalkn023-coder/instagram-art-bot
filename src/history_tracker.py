@@ -1243,6 +1243,499 @@ def reserve_reel(
     raise AssertionError("unreachable")
 
 
+def _reel_lifecycle_inputs(
+    publication_id: str, release_identity: ReelReleaseIdentity
+) -> str:
+    """Validate immutable identity inputs shared by Reel lifecycle mutations."""
+    if not isinstance(publication_id, str):
+        raise ValueError("Reel publication ID must be a UUID")
+    try:
+        normalized_publication_id = str(UUID(publication_id))
+    except (TypeError, ValueError, AttributeError) as exc:
+        raise ValueError("Reel publication ID must be a UUID") from exc
+    if not isinstance(release_identity, ReelReleaseIdentity):
+        raise TypeError("release_identity must be a ReelReleaseIdentity")
+    return normalized_publication_id
+
+
+def _conditional_reel_update(
+    publication_id: str,
+    release_identity: ReelReleaseIdentity,
+    mutation: Callable[
+        [
+            Dict[str, Any],
+            ValidatedReelHistory,
+            ReelReservationRecord,
+            Dict[str, Any],
+        ],
+        tuple[_MutationResult, bool],
+    ],
+) -> _MutationResult:
+    """Run one Reel lifecycle mutation under bounded reload-and-CAS semantics."""
+    normalized_publication_id = _reel_lifecycle_inputs(
+        publication_id, release_identity
+    )
+    for attempt in range(1, HISTORY_CONDITIONAL_WRITE_ATTEMPTS + 1):
+        history, etag = load_history_with_etag()
+        original_history = copy.deepcopy(history)
+        try:
+            reel_history = _validated_reel_history(history)
+            reservation = next(
+                (
+                    record
+                    for record in reel_history.reservations
+                    if record.publication_id == normalized_publication_id
+                ),
+                None,
+            )
+            if reservation is None:
+                raise RuntimeError(
+                    f"Missing Reel reservation: {normalized_publication_id}"
+                )
+            if reservation.release_identity != release_identity:
+                raise RuntimeError("Reel lifecycle replay has conflicting release identity")
+
+            raw_reservations = history.get("reel_reservations")
+            if not isinstance(raw_reservations, list):
+                raise CorruptedHistoryError("reel_reservations must be a list")
+            raw_reservation = next(
+                (
+                    record
+                    for record in raw_reservations
+                    if isinstance(record, dict)
+                    and record.get("publication_id") == reservation.publication_id
+                ),
+                None,
+            )
+            if raw_reservation is None:
+                raise CorruptedHistoryError(
+                    "Validated Reel reservation is not mutable history state"
+                )
+
+            result, changed = mutation(
+                history, reel_history, reservation, raw_reservation
+            )
+            if changed:
+                # Validate the complete additive state before committing it.
+                _validated_reel_history(history)
+        except Exception:
+            _restore_history_snapshot_in_place(history, original_history)
+            raise
+        if not changed:
+            return result
+        try:
+            _upload_history(history, etag)
+        except ConcurrentWriteError:
+            _restore_history_snapshot_in_place(history, original_history)
+            if attempt == HISTORY_CONDITIONAL_WRITE_ATTEMPTS:
+                raise
+            logger.warning(
+                "reel_lifecycle_history_conflict publication_id=%s retry=%s/%s",
+                normalized_publication_id,
+                attempt + 1,
+                HISTORY_CONDITIONAL_WRITE_ATTEMPTS,
+            )
+            continue
+        except Exception:
+            _restore_history_snapshot_in_place(history, original_history)
+            raise
+        return result
+    raise AssertionError("unreachable")
+
+
+def get_reel_reservation(publication_id: str) -> ReelReservationRecord:
+    """Return one validated durable Reel lifecycle record."""
+    if not isinstance(publication_id, str):
+        raise ValueError("Reel publication ID must be a UUID")
+    try:
+        normalized_publication_id = str(UUID(publication_id))
+    except (TypeError, ValueError, AttributeError) as exc:
+        raise ValueError("Reel publication ID must be a UUID") from exc
+    history, _ = load_history_with_etag()
+    reel_history = _validated_reel_history(history)
+    reservation = next(
+        (
+            record
+            for record in reel_history.reservations
+            if record.publication_id == normalized_publication_id
+        ),
+        None,
+    )
+    if reservation is None:
+        raise RuntimeError(f"Missing Reel reservation: {normalized_publication_id}")
+    return reservation
+
+
+def record_reel_staging(
+    publication_id: str,
+    release_identity: ReelReleaseIdentity,
+    upload: r2_media.TempReelUpload,
+    *,
+    now: datetime | None = None,
+) -> ReelReservationRecord:
+    """Persist a validated Reel R2 handle while the reservation is PENDING."""
+    normalized_publication_id = _reel_lifecycle_inputs(
+        publication_id, release_identity
+    )
+    if not isinstance(upload, r2_media.TempReelUpload):
+        raise TypeError("upload must be a TempReelUpload")
+    if upload.publication_id != normalized_publication_id:
+        raise RuntimeError("Reel staging upload is not owned by this publication")
+    r2_media.validate_owned_reel_object_key(upload.object_key, normalized_publication_id)
+    staged_at = _utc_timestamp(now)
+
+    def mutation(history, reel_history, reservation, raw_reservation):
+        if reservation.status is not ReelPublicationStatus.PENDING:
+            raise RuntimeError("Reel staging may only be recorded while PENDING")
+        existing = reservation.staging
+        if existing is not None:
+            if (
+                existing.object_key == upload.object_key
+                and existing.public_url == upload.public_url
+            ):
+                return reservation, False
+            raise RuntimeError("Reel reservation already has conflicting staging")
+        raw_reservation["staging"] = {
+            "object_key": upload.object_key,
+            "public_url": upload.public_url,
+            "staged_at": staged_at,
+        }
+        return ReelReservationRecord.model_validate(raw_reservation), True
+
+    return _conditional_reel_update(publication_id, release_identity, mutation)
+
+
+def start_reel_publication_attempt(
+    publication_id: str,
+    release_identity: ReelReleaseIdentity,
+    container_id: str,
+    *,
+    now: datetime | None = None,
+) -> ReelReservationRecord:
+    """Durably cross the Reel media_publish boundary after staging succeeds."""
+    _reel_lifecycle_inputs(publication_id, release_identity)
+    if not isinstance(container_id, str) or not container_id.strip():
+        raise ValueError("A non-empty Reel container ID is required")
+    container_id = container_id.strip()
+    started_at = _utc_timestamp(now)
+
+    def mutation(history, reel_history, reservation, raw_reservation):
+        if reservation.status is ReelPublicationStatus.PUBLISHING:
+            if reservation.container_id == container_id:
+                return reservation, False
+            raise RuntimeError(
+                "Reel reservation is already crossing a different publish boundary"
+            )
+        if reservation.status is not ReelPublicationStatus.PENDING:
+            raise RuntimeError(
+                f"Cannot start Reel publication from {reservation.status.value}"
+            )
+        if reservation.staging is None:
+            raise RuntimeError("Reel staging must be durable before PUBLISHING")
+        raw_reservation["status"] = ReelPublicationStatus.PUBLISHING.value
+        raw_reservation["container_id"] = container_id
+        raw_reservation["publish_started_at"] = started_at
+        return ReelReservationRecord.model_validate(raw_reservation), True
+
+    return _conditional_reel_update(publication_id, release_identity, mutation)
+
+
+def record_reel_publish_response(
+    publication_id: str,
+    release_identity: ReelReleaseIdentity,
+    media_id: str,
+) -> ReelReservationRecord:
+    """Persist the media_publish receipt before any Reel finalization."""
+    _reel_lifecycle_inputs(publication_id, release_identity)
+    if not isinstance(media_id, str) or not media_id.strip():
+        raise ValueError("A non-empty Instagram media ID is required")
+    media_id = media_id.strip()
+
+    def mutation(history, reel_history, reservation, raw_reservation):
+        if reservation.status is ReelPublicationStatus.PUBLISHED:
+            _published_reel_replay_publication(
+                reel_history,
+                reservation,
+                reservation.publication_id,
+                release_identity,
+                media_id,
+            )
+            return reservation, False
+        if reservation.status not in {
+            ReelPublicationStatus.PUBLISHING,
+            ReelPublicationStatus.AMBIGUOUS,
+        }:
+            raise RuntimeError(
+                f"Cannot record Reel publish response from {reservation.status.value}"
+            )
+        if reservation.publish_response_media_id is not None:
+            if reservation.publish_response_media_id == media_id:
+                return reservation, False
+            raise RuntimeError("Reel reservation has conflicting media receipt")
+        raw_reservation["publish_response_media_id"] = media_id
+        return ReelReservationRecord.model_validate(raw_reservation), True
+
+    return _conditional_reel_update(publication_id, release_identity, mutation)
+
+
+def _published_reel_replay_publication(
+    reel_history: ValidatedReelHistory,
+    reservation: ReelReservationRecord,
+    publication_id: str,
+    release_identity: ReelReleaseIdentity,
+    media_id: str,
+) -> ReelPublicationRecord:
+    """Require a PUBLISHED reservation to have one exact durable success record."""
+    if (
+        reservation.media_id != media_id
+        or reservation.publish_response_media_id != media_id
+    ):
+        raise CorruptedHistoryError(
+            "Published Reel reservation has conflicting media identity"
+        )
+    publication = next(
+        (
+            record
+            for record in reel_history.publications
+            if record.id == publication_id
+        ),
+        None,
+    )
+    if publication is None:
+        raise CorruptedHistoryError("Published Reel reservation has no publication")
+    if (
+        publication.media_id != media_id
+        or normalize_artwork_id(publication.artwork_id)
+        != normalize_artwork_id(reservation.artwork_id)
+        or publication.release_identity != release_identity
+    ):
+        raise CorruptedHistoryError(
+            "Published Reel reservation has conflicting publication identity"
+        )
+    return publication
+
+
+def mark_reel_ambiguous(
+    publication_id: str,
+    release_identity: ReelReleaseIdentity,
+    reason: str,
+    *,
+    now: datetime | None = None,
+    reconciliation_result: str | None = None,
+    reconciliation_evidence: str | None = None,
+) -> ReelReservationRecord:
+    """Quarantine a crossed Reel publish boundary without permitting replay."""
+    _reel_lifecycle_inputs(publication_id, release_identity)
+    if not isinstance(reason, str) or not reason.strip():
+        raise ValueError("A non-empty Reel ambiguity reason is required")
+    reason = reason.strip()
+    if reconciliation_result is not None and (
+        not isinstance(reconciliation_result, str) or not reconciliation_result.strip()
+    ):
+        raise ValueError("reconciliation_result must be non-empty when supplied")
+    if reconciliation_evidence is not None and (
+        not isinstance(reconciliation_evidence, str) or not reconciliation_evidence.strip()
+    ):
+        raise ValueError("reconciliation_evidence must be non-empty when supplied")
+    ambiguous_at = _utc_timestamp(now)
+
+    def mutation(history, reel_history, reservation, raw_reservation):
+        if reservation.status is ReelPublicationStatus.AMBIGUOUS:
+            if reservation.ambiguity_reason == reason:
+                return reservation, False
+            raise RuntimeError("Reel reservation already has conflicting ambiguity")
+        if reservation.status is not ReelPublicationStatus.PUBLISHING:
+            raise RuntimeError(
+                f"Cannot mark Reel reservation ambiguous from {reservation.status.value}"
+            )
+        raw_reservation["status"] = ReelPublicationStatus.AMBIGUOUS.value
+        raw_reservation["ambiguous_at"] = ambiguous_at
+        raw_reservation["ambiguity_reason"] = reason
+        if reconciliation_result is not None:
+            raw_reservation["reconciliation_result"] = reconciliation_result.strip()
+            raw_reservation["reconciliation_evidence"] = reconciliation_evidence.strip() if reconciliation_evidence else None
+            raw_reservation["last_reconciled_at"] = ambiguous_at
+            raw_reservation["reconciliation_attempt_count"] = 1
+        return ReelReservationRecord.model_validate(raw_reservation), True
+
+    return _conditional_reel_update(publication_id, release_identity, mutation)
+
+
+def finalize_reel_publication(
+    publication_id: str,
+    release_identity: ReelReleaseIdentity,
+    media_id: str,
+    *,
+    permalink: str | None = None,
+    now: datetime | None = None,
+    reconciliation_result: str | None = None,
+    reconciliation_evidence: str | None = None,
+) -> ReelPublicationRecord:
+    """Atomically record one proven Reel without touching feed lifecycle state."""
+    normalized_publication_id = _reel_lifecycle_inputs(
+        publication_id, release_identity
+    )
+    if not isinstance(media_id, str) or not media_id.strip():
+        raise ValueError("A non-empty Instagram media ID is required")
+    media_id = media_id.strip()
+    posted_at = _utc_timestamp(now)
+
+    def mutation(history, reel_history, reservation, raw_reservation):
+        feed_publications = _validated_publications(history)
+        _grid_publication_count(history, feed_publications)
+        if reservation.status is ReelPublicationStatus.PUBLISHED:
+            existing = _published_reel_replay_publication(
+                reel_history,
+                reservation,
+                normalized_publication_id,
+                release_identity,
+                media_id,
+            )
+            if permalink is None or existing.permalink == permalink:
+                return existing, False
+            raise CorruptedHistoryError(
+                "Reel finalization conflicts with existing publication identity"
+            )
+        existing = next(
+            (
+                publication
+                for publication in reel_history.publications
+                if publication.id == normalized_publication_id
+            ),
+            None,
+        )
+        if existing is not None:
+            raise CorruptedHistoryError(
+                "Reel finalization conflicts with existing publication identity"
+            )
+
+        if reservation.status not in {
+            ReelPublicationStatus.PUBLISHING,
+            ReelPublicationStatus.AMBIGUOUS,
+        }:
+            raise RuntimeError(
+                f"Cannot finalize Reel publication from {reservation.status.value}"
+            )
+        if reservation.publish_response_media_id != media_id:
+            raise RuntimeError("Reel finalization requires the matching durable receipt")
+
+        feed_ids = {publication["id"] for publication in feed_publications}
+        feed_media_ids = {publication["media_id"] for publication in feed_publications}
+        if normalized_publication_id in feed_ids or media_id in feed_media_ids:
+            raise CorruptedHistoryError(
+                "Reel finalization conflicts with feed publication identity"
+            )
+        if any(publication.media_id == media_id for publication in reel_history.publications):
+            raise CorruptedHistoryError(
+                "Reel finalization conflicts with existing Reel media identity"
+            )
+
+        raw_reservation["status"] = ReelPublicationStatus.PUBLISHED.value
+        raw_reservation["media_id"] = media_id
+        raw_reservation["publish_response_media_id"] = media_id
+        raw_reservation["posted_at"] = posted_at
+        raw_reservation.pop("ambiguous_at", None)
+        raw_reservation.pop("ambiguity_reason", None)
+        if permalink is not None:
+            raw_reservation["permalink"] = permalink
+        if reconciliation_result is not None:
+            raw_reservation["reconciliation_result"] = reconciliation_result
+        if reconciliation_evidence is not None:
+            raw_reservation["reconciliation_evidence"] = reconciliation_evidence
+
+        publication = ReelPublicationRecord.model_validate(
+            {
+                "id": normalized_publication_id,
+                "artwork_id": reservation.artwork_id,
+                "media_id": media_id,
+                "posted_at": posted_at,
+                "permalink": permalink,
+                "release_identity": release_identity,
+            }
+        )
+        history.setdefault("reel_publications", []).append(
+            publication.model_dump(mode="json", exclude_none=True)
+        )
+        history["reel_publication_count"] = reel_history.publication_count + 1
+        return publication, True
+
+    return _conditional_reel_update(publication_id, release_identity, mutation)
+
+
+def record_reel_permalink(
+    publication_id: str, media_id: str, permalink: str
+) -> ReelPublicationRecord:
+    """Idempotently enrich an already-finalized Reel's optional permalink."""
+    if not isinstance(publication_id, str):
+        raise ValueError("Reel publication ID must be a UUID")
+    try:
+        normalized_publication_id = str(UUID(publication_id))
+    except (TypeError, ValueError, AttributeError) as exc:
+        raise ValueError("Reel publication ID must be a UUID") from exc
+    if not isinstance(media_id, str) or not media_id.strip():
+        raise ValueError("A non-empty Instagram media ID is required")
+    media_id = media_id.strip()
+
+    history, _ = load_history_with_etag()
+    initial_reels = _validated_reel_history(history)
+    reservation = next(
+        (
+            record
+            for record in initial_reels.reservations
+            if record.publication_id == normalized_publication_id
+        ),
+        None,
+    )
+    if reservation is None:
+        raise RuntimeError(f"Missing Reel reservation: {normalized_publication_id}")
+
+    def mutation(history, reel_history, reservation, raw_reservation):
+        if reservation.status is not ReelPublicationStatus.PUBLISHED:
+            raise RuntimeError("Reel permalink may only be recorded after PUBLISHED")
+        if reservation.media_id != media_id:
+            raise RuntimeError("Reel permalink media ID does not match reservation")
+        publication = next(
+            (
+                record
+                for record in reel_history.publications
+                if record.id == normalized_publication_id
+            ),
+            None,
+        )
+        if publication is None:
+            raise CorruptedHistoryError("Published Reel reservation has no publication")
+        if publication.media_id != media_id:
+            raise CorruptedHistoryError("Reel permalink media ID conflicts with publication")
+        if reservation.permalink != publication.permalink:
+            raise CorruptedHistoryError("Reel reservation/publication permalink mismatch")
+        if publication.permalink is not None:
+            if publication.permalink == permalink:
+                return publication, False
+            raise RuntimeError("Reel permalink conflicts with existing permalink")
+
+        updated = publication.model_copy(update={"permalink": permalink})
+        raw_reservation["permalink"] = permalink
+        raw_publications = history.get("reel_publications")
+        if not isinstance(raw_publications, list):
+            raise CorruptedHistoryError("reel_publications must be a list")
+        raw_publication = next(
+            (
+                record
+                for record in raw_publications
+                if isinstance(record, dict) and record.get("id") == normalized_publication_id
+            ),
+            None,
+        )
+        if raw_publication is None:
+            raise CorruptedHistoryError("Validated Reel publication is not mutable history state")
+        raw_publication["permalink"] = permalink
+        return updated, True
+
+    return _conditional_reel_update(
+        publication_id, reservation.release_identity, mutation
+    )
+
+
 def reserve_carousel(
     cover_artwork: Dict[str, Any],
     featured_artworks: Sequence[Dict[str, Any]],
