@@ -26,6 +26,7 @@ import requests
 logger = logging.getLogger(__name__)
 
 OWNED_MEDIA_ROOT = "images/publications"
+REEL_OWNED_MEDIA_ROOT = "reels/publications"
 MEDIA_OPERATION_ATTEMPTS = 3
 PUBLIC_HEALTH_CHECK_ATTEMPTS = 3
 PUBLICATION_LIST_PAGE_SIZE = 25
@@ -47,6 +48,12 @@ _OWNED_OBJECT_KEY_PATTERN = re.compile(
     r"(?P<publication_id>[a-z0-9](?:[a-z0-9_-]{0,126}[a-z0-9])?)/"
     r"(?P<timestamp>[0-9]{14})_(?P<nonce>[0-9a-f]{32})"
     r"(?P<suffix>\.jpg|\.png|\.webp)"
+)
+_OWNED_REEL_OBJECT_KEY_PATTERN = re.compile(
+    rf"{re.escape(REEL_OWNED_MEDIA_ROOT)}/"
+    r"(?P<publication_id>[a-z0-9](?:[a-z0-9_-]{0,126}[a-z0-9])?)/"
+    r"(?P<timestamp>[0-9]{14})_(?P<nonce>[0-9a-f]{32})"
+    r"(?P<suffix>\.mp4)"
 )
 _TRANSIENT_R2_HTTP_STATUSES = {408, 429, 500, 502, 503, 504}
 _TRANSIENT_R2_ERROR_CODES = {
@@ -78,6 +85,20 @@ class TempMediaUpload:
         validate_owned_object_key(self.object_key, self.publication_id)
         if not isinstance(self.public_url, str) or not self.public_url:
             raise ValueError("Temporary media public URL must not be empty")
+
+
+@dataclass(frozen=True)
+class TempReelUpload:
+    """An exact application-owned Reel MP4 object and its public URL."""
+
+    object_key: str
+    public_url: str
+    publication_id: str
+
+    def __post_init__(self) -> None:
+        validate_owned_reel_object_key(self.object_key, self.publication_id)
+        if not isinstance(self.public_url, str) or not self.public_url:
+            raise ValueError("Temporary Reel public URL must not be empty")
 
 
 @dataclass(frozen=True)
@@ -118,6 +139,11 @@ def publication_media_prefix(publication_id: object) -> str:
     return f"{OWNED_MEDIA_ROOT}/{normalized}/"
 
 
+def reel_publication_media_prefix(publication_id: object) -> str:
+    normalized = validate_publication_id(publication_id)
+    return f"{REEL_OWNED_MEDIA_ROOT}/{normalized}/"
+
+
 def validate_owned_object_key(object_key: object, publication_id: object) -> str:
     normalized_publication_id = validate_publication_id(publication_id)
     if not isinstance(object_key, str):
@@ -130,6 +156,22 @@ def validate_owned_object_key(object_key: object, publication_id: object) -> str
     except ValueError as error:
         raise ValueError(
             "Refusing to operate on a malformed temporary media key"
+        ) from error
+    return object_key
+
+
+def validate_owned_reel_object_key(object_key: object, publication_id: object) -> str:
+    normalized_publication_id = validate_publication_id(publication_id)
+    if not isinstance(object_key, str):
+        raise ValueError("Temporary Reel object key must be a string")
+    match = _OWNED_REEL_OBJECT_KEY_PATTERN.fullmatch(object_key)
+    if match is None or match.group("publication_id") != normalized_publication_id:
+        raise ValueError("Refusing to operate on a non-owned temporary Reel key")
+    try:
+        datetime.strptime(match.group("timestamp"), "%Y%m%d%H%M%S")
+    except ValueError as error:
+        raise ValueError(
+            "Refusing to operate on a malformed temporary Reel key"
         ) from error
     return object_key
 
@@ -207,6 +249,16 @@ def _new_owned_object_key(publication_id: str, file_suffix: str) -> str:
     return validate_owned_object_key(object_key, normalized)
 
 
+def _new_owned_reel_object_key(publication_id: str) -> str:
+    normalized = validate_publication_id(publication_id)
+    object_key = (
+        f"{reel_publication_media_prefix(normalized)}"
+        f"{datetime.now(timezone.utc).strftime('%Y%m%d%H%M%S')}_"
+        f"{uuid.uuid4().hex}.mp4"
+    )
+    return validate_owned_reel_object_key(object_key, normalized)
+
+
 def _delete_owned_object(
     client,
     bucket_name: str,
@@ -214,8 +266,9 @@ def _delete_owned_object(
     object_key: str,
     publication_id: str,
     reason: str,
+    key_validator=validate_owned_object_key,
 ) -> bool:
-    validate_owned_object_key(object_key, publication_id)
+    key_validator(object_key, publication_id)
     for attempt in range(1, MEDIA_OPERATION_ATTEMPTS + 1):
         try:
             client.delete_object(Bucket=bucket_name, Key=object_key)
@@ -290,6 +343,33 @@ def cleanup_temp_media_upload(
     )
 
 
+def cleanup_temp_reel_upload(upload: TempReelUpload, *, reason: str) -> bool:
+    """Delete one exact owned Reel upload; image handles are rejected."""
+    if not isinstance(upload, TempReelUpload):
+        raise ValueError("Reel cleanup accepts only an owned Reel upload handle")
+    validate_owned_reel_object_key(upload.object_key, upload.publication_id)
+    try:
+        configuration = _load_configuration(require_public_url=False)
+        client = _get_s3_client(configuration)
+    except Exception as error:
+        logger.error(
+            "r2_temp_reel_cleanup_failed publication_id=%s reason=%s "
+            "attempt=0 retryable=false error=%s",
+            upload.publication_id,
+            reason,
+            type(error).__name__,
+        )
+        return False
+    return _delete_owned_object(
+        client,
+        configuration.bucket_name,
+        object_key=upload.object_key,
+        publication_id=upload.publication_id,
+        reason=reason,
+        key_validator=validate_owned_reel_object_key,
+    )
+
+
 def rollback_temp_media_uploads(
     publication_id: str,
     uploads: Sequence[TempMediaUpload],
@@ -324,9 +404,14 @@ def rollback_temp_media_uploads(
 
 
 def _list_owned_publication_objects(
-    client, bucket_name: str, publication_id: str
+    client,
+    bucket_name: str,
+    publication_id: str,
+    *,
+    prefix_builder=publication_media_prefix,
+    key_validator=validate_owned_object_key,
 ) -> tuple[str, ...] | None:
-    prefix = publication_media_prefix(publication_id)
+    prefix = prefix_builder(publication_id)
     object_keys: list[str] = []
     continuation_token: str | None = None
     page_count = 0
@@ -397,7 +482,7 @@ def _list_owned_publication_objects(
         for item in contents:
             key = item.get("Key") if isinstance(item, dict) else None
             try:
-                page_keys.append(validate_owned_object_key(key, publication_id))
+                page_keys.append(key_validator(key, publication_id))
             except ValueError:
                 logger.warning(
                     "r2_temp_media_cleanup_failed publication_id=%s "
@@ -493,6 +578,75 @@ def cleanup_publication_media(
     complete = failures == 0
     logger.info(
         "r2_publication_cleanup_summary publication_id=%s object_count=%s "
+        "deleted=%s failures=%s result=%s reason=%s",
+        normalized,
+        len(object_keys),
+        deleted,
+        failures,
+        "complete" if complete else "incomplete",
+        reason,
+    )
+    return MediaCleanupSummary(
+        normalized,
+        len(object_keys),
+        deleted,
+        failures,
+        complete,
+        reason,
+    )
+
+
+def cleanup_publication_reels(
+    publication_id: str, *, reason: str
+) -> MediaCleanupSummary:
+    """List and delete only one bounded, exact Reel-owned prefix."""
+    normalized = validate_publication_id(publication_id)
+    try:
+        configuration = _load_configuration(require_public_url=False)
+        client = _get_s3_client(configuration)
+    except Exception as error:
+        logger.error(
+            "r2_publication_reel_cleanup_summary publication_id=%s object_count=0 "
+            "result=failed reason=%s error=%s",
+            normalized,
+            reason,
+            type(error).__name__,
+        )
+        return MediaCleanupSummary(normalized, 0, 0, 1, False, reason)
+
+    object_keys = _list_owned_publication_objects(
+        client,
+        configuration.bucket_name,
+        normalized,
+        prefix_builder=reel_publication_media_prefix,
+        key_validator=validate_owned_reel_object_key,
+    )
+    if object_keys is None:
+        logger.error(
+            "r2_publication_reel_cleanup_summary publication_id=%s object_count=0 "
+            "result=failed reason=%s",
+            normalized,
+            reason,
+        )
+        return MediaCleanupSummary(normalized, 0, 0, 1, False, reason)
+
+    deleted = 0
+    failures = 0
+    for object_key in object_keys:
+        if _delete_owned_object(
+            client,
+            configuration.bucket_name,
+            object_key=object_key,
+            publication_id=normalized,
+            reason=reason,
+            key_validator=validate_owned_reel_object_key,
+        ):
+            deleted += 1
+        else:
+            failures += 1
+    complete = failures == 0
+    logger.info(
+        "r2_publication_reel_cleanup_summary publication_id=%s object_count=%s "
         "deleted=%s failures=%s result=%s reason=%s",
         normalized,
         len(object_keys),
@@ -608,4 +762,98 @@ def stage_temp_media(
     )
     raise RuntimeError(
         f"R2 object {object_key} uploaded successfully, but its public health check failed."
+    )
+
+
+def stage_reel_mp4(file_path: str, publication_id: str) -> TempReelUpload:
+    """Upload and publicly validate an MP4 in the dedicated Reel namespace."""
+    if not isinstance(file_path, str) or not file_path.endswith(".mp4"):
+        raise ValueError("Reel staging requires an .mp4 MP4 source file")
+    normalized = validate_publication_id(publication_id)
+    configuration = _load_configuration(require_public_url=True)
+    client = _get_s3_client(configuration)
+    object_key = _new_owned_reel_object_key(normalized)
+
+    upload_success = False
+    for attempt in range(1, MEDIA_OPERATION_ATTEMPTS + 1):
+        try:
+            client.upload_file(
+                file_path,
+                configuration.bucket_name,
+                object_key,
+                ExtraArgs={"ContentType": "video/mp4"},
+            )
+            upload_success = True
+            logger.info(
+                "r2_temp_reel_uploaded publication_id=%s object_count=1 "
+                "result=uploaded attempt=%s",
+                normalized,
+                attempt,
+            )
+            break
+        except Exception as error:
+            retryable = _is_transient_r2_error(error)
+            logger.warning(
+                "R2 Reel upload failed attempt=%s/%s error=%s retryable=%s",
+                attempt,
+                MEDIA_OPERATION_ATTEMPTS,
+                type(error).__name__,
+                retryable,
+            )
+            if retryable and attempt < MEDIA_OPERATION_ATTEMPTS:
+                time.sleep(2 ** (attempt - 1))
+                continue
+            break
+    if not upload_success:
+        raise RuntimeError("Failed to upload Reel MP4 to Cloudflare R2 after 3 attempts.")
+
+    if configuration.public_url_base is None:
+        raise RuntimeError("R2 public URL configuration unexpectedly missing")
+    public_url = f"{configuration.public_url_base}/{object_key}"
+    upload = TempReelUpload(object_key, public_url, normalized)
+    for attempt in range(1, PUBLIC_HEALTH_CHECK_ATTEMPTS + 1):
+        try:
+            response = requests.head(public_url, allow_redirects=True, timeout=10)
+            response_content_type = (
+                response.headers.get("Content-Type", "")
+                .split(";", 1)[0]
+                .strip()
+                .casefold()
+            )
+            try:
+                response_content_length = int(response.headers.get("Content-Length", 0))
+            except (TypeError, ValueError):
+                response_content_length = 0
+            if (
+                response.status_code == 200
+                and response_content_length > 0
+                and response_content_type == "video/mp4"
+            ):
+                return upload
+            logger.warning(
+                "R2 Reel public health check failed publication_id=%s attempt=%s",
+                normalized,
+                attempt,
+            )
+        except Exception as error:
+            logger.warning(
+                "R2 Reel public health check error publication_id=%s attempt=%s "
+                "error=%s",
+                normalized,
+                attempt,
+                type(error).__name__,
+            )
+        if attempt < PUBLIC_HEALTH_CHECK_ATTEMPTS:
+            time.sleep(2)
+
+    _delete_owned_object(
+        client,
+        configuration.bucket_name,
+        object_key=object_key,
+        publication_id=normalized,
+        reason="public_health_check_failed",
+        key_validator=validate_owned_reel_object_key,
+    )
+    raise RuntimeError(
+        f"R2 Reel object {object_key} uploaded successfully, but its public health check failed."
     )
