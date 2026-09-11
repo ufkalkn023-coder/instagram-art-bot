@@ -7,6 +7,7 @@ import logging
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from enum import Enum
+from uuid import UUID
 import boto3
 from botocore.config import Config
 from botocore.exceptions import ClientError
@@ -23,6 +24,12 @@ from src.carousel_policy import (
 from src.models import (
     CarouselExperimentMetadata,
     PublicationRecord,
+    ReelCleanupQueueEntry,
+    ReelPublicationRecord,
+    ReelPublicationStatus,
+    ReelReleaseIdentity,
+    ReelReservationRecord,
+    ValidatedReelHistory,
     normalize_artwork_id,
 )
 from src import r2_media
@@ -115,6 +122,103 @@ class PublicationStatus(str, Enum):
     PUBLISHED = "PUBLISHED"
     AMBIGUOUS = "AMBIGUOUS"
     EXPIRED = "EXPIRED"
+
+
+REEL_HISTORY_KEYS = (
+    "reel_reservations",
+    "reel_publications",
+    "reel_publication_count",
+    "reel_staging_cleanup_queue",
+)
+
+
+def _validated_reel_history(history: Mapping[str, Any]) -> ValidatedReelHistory:
+    """Validate additive Reel state without adding defaults to legacy history."""
+    if not any(key in history for key in REEL_HISTORY_KEYS):
+        return ValidatedReelHistory((), (), 0, ())
+
+    def records_for(key: str, model: Any) -> tuple[Any, ...]:
+        value = history.get(key, [])
+        if not isinstance(value, list):
+            raise CorruptedHistoryError(f"{key} must be a list")
+        records = []
+        for index, item in enumerate(value):
+            if not isinstance(item, Mapping):
+                raise CorruptedHistoryError(f"{key} entry {index} must be an object")
+            try:
+                records.append(model.model_validate(item))
+            except ValidationError as exc:
+                raise CorruptedHistoryError(
+                    f"Malformed {key} entry {index}: {exc}"
+                ) from exc
+        return tuple(records)
+
+    reservations = records_for("reel_reservations", ReelReservationRecord)
+    publications = records_for("reel_publications", ReelPublicationRecord)
+    cleanup_queue = records_for("reel_staging_cleanup_queue", ReelCleanupQueueEntry)
+
+    count = history.get("reel_publication_count", 0)
+    if isinstance(count, bool) or not isinstance(count, int) or count < 0:
+        raise CorruptedHistoryError("reel_publication_count must be a non-negative integer")
+    if publications and "reel_publication_count" not in history:
+        raise CorruptedHistoryError("reel_publication_count is required for Reel publications")
+    if count != len(publications):
+        raise CorruptedHistoryError(
+            "reel_publication_count must equal the number of reel_publications"
+        )
+
+    reservation_ids: set[str] = set()
+    reservations_by_id: dict[str, ReelReservationRecord] = {}
+    for reservation in reservations:
+        if reservation.publication_id in reservation_ids:
+            raise CorruptedHistoryError(
+                f"Duplicate Reel reservation ID: {reservation.publication_id}"
+            )
+        reservation_ids.add(reservation.publication_id)
+        reservations_by_id[reservation.publication_id] = reservation
+
+    publication_ids: set[str] = set()
+    media_ids: set[str] = set()
+    for publication in publications:
+        if publication.id in publication_ids:
+            raise CorruptedHistoryError(f"Duplicate Reel publication ID: {publication.id}")
+        if publication.media_id in media_ids:
+            raise CorruptedHistoryError(
+                f"Duplicate Reel publication media ID: {publication.media_id}"
+            )
+        publication_ids.add(publication.id)
+        media_ids.add(publication.media_id)
+        reservation = reservations_by_id.get(publication.id)
+        if reservation is not None and (
+            reservation.status is not ReelPublicationStatus.PUBLISHED
+            or normalize_artwork_id(reservation.artwork_id)
+            != normalize_artwork_id(publication.artwork_id)
+            or reservation.release_identity != publication.release_identity
+            or reservation.media_id != publication.media_id
+        ):
+            raise CorruptedHistoryError(
+                f"Reel reservation/publication identity mismatch: {publication.id}"
+            )
+
+    queue_ids: set[str] = set()
+    for entry in cleanup_queue:
+        if entry.publication_id in queue_ids:
+            raise CorruptedHistoryError(
+                f"Duplicate Reel cleanup publication: {entry.publication_id}"
+            )
+        queue_ids.add(entry.publication_id)
+
+    # Existing feed validation is intentionally unchanged; it is only invoked
+    # when additive Reel state needs cross-format collision validation.
+    feed_publications = _validated_publications(history)
+    feed_ids = {publication["id"] for publication in feed_publications}
+    feed_media_ids = {publication["media_id"] for publication in feed_publications}
+    if publication_ids & feed_ids:
+        raise CorruptedHistoryError("Reel publication ID conflicts with feed publication")
+    if media_ids & feed_media_ids:
+        raise CorruptedHistoryError("Reel publication media ID conflicts with feed publication")
+
+    return ValidatedReelHistory(reservations, publications, count, cleanup_queue)
 
 
 @dataclass(frozen=True)
@@ -567,28 +671,80 @@ def recover_stale_reservations(now: datetime | None = None) -> int:
 
     return recovered
 
-def get_posted_ids() -> Set[str]:
-    """Return IDs protected from reuse by published, pending, or ambiguous posts."""
-    history, _ = load_history_with_etag()
+def _is_stale_reel_pending(
+    reservation: ReelReservationRecord, now: datetime
+) -> bool:
+    return (
+        reservation.status is ReelPublicationStatus.PENDING
+        and now.astimezone(timezone.utc) - _parse_reserved_at(reservation.reserved_at)
+        >= PENDING_RESERVATION_TTL
+    )
+
+
+def globally_protected_artwork_ids(
+    history: Mapping[str, Any], *, now: datetime
+) -> set[str]:
+    """Return the shared feed/Reel duplicate lock set for one history snapshot."""
+    if now.tzinfo is None or now.utcoffset() is None:
+        raise ValueError("Global protection time must be timezone-aware")
+    current_time = now.astimezone(timezone.utc)
+    reel_history = _validated_reel_history(history)
+    protected: set[str] = set()
+
     posted_list = history.get("posted_artworks", [])
-    now = datetime.now(timezone.utc)
-    posted_ids = set()
-    for item in posted_list:
-        artwork_id = item.get("id")
-        if not isinstance(artwork_id, str):
-            continue
+    if isinstance(posted_list, list):
+        for item in posted_list:
+            if not isinstance(item, Mapping):
+                continue
+            artwork_id = item.get("id")
+            if not isinstance(artwork_id, str):
+                continue
+            status = str(item.get("status", "")).upper()
+            if status == PublicationStatus.EXPIRED.value:
+                continue
+            if status == PublicationStatus.PENDING.value and _is_stale_pending(item, current_time):
+                continue
+            protected.add(normalize_artwork_id(artwork_id))
 
-        status = str(item.get("status", "")).upper()
-        if status == "EXPIRED":
-            continue
-        if status == "PENDING" and _is_stale_pending(item, now):
-            continue
+    # Preserve legacy feed reads: a malformed forward index never suppresses a
+    # valid legacy artwork lock, while each individually valid feed publication
+    # still contributes its proven artwork IDs.
+    publications = history.get("publications", [])
+    if isinstance(publications, list):
+        for publication in publications:
+            if not isinstance(publication, Mapping):
+                continue
+            try:
+                validated = PublicationRecord.model_validate(publication)
+            except ValidationError:
+                continue
+            protected.update(normalize_artwork_id(value) for value in validated.artwork_ids)
 
-        # AMBIGUOUS is intentionally a permanent duplicate lock. Instagram may
-        # have accepted the publish request even when the client could not prove it.
-        posted_ids.add(normalize_artwork_id(artwork_id))
+    for reservation in reel_history.reservations:
+        if reservation.status is ReelPublicationStatus.EXPIRED:
+            continue
+        if _is_stale_reel_pending(reservation, current_time):
+            continue
+        protected.add(normalize_artwork_id(reservation.artwork_id))
+    protected.update(
+        normalize_artwork_id(publication.artwork_id)
+        for publication in reel_history.publications
+    )
+    return protected
 
-    return posted_ids
+
+def artwork_is_globally_protected(
+    history: Mapping[str, Any], artwork_id: str, *, now: datetime
+) -> bool:
+    return normalize_artwork_id(artwork_id) in globally_protected_artwork_ids(
+        history, now=now
+    )
+
+
+def get_posted_ids() -> Set[str]:
+    """Return the shared feed/Reel set protected from automatic reuse."""
+    history, _ = load_history_with_etag()
+    return globally_protected_artwork_ids(history, now=datetime.now(timezone.utc))
 
 def _confirmed_artworks(history: Dict[str, Any]) -> list[Dict[str, Any]]:
     now = datetime.now(timezone.utc)
@@ -929,48 +1085,75 @@ def reserve_artworks(
     if not stable_publication_id:
         raise ValueError("Publication ID must not be empty")
 
-    history, etag = load_history_with_etag()
-    original_history = copy.deepcopy(history)
-    now = datetime.now(timezone.utc)
     requested_ids = set(artwork_ids)
-    retained_records = []
-    for item in history.get("posted_artworks", []):
-        item_id = item.get("id") if isinstance(item, dict) else None
-        canonical_id = (
-            normalize_artwork_id(item_id) if isinstance(item_id, str) else None
-        )
-        if canonical_id not in requested_ids:
-            retained_records.append(item)
-            continue
-        if (
-            str(item.get("status", "")).upper() == PublicationStatus.EXPIRED.value
-            or _is_stale_pending(item, now)
-        ):
-            continue
-        raise RuntimeError(f"Artwork {canonical_id} is already protected by history")
+    for attempt in range(1, HISTORY_CONDITIONAL_WRITE_ATTEMPTS + 1):
+        history, etag = load_history_with_etag()
+        original_history = copy.deepcopy(history)
+        now = datetime.now(timezone.utc)
+        try:
+            protected = globally_protected_artwork_ids(history, now=now)
+            collision = requested_ids & protected
+            if collision:
+                raise RuntimeError(
+                    f"Artwork {sorted(collision)[0]} is already protected by history"
+                )
 
-    records = []
-    for artwork in artworks:
-        record = _reservation_record(
-            artwork,
-            publication_id=stable_publication_id,
+            retained_records = []
+            for item in history.get("posted_artworks", []):
+                item_id = item.get("id") if isinstance(item, dict) else None
+                canonical_id = (
+                    normalize_artwork_id(item_id) if isinstance(item_id, str) else None
+                )
+                if canonical_id not in requested_ids:
+                    retained_records.append(item)
+                    continue
+                if (
+                    str(item.get("status", "")).upper()
+                    == PublicationStatus.EXPIRED.value
+                    or _is_stale_pending(item, now)
+                ):
+                    continue
+                raise RuntimeError(
+                    f"Artwork {canonical_id} is already protected by history"
+                )
+
+            records = []
+            for artwork in artworks:
+                record = _reservation_record(
+                    artwork,
+                    publication_id=stable_publication_id,
+                )
+                record["publication_type"] = publication_type
+                record["content_type"] = artwork.get("content_type")
+                records.append(record)
+            history["posted_artworks"] = retained_records + records
+        except Exception:
+            _restore_history_snapshot_in_place(history, original_history)
+            raise
+        try:
+            _upload_history(history, etag)
+        except ConcurrentWriteError:
+            _restore_history_snapshot_in_place(history, original_history)
+            if attempt == HISTORY_CONDITIONAL_WRITE_ATTEMPTS:
+                raise
+            logger.warning(
+                "feed_reservation_history_conflict publication_id=%s retry=%s/%s",
+                stable_publication_id,
+                attempt + 1,
+                HISTORY_CONDITIONAL_WRITE_ATTEMPTS,
+            )
+            continue
+        except Exception:
+            _restore_history_snapshot_in_place(history, original_history)
+            raise
+        logger.info(
+            "Reserved %s artwork(s) for %s publication %s in R2 history (PENDING).",
+            len(artworks),
+            publication_type,
+            stable_publication_id,
         )
-        record["publication_type"] = publication_type
-        record["content_type"] = artwork.get("content_type")
-        records.append(record)
-    history["posted_artworks"] = retained_records + records
-    try:
-        _upload_history(history, etag)
-    except Exception:
-        _restore_history_snapshot_in_place(history, original_history)
-        raise
-    logger.info(
-        "Reserved %s artwork(s) for %s publication %s in R2 history (PENDING).",
-        len(artworks),
-        publication_type,
-        stable_publication_id,
-    )
-    return stable_publication_id
+        return stable_publication_id
+    raise AssertionError("unreachable")
 
 
 def reserve_artwork(
@@ -978,6 +1161,86 @@ def reserve_artwork(
 ) -> str:
     """Backward-compatible one-artwork reservation helper."""
     return reserve_artworks([artwork_data], "single", publication_id)
+
+
+def reserve_reel(
+    artwork_id: str,
+    release_identity: ReelReleaseIdentity,
+    publication_id: str | None = None,
+) -> str:
+    """Atomically reserve one Reel while protecting the shared artwork pool."""
+    if not isinstance(artwork_id, str) or not artwork_id.strip():
+        raise ValueError("Reel artwork ID must be a nonempty string")
+    canonical_artwork_id = normalize_artwork_id(artwork_id.strip())
+    if not isinstance(release_identity, ReelReleaseIdentity):
+        raise TypeError("release_identity must be a ReelReleaseIdentity")
+    if release_identity.reel_id != canonical_artwork_id:
+        raise ValueError("Reel release identity must match the canonical artwork ID")
+
+    stable_publication_id = publication_id or str(uuid.uuid4())
+    try:
+        stable_publication_id = str(UUID(stable_publication_id))
+    except (TypeError, ValueError, AttributeError) as exc:
+        raise ValueError("Reel publication ID must be a UUID") from exc
+
+    for attempt in range(1, HISTORY_CONDITIONAL_WRITE_ATTEMPTS + 1):
+        history, etag = load_history_with_etag()
+        original_history = copy.deepcopy(history)
+        now = datetime.now(timezone.utc)
+        try:
+            reel_history = _validated_reel_history(history)
+            existing = next(
+                (
+                    reservation
+                    for reservation in reel_history.reservations
+                    if reservation.publication_id == stable_publication_id
+                ),
+                None,
+            )
+            if existing is not None:
+                if (
+                    normalize_artwork_id(existing.artwork_id) == canonical_artwork_id
+                    and existing.release_identity == release_identity
+                ):
+                    return stable_publication_id
+                raise RuntimeError("Reel reservation replay has conflicting identity")
+
+            if artwork_is_globally_protected(history, canonical_artwork_id, now=now):
+                raise RuntimeError(
+                    f"Artwork {canonical_artwork_id} is already protected by history"
+                )
+
+            history.setdefault("reel_reservations", []).append(
+                {
+                    "publication_id": stable_publication_id,
+                    "artwork_id": canonical_artwork_id,
+                    "status": ReelPublicationStatus.PENDING.value,
+                    "reserved_at": _utc_timestamp(now),
+                    "release_identity": release_identity.model_dump(mode="json"),
+                }
+            )
+        except Exception:
+            _restore_history_snapshot_in_place(history, original_history)
+            raise
+        try:
+            _upload_history(history, etag)
+        except ConcurrentWriteError:
+            _restore_history_snapshot_in_place(history, original_history)
+            if attempt == HISTORY_CONDITIONAL_WRITE_ATTEMPTS:
+                raise
+            logger.warning(
+                "reel_reservation_history_conflict publication_id=%s retry=%s/%s",
+                stable_publication_id,
+                attempt + 1,
+                HISTORY_CONDITIONAL_WRITE_ATTEMPTS,
+            )
+            continue
+        except Exception:
+            _restore_history_snapshot_in_place(history, original_history)
+            raise
+        logger.info("Reserved Reel artwork %s in R2 history (PENDING).", canonical_artwork_id)
+        return stable_publication_id
+    raise AssertionError("unreachable")
 
 
 def reserve_carousel(

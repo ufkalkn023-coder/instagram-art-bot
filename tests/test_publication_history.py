@@ -76,6 +76,48 @@ def test_legacy_history_without_publications_loads_without_mutation(monkeypatch)
     assert legacy == original
 
 
+def test_feed_reservations_preserve_legacy_returns_and_shape_without_reel_state(monkeypatch):
+    history = {"posted_artworks": [], "active_color_tone": "cool"}
+    uploads = []
+    _install_history(monkeypatch, history, uploads)
+
+    assert history_tracker.reserve_artworks(
+        [_artwork("aic_1"), _artwork("met_2")], "carousel", "feed-batch"
+    ) == "feed-batch"
+    assert history_tracker.reserve_artwork(
+        _artwork("cleveland_3"), publication_id="feed-single"
+    ) == "feed-single"
+
+    assert len(uploads) == 2
+    assert set(history) == {"posted_artworks", "active_color_tone"}
+    assert history["active_color_tone"] == "cool"
+    expected_feed_keys = {
+        "artist", "artist_group", "artist_name", "artwork_url",
+        "compatibility_attempts", "compatibility_conversion", "content_type",
+        "copyright_notice", "credit_line", "diversity_component", "dominant_color",
+        "engagement_applied", "engagement_component", "engagement_confidence",
+        "engagement_features", "exif_orientation", "exploration_component",
+        "exploration_selected", "id", "image_height", "image_processing",
+        "image_width", "is_public_domain", "jpeg_compatibility_quality",
+        "learned_score", "license", "luminance_bucket", "measurement_coverage",
+        "media_id", "medium", "museum_name", "normalized_artist_key",
+        "orientation", "period", "period_or_style", "publication_id",
+        "publication_type", "published_height", "published_image_file_size",
+        "published_image_format", "published_orientation", "published_width",
+        "quality_component", "quality_score", "region", "reservation_id",
+        "reserved_at", "rights_status", "rights_text", "selection_score",
+        "semantic_family", "source", "source_bytes_preserved", "source_height",
+        "source_image_file_size", "source_image_format", "source_width", "status",
+        "style_or_period", "title", "visual_category", "visual_color_family",
+        "visual_tone",
+    }
+    assert [set(record) for record in history["posted_artworks"]] == [
+        expected_feed_keys,
+        expected_feed_keys,
+        expected_feed_keys,
+    ]
+
+
 def test_batch_carousel_reservation_is_one_write_and_uses_neutral_child_content_type(monkeypatch):
     history = {"posted_artworks": []}
     uploads = []
