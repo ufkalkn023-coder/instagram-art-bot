@@ -1736,6 +1736,219 @@ def record_reel_permalink(
     )
 
 
+def list_unresolved_reel_reservations(
+    *,
+    limit: int,
+    now: datetime | None = None,
+    max_age: timedelta | None = None,
+    publication_id: str | None = None,
+) -> list[ReelReservationRecord]:
+    """Return newest-first unresolved Reel reservations from validated history."""
+    if limit < 1:
+        raise ValueError("Reel reconciliation limit must be positive")
+    reference_time = now or datetime.now(timezone.utc)
+    if reference_time.tzinfo is None or reference_time.utcoffset() is None:
+        raise ValueError("Reconciliation time must be timezone-aware")
+    reference_time = reference_time.astimezone(timezone.utc)
+    if publication_id is not None:
+        try:
+            publication_id = str(UUID(publication_id))
+        except (TypeError, ValueError, AttributeError) as exc:
+            raise ValueError("Reel publication ID must be a UUID") from exc
+
+    history, _ = load_history_with_etag()
+    reel_history = _validated_reel_history(history)
+    unresolved = [
+        reservation
+        for reservation in reel_history.reservations
+        if reservation.status
+        in {
+            ReelPublicationStatus.PENDING,
+            ReelPublicationStatus.PUBLISHING,
+            ReelPublicationStatus.AMBIGUOUS,
+        }
+        and (publication_id is None or reservation.publication_id == publication_id)
+    ]
+
+    def lifecycle_time(reservation: ReelReservationRecord) -> datetime:
+        value = (
+            reservation.publish_started_at
+            or reservation.ambiguous_at
+            or reservation.reserved_at
+        )
+        parsed = _parse_reserved_at(value)
+        if parsed is None:
+            raise CorruptedHistoryError("Reel reservation lifecycle timestamp is invalid")
+        return parsed
+
+    unresolved.sort(key=lifecycle_time, reverse=True)
+    if max_age is not None:
+        unresolved = [
+            reservation
+            for reservation in unresolved
+            if reservation.status is ReelPublicationStatus.AMBIGUOUS
+            or reference_time - lifecycle_time(reservation) <= max_age
+        ]
+    return unresolved[:limit]
+
+
+def expire_reel_before_media_publish(
+    publication_id: str,
+    release_identity: ReelReleaseIdentity,
+    *,
+    reason: str,
+    expected_status: ReelPublicationStatus,
+    expected_container_id: str | None = None,
+    now: datetime | None = None,
+) -> ReelReservationRecord:
+    """Atomically expire proven pre-Meta work and enqueue only its Reel prefix."""
+    _reel_lifecycle_inputs(publication_id, release_identity)
+    if expected_status not in {
+        ReelPublicationStatus.PENDING,
+        ReelPublicationStatus.PUBLISHING,
+    }:
+        raise ValueError("Only PENDING or PUBLISHING Reel work may expire pre-Meta")
+    if not isinstance(reason, str) or not reason.strip():
+        raise ValueError("Reel expiration reason must be non-empty")
+    if expected_status is ReelPublicationStatus.PUBLISHING and (
+        not isinstance(expected_container_id, str) or not expected_container_id.strip()
+    ):
+        raise ValueError("PUBLISHING expiry requires the exact durable container ID")
+    if expected_status is ReelPublicationStatus.PENDING and expected_container_id is not None:
+        raise ValueError("PENDING expiry must not include a container ID")
+    expired_at = _utc_timestamp(now)
+    normalized_reason = reason.strip()
+
+    def mutation(history, reel_history, reservation, raw_reservation):
+        if reservation.status is not expected_status:
+            raise RuntimeError(
+                f"Cannot expire Reel reservation from {reservation.status.value}"
+            )
+        if expected_status is ReelPublicationStatus.PUBLISHING and (
+            reservation.container_id != expected_container_id.strip()
+        ):
+            raise RuntimeError("Reel expiry container ID does not match durable boundary")
+        if reservation.publish_response_media_id is not None:
+            raise RuntimeError("Cannot expire Reel reservation with a durable publish receipt")
+        raw_reservation["status"] = ReelPublicationStatus.EXPIRED.value
+        raw_reservation["expired_at"] = expired_at
+        raw_reservation["expiration_reason"] = normalized_reason
+        queue = history.setdefault("reel_staging_cleanup_queue", [])
+        if not isinstance(queue, list):
+            raise CorruptedHistoryError("reel_staging_cleanup_queue must be a list")
+        if not any(
+            isinstance(entry, dict)
+            and entry.get("publication_id") == reservation.publication_id
+            for entry in queue
+        ):
+            queue.append(
+                {
+                    "publication_id": reservation.publication_id,
+                    "eligible_at": expired_at,
+                    "reason": normalized_reason,
+                }
+            )
+        return ReelReservationRecord.model_validate(raw_reservation), True
+
+    return _conditional_reel_update(publication_id, release_identity, mutation)
+
+
+def record_reel_reconciliation_evidence(
+    publication_id: str,
+    release_identity: ReelReleaseIdentity,
+    *,
+    result: str,
+    evidence: str,
+    now: datetime | None = None,
+) -> ReelReservationRecord:
+    """Append bounded reconciliation evidence without reopening lifecycle state."""
+    _reel_lifecycle_inputs(publication_id, release_identity)
+    if not isinstance(result, str) or not result.strip():
+        raise ValueError("Reel reconciliation result must be non-empty")
+    if not isinstance(evidence, str) or not evidence.strip():
+        raise ValueError("Reel reconciliation evidence must be non-empty")
+    reconciled_at = _utc_timestamp(now)
+
+    def mutation(history, reel_history, reservation, raw_reservation):
+        if reservation.status not in {
+            ReelPublicationStatus.PENDING,
+            ReelPublicationStatus.PUBLISHING,
+            ReelPublicationStatus.AMBIGUOUS,
+        }:
+            raise RuntimeError("Only unresolved Reel reservations may be reconciled")
+        raw_reservation["last_reconciled_at"] = reconciled_at
+        raw_reservation["reconciliation_attempt_count"] = (
+            reservation.reconciliation_attempt_count or 0
+        ) + 1
+        raw_reservation["reconciliation_result"] = result.strip()
+        raw_reservation["reconciliation_evidence"] = evidence.strip()
+        return ReelReservationRecord.model_validate(raw_reservation), True
+
+    return _conditional_reel_update(publication_id, release_identity, mutation)
+
+
+def list_reel_staging_cleanup_publication_ids(*, limit: int) -> list[str]:
+    """Return only expired Reel cleanup prefixes; active or published state wins."""
+    if limit < 1:
+        raise ValueError("Reel staging cleanup limit must be positive")
+    history, _ = load_history_with_etag()
+    reel_history = _validated_reel_history(history)
+    publications = {publication.id for publication in reel_history.publications}
+    reservation_statuses = {
+        reservation.publication_id: reservation.status
+        for reservation in reel_history.reservations
+    }
+    return [
+        entry.publication_id
+        for entry in reel_history.cleanup_queue
+        if entry.publication_id not in publications
+        and reservation_statuses.get(entry.publication_id) is ReelPublicationStatus.EXPIRED
+    ][:limit]
+
+
+def acknowledge_reel_staging_cleanup(publication_id: str) -> bool:
+    """CAS-remove one completed Reel cleanup entry without touching feed queues."""
+    try:
+        normalized_publication_id = str(UUID(publication_id))
+    except (TypeError, ValueError, AttributeError) as exc:
+        raise ValueError("Reel publication ID must be a UUID") from exc
+    for attempt in range(1, HISTORY_CONDITIONAL_WRITE_ATTEMPTS + 1):
+        history, etag = load_history_with_etag()
+        original_history = copy.deepcopy(history)
+        try:
+            reel_history = _validated_reel_history(history)
+            if not any(
+                entry.publication_id == normalized_publication_id
+                for entry in reel_history.cleanup_queue
+            ):
+                return False
+            queue = history.get("reel_staging_cleanup_queue")
+            if not isinstance(queue, list):
+                raise CorruptedHistoryError("reel_staging_cleanup_queue must be a list")
+            history["reel_staging_cleanup_queue"] = [
+                entry
+                for entry in queue
+                if not isinstance(entry, dict)
+                or entry.get("publication_id") != normalized_publication_id
+            ]
+            _validated_reel_history(history)
+        except Exception:
+            _restore_history_snapshot_in_place(history, original_history)
+            raise
+        try:
+            _upload_history(history, etag)
+        except ConcurrentWriteError:
+            _restore_history_snapshot_in_place(history, original_history)
+            if attempt == HISTORY_CONDITIONAL_WRITE_ATTEMPTS:
+                raise
+            continue
+        except Exception:
+            _restore_history_snapshot_in_place(history, original_history)
+            raise
+        return True
+    raise AssertionError("unreachable")
+
+
 def reserve_carousel(
     cover_artwork: Dict[str, Any],
     featured_artworks: Sequence[Dict[str, Any]],
