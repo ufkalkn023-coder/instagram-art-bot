@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from botocore.exceptions import ClientError
+from botocore.exceptions import ClientError, ConnectionClosedError
 import re
 import pytest
 
@@ -58,8 +58,15 @@ def test_stage_reel_mp4_uses_reel_owned_key_video_content_type_and_public_handle
     uploads = []
 
     class Client:
-        def upload_file(self, file_path, bucket, object_key, ExtraArgs):
-            uploads.append((file_path, bucket, object_key, ExtraArgs))
+        def put_object(self, **kwargs):
+            uploads.append(
+                {
+                    "Bucket": kwargs["Bucket"],
+                    "Key": kwargs["Key"],
+                    "ContentType": kwargs["ContentType"],
+                    "body": kwargs["Body"].read(),
+                }
+            )
 
     class Healthy:
         status_code = 200
@@ -77,9 +84,86 @@ def test_stage_reel_mp4_uses_reel_owned_key_video_content_type_and_public_handle
         upload.object_key,
     )
     assert upload.public_url == f"https://media.example/{upload.object_key}"
-    assert uploads == [
-        (str(source), "configured", upload.object_key, {"ContentType": "video/mp4"})
+    assert len(uploads) == 1
+    assert uploads[0]["Bucket"] == "configured"
+    assert uploads[0]["Key"] == upload.object_key
+    assert uploads[0]["ContentType"] == "video/mp4"
+    assert uploads[0]["body"] == b"not-decoded-by-r2"
+
+
+def test_stage_reel_mp4_uploads_via_put_object_with_dedicated_reel_client(
+    monkeypatch, tmp_path
+):
+    _configure(monkeypatch)
+    source = tmp_path / "reel.mp4"
+    source.write_bytes(b"not-decoded-by-r2")
+    client_configs = []
+    puts = []
+    upload_file_calls = []
+
+    class Client:
+        def put_object(self, **kwargs):
+            puts.append(
+                {
+                    "bucket": kwargs["Bucket"],
+                    "key": kwargs["Key"],
+                    "content_type": kwargs["ContentType"],
+                    "body": kwargs["Body"].read(),
+                }
+            )
+            if len(puts) == 1:
+                # Consume the stream, then fail like the real staging failure:
+                # the retry must reopen the MP4 from a fresh stream position.
+                raise ConnectionClosedError(endpoint_url="https://r2.example")
+
+        def upload_file(self, *args, **kwargs):
+            upload_file_calls.append((args, kwargs))
+
+    class Healthy:
+        status_code = 200
+        headers = {"Content-Type": "video/mp4; charset=binary", "Content-Length": "42"}
+
+    def fake_client(*args, **kwargs):
+        client_configs.append(kwargs.get("config"))
+        return Client()
+
+    monkeypatch.setattr(r2_media.boto3, "client", fake_client)
+    monkeypatch.setattr(r2_media.requests, "head", lambda *args, **kwargs: Healthy())
+
+    upload = r2_media.stage_reel_mp4(str(source), PUBLICATION_A)
+
+    assert upload.publication_id == PUBLICATION_A
+    assert re.fullmatch(
+        r"reels/publications/publication-a/[0-9]{14}_[0-9a-f]{32}\.mp4",
+        upload.object_key,
+    )
+    assert puts, "Reel staging must upload with put_object, not managed transfer"
+    assert not upload_file_calls
+    assert len(puts) == 2
+    assert [call["bucket"] for call in puts] == ["configured", "configured"]
+    assert [call["key"] for call in puts] == [upload.object_key, upload.object_key]
+    assert [call["content_type"] for call in puts] == ["video/mp4", "video/mp4"]
+    assert [call["body"] for call in puts] == [
+        b"not-decoded-by-r2",
+        b"not-decoded-by-r2",
     ]
+
+    assert len(client_configs) == 1
+    staging_config = client_configs[0]
+    assert staging_config.connect_timeout == 10
+    assert staging_config.read_timeout == 120
+    assert staging_config.retries == {"total_max_attempts": 1, "mode": "standard"}
+
+    client_configs.clear()
+    r2_media._get_s3_client(r2_media._load_configuration(require_public_url=False))
+    assert len(client_configs) == 1
+    assert client_configs[0] is r2_media.R2_CLIENT_CONFIG
+    assert r2_media.R2_CLIENT_CONFIG.connect_timeout == 10
+    assert r2_media.R2_CLIENT_CONFIG.read_timeout == 30
+    assert r2_media.R2_CLIENT_CONFIG.retries == {
+        "total_max_attempts": 1,
+        "mode": "standard",
+    }
 
 
 @pytest.mark.parametrize(
@@ -120,7 +204,7 @@ def test_reel_public_health_check_rejects_non_200_empty_or_non_mp4_response(
     deleted = []
 
     class Client:
-        def upload_file(self, *args, **kwargs):
+        def put_object(self, **kwargs):
             pass
 
         def delete_object(self, **kwargs):

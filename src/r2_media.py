@@ -40,6 +40,14 @@ R2_CLIENT_CONFIG = Config(
     retries={"total_max_attempts": 1, "mode": "standard"},
 )
 
+# Large Reel MP4 uploads can exceed the general 30s read timeout; staging
+# uses its own bounded config instead.
+REEL_STAGING_CLIENT_CONFIG = Config(
+    connect_timeout=10,
+    read_timeout=120,
+    retries={"total_max_attempts": 1, "mode": "standard"},
+)
+
 _PUBLICATION_ID_PATTERN = re.compile(
     r"[a-z0-9](?:[a-z0-9_-]{0,126}[a-z0-9])?"
 )
@@ -196,7 +204,9 @@ def _load_configuration(*, require_public_url: bool) -> _R2MediaConfiguration:
     )
 
 
-def _get_s3_client(configuration: _R2MediaConfiguration):
+def _get_s3_client(
+    configuration: _R2MediaConfiguration, client_config: Config = R2_CLIENT_CONFIG
+):
     return boto3.client(
         "s3",
         endpoint_url=(
@@ -205,7 +215,7 @@ def _get_s3_client(configuration: _R2MediaConfiguration):
         aws_access_key_id=configuration.access_key,
         aws_secret_access_key=configuration.secret_key,
         region_name="auto",
-        config=R2_CLIENT_CONFIG,
+        config=client_config,
     )
 
 
@@ -771,18 +781,21 @@ def stage_reel_mp4(file_path: str, publication_id: str) -> TempReelUpload:
         raise ValueError("Reel staging requires an .mp4 MP4 source file")
     normalized = validate_publication_id(publication_id)
     configuration = _load_configuration(require_public_url=True)
-    client = _get_s3_client(configuration)
+    client = _get_s3_client(
+        configuration, client_config=REEL_STAGING_CLIENT_CONFIG
+    )
     object_key = _new_owned_reel_object_key(normalized)
 
     upload_success = False
     for attempt in range(1, MEDIA_OPERATION_ATTEMPTS + 1):
         try:
-            client.upload_file(
-                file_path,
-                configuration.bucket_name,
-                object_key,
-                ExtraArgs={"ContentType": "video/mp4"},
-            )
+            with open(file_path, "rb") as source:
+                client.put_object(
+                    Bucket=configuration.bucket_name,
+                    Key=object_key,
+                    Body=source,
+                    ContentType="video/mp4",
+                )
             upload_success = True
             logger.info(
                 "r2_temp_reel_uploaded publication_id=%s object_count=1 "
