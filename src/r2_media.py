@@ -46,6 +46,7 @@ REEL_STAGING_CLIENT_CONFIG = Config(
     connect_timeout=10,
     read_timeout=120,
     retries={"total_max_attempts": 1, "mode": "standard"},
+    request_checksum_calculation="when_required",
 )
 
 _PUBLICATION_ID_PATTERN = re.compile(

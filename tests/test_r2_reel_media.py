@@ -152,6 +152,7 @@ def test_stage_reel_mp4_uploads_via_put_object_with_dedicated_reel_client(
     staging_config = client_configs[0]
     assert staging_config.connect_timeout == 10
     assert staging_config.read_timeout == 120
+    assert staging_config.request_checksum_calculation == "when_required"
     assert staging_config.retries == {"total_max_attempts": 1, "mode": "standard"}
 
     client_configs.clear()
