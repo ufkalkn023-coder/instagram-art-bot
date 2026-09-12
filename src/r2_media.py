@@ -3,13 +3,18 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import ipaddress
 import logging
 import os
 import re
+import shutil
+import subprocess
+import tempfile
 import time
 import uuid
 from datetime import datetime, timezone
 from typing import Sequence
+from urllib.parse import urlsplit
 
 import boto3
 from botocore.config import Config
@@ -48,6 +53,8 @@ REEL_STAGING_CLIENT_CONFIG = Config(
     retries={"total_max_attempts": 1, "mode": "standard"},
     request_checksum_calculation="when_required",
 )
+
+REEL_STAGING_PART_SIZE = 5 * 1024 * 1024
 
 _PUBLICATION_ID_PATTERN = re.compile(
     r"[a-z0-9](?:[a-z0-9_-]{0,126}[a-z0-9])?"
@@ -776,6 +783,174 @@ def stage_temp_media(
     )
 
 
+class ReelPartTransferError(RuntimeError):
+    """One curl-backed Reel part transfer failed and may be retried."""
+
+
+def _remove_temp_file(path: str) -> None:
+    try:
+        os.remove(path)
+    except FileNotFoundError:
+        pass
+
+
+def _write_reel_part_file(file_path: str, offset: int, part_path: str) -> None:
+    with open(file_path, "rb") as source:
+        source.seek(offset)
+        with open(part_path, "wb") as part_file:
+            part_file.write(source.read(REEL_STAGING_PART_SIZE))
+
+
+def _validated_presigned_reel_part_url(presigned_url: str) -> str:
+    parsed = urlsplit(presigned_url)
+    hostname = (parsed.hostname or "").strip().rstrip(".").lower()
+    if parsed.scheme != "https" or not hostname:
+        raise RuntimeError("Presigned Reel part URL must be an https URL")
+    try:
+        address = ipaddress.ip_address(hostname)
+    except ValueError:
+        address = None
+    if address is not None:
+        unsafe = (
+            address.is_private
+            or address.is_loopback
+            or address.is_reserved
+            or address.is_link_local
+            or address.is_multicast
+            or address.is_unspecified
+        )
+    else:
+        unsafe = hostname == "localhost" or hostname.endswith(
+            (".localhost", ".local", ".internal")
+        )
+    if unsafe:
+        raise RuntimeError(
+            "Presigned Reel part URL must not target a private or local host"
+        )
+    return presigned_url
+
+
+def _parse_reel_part_response_headers(
+    header_path: str,
+) -> tuple[int | None, str | None]:
+    try:
+        with open(header_path, "r", encoding="utf-8", errors="replace") as header_file:
+            header_text = header_file.read()
+    except OSError:
+        return None, None
+    status_code = None
+    etag = None
+    for line in header_text.splitlines():
+        stripped = line.strip()
+        if stripped[:5].upper() == "HTTP/":
+            fields = stripped.split()
+            if len(fields) >= 2 and fields[1].isdigit():
+                status_code = int(fields[1])
+        elif etag is None and stripped[:5].lower() == "etag:":
+            etag = stripped[5:].strip()
+    return status_code, etag
+
+
+def _curl_put_reel_part(presigned_url: str, part_path: str) -> str:
+    """PUT one part file with curl and return the ETag R2 returned."""
+    presigned_url = _validated_presigned_reel_part_url(presigned_url)
+    header_fd, header_path = tempfile.mkstemp(prefix="reel-part-headers-")
+    os.close(header_fd)
+    try:
+        try:
+            completed = subprocess.run(
+                [
+                    "curl",
+                    "--http1.1",
+                    "--silent",
+                    "--show-error",
+                    "--connect-timeout",
+                    "10",
+                    "--max-time",
+                    "180",
+                    "--dump-header",
+                    header_path,
+                    "--upload-file",
+                    part_path,
+                    presigned_url,
+                ],
+                stdin=subprocess.DEVNULL,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+                timeout=190,
+                check=False,
+            )
+        except subprocess.TimeoutExpired as error:
+            raise ReelPartTransferError(
+                "Reel part curl transfer timed out"
+            ) from error
+        except FileNotFoundError as error:
+            raise RuntimeError(
+                "curl is required to stage Reel MP4 parts but is not available"
+            ) from error
+        status_code, etag = _parse_reel_part_response_headers(header_path)
+        if completed.returncode != 0 or status_code is None or not (
+            200 <= status_code < 300
+        ):
+            raise ReelPartTransferError(
+                f"curl Reel part transfer failed exit={completed.returncode} "
+                f"status={status_code}"
+            )
+        if etag is None:
+            raise ReelPartTransferError("Reel part transfer returned no ETag header")
+        return etag
+    finally:
+        _remove_temp_file(header_path)
+
+
+def _upload_reel_part(
+    client,
+    bucket_name: str,
+    object_key: str,
+    upload_id: str,
+    part_number: int,
+    file_path: str,
+    offset: int,
+) -> str:
+    """Upload one exact staging byte range with bounded per-part retries."""
+    part_fd, part_path = tempfile.mkstemp(prefix="reel-part-")
+    os.close(part_fd)
+    try:
+        for attempt in range(1, MEDIA_OPERATION_ATTEMPTS + 1):
+            try:
+                _write_reel_part_file(file_path, offset, part_path)
+                presigned_url = client.generate_presigned_url(
+                    "upload_part",
+                    Params={
+                        "Bucket": bucket_name,
+                        "Key": object_key,
+                        "UploadId": upload_id,
+                        "PartNumber": part_number,
+                    },
+                )
+                return _curl_put_reel_part(presigned_url, part_path)
+            except Exception as error:
+                retryable = isinstance(
+                    error, ReelPartTransferError
+                ) or _is_transient_r2_error(error)
+                logger.warning(
+                    "R2 Reel part upload failed part=%s attempt=%s/%s "
+                    "error=%s retryable=%s",
+                    part_number,
+                    attempt,
+                    MEDIA_OPERATION_ATTEMPTS,
+                    type(error).__name__,
+                    retryable,
+                )
+                if retryable and attempt < MEDIA_OPERATION_ATTEMPTS:
+                    time.sleep(2 ** (attempt - 1))
+                    continue
+                raise
+    finally:
+        _remove_temp_file(part_path)
+
+
 def stage_reel_mp4(file_path: str, publication_id: str) -> TempReelUpload:
     """Upload and publicly validate an MP4 in the dedicated Reel namespace."""
     if not isinstance(file_path, str) or not file_path.endswith(".mp4"):
@@ -786,40 +961,75 @@ def stage_reel_mp4(file_path: str, publication_id: str) -> TempReelUpload:
         configuration, client_config=REEL_STAGING_CLIENT_CONFIG
     )
     object_key = _new_owned_reel_object_key(normalized)
+    if shutil.which("curl") is None:
+        raise RuntimeError(
+            "curl is required to stage Reel MP4 parts but was not found"
+        )
 
     upload_success = False
-    for attempt in range(1, MEDIA_OPERATION_ATTEMPTS + 1):
-        try:
-            with open(file_path, "rb") as source:
-                client.put_object(
+    upload_id = None
+    outer_error = None
+    try:
+        created = client.create_multipart_upload(
+            Bucket=configuration.bucket_name,
+            Key=object_key,
+            ContentType="video/mp4",
+        )
+        upload_id = created["UploadId"]
+        parts = []
+        file_size = os.path.getsize(file_path)
+        total_parts = -(-file_size // REEL_STAGING_PART_SIZE)
+        for part_number in range(1, total_parts + 1):
+            offset = (part_number - 1) * REEL_STAGING_PART_SIZE
+            parts.append(
+                {
+                    "PartNumber": part_number,
+                    "ETag": _upload_reel_part(
+                        client,
+                        configuration.bucket_name,
+                        object_key,
+                        upload_id,
+                        part_number,
+                        file_path,
+                        offset,
+                    ),
+                }
+            )
+        client.complete_multipart_upload(
+            Bucket=configuration.bucket_name,
+            Key=object_key,
+            UploadId=upload_id,
+            MultipartUpload={"Parts": parts},
+        )
+        upload_success = True
+        logger.info(
+            "r2_temp_reel_uploaded publication_id=%s object_count=1 "
+            "result=uploaded parts=%s",
+            normalized,
+            len(parts),
+        )
+    except Exception as error:
+        outer_error = error
+        logger.warning(
+            "R2 Reel multipart staging failed publication_id=%s error=%s",
+            normalized,
+            type(error).__name__,
+        )
+        if upload_id is not None:
+            try:
+                client.abort_multipart_upload(
                     Bucket=configuration.bucket_name,
                     Key=object_key,
-                    Body=source,
-                    ContentType="video/mp4",
+                    UploadId=upload_id,
                 )
-            upload_success = True
-            logger.info(
-                "r2_temp_reel_uploaded publication_id=%s object_count=1 "
-                "result=uploaded attempt=%s",
-                normalized,
-                attempt,
-            )
-            break
-        except Exception as error:
-            retryable = _is_transient_r2_error(error)
-            logger.warning(
-                "R2 Reel upload failed attempt=%s/%s error=%s retryable=%s",
-                attempt,
-                MEDIA_OPERATION_ATTEMPTS,
-                type(error).__name__,
-                retryable,
-            )
-            if retryable and attempt < MEDIA_OPERATION_ATTEMPTS:
-                time.sleep(2 ** (attempt - 1))
-                continue
-            break
+            except Exception as abort_error:
+                logger.warning(
+                    "R2 Reel multipart abort failed publication_id=%s error=%s",
+                    normalized,
+                    type(abort_error).__name__,
+                )
     if not upload_success:
-        raise RuntimeError("Failed to upload Reel MP4 to Cloudflare R2 after 3 attempts.")
+        raise RuntimeError("Failed to upload Reel MP4 to Cloudflare R2.") from outer_error
 
     if configuration.public_url_base is None:
         raise RuntimeError("R2 public URL configuration unexpectedly missing")

@@ -1,7 +1,11 @@
 from __future__ import annotations
 
 from botocore.exceptions import ClientError, ConnectionClosedError
+from pathlib import Path
 import re
+import subprocess
+import tempfile
+
 import pytest
 
 from src import r2_media
@@ -49,32 +53,136 @@ def _client_error(code, status, operation="DeleteObject"):
     )
 
 
+def _install_multipart_client(
+    monkeypatch,
+    tmp_path,
+    *,
+    curl_failure_indexes=(),
+    complete_error=None,
+    health_status=200,
+    health_headers=None,
+    presigned_url_overrides=None,
+):
+    """Install a presigned-URL/curl staging double; return one recorder dict."""
+    recorder = {
+        "client_configs": [],
+        "created": [],
+        "completed": [],
+        "aborted": [],
+        "deleted": [],
+        "presigned": [],
+        "upload_part_calls": [],
+        "put_object_calls": [],
+        "upload_file_calls": [],
+        "curl_calls": [],
+        "uploaded": [],
+        "temp_files": [],
+        "head_calls": [],
+    }
+    presigned_by_url = {}
+    curl_call_count = {"count": 0}
+    failing_indexes = set(curl_failure_indexes)
+    real_mkstemp = tempfile.mkstemp
+
+    class Client:
+        def create_multipart_upload(self, **kwargs):
+            recorder["created"].append(kwargs)
+            return {"UploadId": "upload-id-1"}
+
+        def generate_presigned_url(self, operation, Params):
+            recorder["presigned"].append({"operation": operation, **Params})
+            part_number = Params["PartNumber"]
+            url = (presigned_url_overrides or {}).get(
+                part_number,
+                f"https://presigned.example/part-{part_number}",
+            )
+            presigned_by_url[url] = part_number
+            return url
+
+        def upload_part(self, **kwargs):
+            recorder["upload_part_calls"].append(kwargs)
+
+        def complete_multipart_upload(self, **kwargs):
+            recorder["completed"].append(kwargs)
+            if complete_error is not None:
+                raise complete_error
+            return {}
+
+        def abort_multipart_upload(self, **kwargs):
+            recorder["aborted"].append(kwargs)
+
+        def delete_object(self, **kwargs):
+            recorder["deleted"].append(kwargs["Key"])
+
+        def put_object(self, **kwargs):
+            recorder["put_object_calls"].append(kwargs)
+
+        def upload_file(self, *args, **kwargs):
+            recorder["upload_file_calls"].append((args, kwargs))
+
+    def fake_client(*args, **kwargs):
+        recorder["client_configs"].append(kwargs.get("config"))
+        return Client()
+
+    monkeypatch.setattr(r2_media.boto3, "client", fake_client)
+
+    def fake_run(cmd, **kwargs):
+        curl_call_count["count"] += 1
+        recorder["curl_calls"].append(list(cmd))
+        upload_path = cmd[cmd.index("--upload-file") + 1]
+        part_number = presigned_by_url[cmd[-1]]
+        recorder["uploaded"].append((part_number, Path(upload_path).read_bytes()))
+        if curl_call_count["count"] in failing_indexes:
+            return subprocess.CompletedProcess(cmd, 56, "", "curl: (56) failure")
+        header_path = cmd[cmd.index("--dump-header") + 1]
+        Path(header_path).write_text(
+            f'HTTP/1.1 200 OK\r\nETag: "etag-{part_number}"\r\n', encoding="utf-8"
+        )
+        return subprocess.CompletedProcess(cmd, 0, "", "")
+
+    monkeypatch.setattr(r2_media.subprocess, "run", fake_run)
+
+    def fake_mkstemp(*args, **kwargs):
+        kwargs.pop("dir", None)
+        fd, path = real_mkstemp(dir=str(tmp_path), **kwargs)
+        recorder["temp_files"].append(path)
+        return fd, path
+
+    monkeypatch.setattr(r2_media.tempfile, "mkstemp", fake_mkstemp)
+
+    def fake_head(*args, **kwargs):
+        recorder["head_calls"].append(kwargs)
+        if health_status == 200 and health_headers is None:
+            return type(
+                "Healthy",
+                (),
+                {
+                    "status_code": 200,
+                    "headers": {
+                        "Content-Type": "video/mp4; charset=binary",
+                        "Content-Length": "42",
+                    },
+                },
+            )()
+        return type(
+            "Unhealthy",
+            (),
+            {"status_code": health_status, "headers": health_headers},
+        )()
+
+    monkeypatch.setattr(r2_media.requests, "head", fake_head)
+    return recorder
+
+
 def test_stage_reel_mp4_uses_reel_owned_key_video_content_type_and_public_handle(
     monkeypatch, tmp_path
 ):
     _configure(monkeypatch)
     source = tmp_path / "reel.mp4"
     source.write_bytes(b"not-decoded-by-r2")
-    uploads = []
-
-    class Client:
-        def put_object(self, **kwargs):
-            uploads.append(
-                {
-                    "Bucket": kwargs["Bucket"],
-                    "Key": kwargs["Key"],
-                    "ContentType": kwargs["ContentType"],
-                    "body": kwargs["Body"].read(),
-                }
-            )
-
-    class Healthy:
-        status_code = 200
-        headers = {"Content-Type": "video/mp4; charset=binary", "Content-Length": "42"}
-
-    monkeypatch.setattr(r2_media.boto3, "client", lambda *args, **kwargs: Client())
-    monkeypatch.setattr(r2_media.requests, "head", lambda *args, **kwargs: Healthy())
     monkeypatch.setattr(r2_media.uuid, "uuid4", lambda: type("Id", (), {"hex": "a" * 32})())
+
+    recorder = _install_multipart_client(monkeypatch, tmp_path)
 
     upload = r2_media.stage_reel_mp4(str(source), PUBLICATION_A)
 
@@ -84,70 +192,62 @@ def test_stage_reel_mp4_uses_reel_owned_key_video_content_type_and_public_handle
         upload.object_key,
     )
     assert upload.public_url == f"https://media.example/{upload.object_key}"
-    assert len(uploads) == 1
-    assert uploads[0]["Bucket"] == "configured"
-    assert uploads[0]["Key"] == upload.object_key
-    assert uploads[0]["ContentType"] == "video/mp4"
-    assert uploads[0]["body"] == b"not-decoded-by-r2"
+    assert recorder["created"] == [
+        {
+            "Bucket": "configured",
+            "Key": upload.object_key,
+            "ContentType": "video/mp4",
+        }
+    ]
+    assert recorder["uploaded"] == [(1, b"not-decoded-by-r2")]
+    assert recorder["completed"][0]["MultipartUpload"] == {
+        "Parts": [{"PartNumber": 1, "ETag": '"etag-1"'}]
+    }
+    assert recorder["aborted"] == []
+    assert all(not Path(path).exists() for path in recorder["temp_files"])
 
 
-def test_stage_reel_mp4_uploads_via_put_object_with_dedicated_reel_client(
+def test_stage_reel_mp4_uploads_parts_via_presigned_urls_and_curl(
     monkeypatch, tmp_path
 ):
     _configure(monkeypatch)
     source = tmp_path / "reel.mp4"
     source.write_bytes(b"not-decoded-by-r2")
-    client_configs = []
-    puts = []
-    upload_file_calls = []
 
-    class Client:
-        def put_object(self, **kwargs):
-            puts.append(
-                {
-                    "bucket": kwargs["Bucket"],
-                    "key": kwargs["Key"],
-                    "content_type": kwargs["ContentType"],
-                    "body": kwargs["Body"].read(),
-                }
-            )
-            if len(puts) == 1:
-                # Consume the stream, then fail like the real staging failure:
-                # the retry must reopen the MP4 from a fresh stream position.
-                raise ConnectionClosedError(endpoint_url="https://r2.example")
-
-        def upload_file(self, *args, **kwargs):
-            upload_file_calls.append((args, kwargs))
-
-    class Healthy:
-        status_code = 200
-        headers = {"Content-Type": "video/mp4; charset=binary", "Content-Length": "42"}
-
-    def fake_client(*args, **kwargs):
-        client_configs.append(kwargs.get("config"))
-        return Client()
-
-    monkeypatch.setattr(r2_media.boto3, "client", fake_client)
-    monkeypatch.setattr(r2_media.requests, "head", lambda *args, **kwargs: Healthy())
+    recorder = _install_multipart_client(monkeypatch, tmp_path)
 
     upload = r2_media.stage_reel_mp4(str(source), PUBLICATION_A)
 
     assert upload.publication_id == PUBLICATION_A
-    assert re.fullmatch(
-        r"reels/publications/publication-a/[0-9]{14}_[0-9a-f]{32}\.mp4",
-        upload.object_key,
-    )
-    assert puts, "Reel staging must upload with put_object, not managed transfer"
-    assert not upload_file_calls
-    assert len(puts) == 2
-    assert [call["bucket"] for call in puts] == ["configured", "configured"]
-    assert [call["key"] for call in puts] == [upload.object_key, upload.object_key]
-    assert [call["content_type"] for call in puts] == ["video/mp4", "video/mp4"]
-    assert [call["body"] for call in puts] == [
-        b"not-decoded-by-r2",
-        b"not-decoded-by-r2",
+    assert recorder["upload_part_calls"] == []
+    assert recorder["put_object_calls"] == []
+    assert recorder["upload_file_calls"] == []
+    assert recorder["presigned"] == [
+        {
+            "operation": "upload_part",
+            "Bucket": "configured",
+            "Key": upload.object_key,
+            "UploadId": "upload-id-1",
+            "PartNumber": 1,
+        }
     ]
+    curl_command = recorder["curl_calls"][0]
+    assert curl_command[0] == "curl"
+    assert "--http1.1" in curl_command
+    assert "--silent" in curl_command
+    assert "--show-error" in curl_command
+    assert curl_command[curl_command.index("--connect-timeout") + 1] == "10"
+    assert curl_command[curl_command.index("--max-time") + 1] == "180"
+    assert curl_command[curl_command.index("--upload-file") + 1]
+    assert curl_command[-1].startswith("https://presigned.example/part-1")
+    assert recorder["completed"][0]["MultipartUpload"] == {
+        "Parts": [{"PartNumber": 1, "ETag": '"etag-1"'}]
+    }
+    assert recorder["aborted"] == []
+    assert len(recorder["head_calls"]) == 1
+    assert all(not Path(path).exists() for path in recorder["temp_files"])
 
+    client_configs = recorder["client_configs"]
     assert len(client_configs) == 1
     staging_config = client_configs[0]
     assert staging_config.connect_timeout == 10
@@ -155,16 +255,215 @@ def test_stage_reel_mp4_uploads_via_put_object_with_dedicated_reel_client(
     assert staging_config.request_checksum_calculation == "when_required"
     assert staging_config.retries == {"total_max_attempts": 1, "mode": "standard"}
 
-    client_configs.clear()
     r2_media._get_s3_client(r2_media._load_configuration(require_public_url=False))
-    assert len(client_configs) == 1
-    assert client_configs[0] is r2_media.R2_CLIENT_CONFIG
+    assert len(recorder["client_configs"]) == 2
+    assert recorder["client_configs"][1] is r2_media.R2_CLIENT_CONFIG
     assert r2_media.R2_CLIENT_CONFIG.connect_timeout == 10
     assert r2_media.R2_CLIENT_CONFIG.read_timeout == 30
     assert r2_media.R2_CLIENT_CONFIG.retries == {
         "total_max_attempts": 1,
         "mode": "standard",
     }
+
+
+def test_stage_reel_mp4_splits_real_reel_size_into_ordered_five_mib_parts(
+    monkeypatch, tmp_path
+):
+    _configure(monkeypatch)
+    source = tmp_path / "reel.mp4"
+    payload = (bytes(range(256)) * (22_464_053 // 256)) + bytes(range(22_464_053 % 256))
+    assert len(payload) == 22_464_053
+    source.write_bytes(payload)
+
+    recorder = _install_multipart_client(monkeypatch, tmp_path)
+
+    upload = r2_media.stage_reel_mp4(str(source), PUBLICATION_A)
+
+    assert upload.publication_id == PUBLICATION_A
+    part_size = 5 * 1024 * 1024
+    assert [part_number for part_number, _ in recorder["uploaded"]] == [1, 2, 3, 4, 5]
+    assert [len(body) for _, body in recorder["uploaded"]] == [
+        part_size,
+        part_size,
+        part_size,
+        part_size,
+        22_464_053 - 4 * part_size,
+    ]
+    for index, (_, body) in enumerate(recorder["uploaded"]):
+        offset = index * part_size
+        assert body == payload[offset : offset + part_size]
+    assert recorder["completed"][0]["MultipartUpload"] == {
+        "Parts": [
+            {"PartNumber": part_number, "ETag": f'"etag-{part_number}"'}
+            for part_number in (1, 2, 3, 4, 5)
+        ]
+    }
+    assert recorder["aborted"] == []
+
+
+def test_stage_reel_mp4_retries_only_failed_part_with_fresh_exact_bytes(
+    monkeypatch, tmp_path
+):
+    _configure(monkeypatch)
+    source = tmp_path / "reel.mp4"
+    part_size = 5 * 1024 * 1024
+    payload = (b"\xab" * part_size) + (b"\xcd" * part_size) + b"\xef" * 1024
+    source.write_bytes(payload)
+
+    recorder = _install_multipart_client(
+        monkeypatch, tmp_path, curl_failure_indexes={2}
+    )
+
+    upload = r2_media.stage_reel_mp4(str(source), PUBLICATION_A)
+
+    assert upload.publication_id == PUBLICATION_A
+    assert [part_number for part_number, _ in recorder["uploaded"]] == [1, 2, 2, 3]
+    assert len(recorder["curl_calls"]) == 4
+    part_one_uploads = [body for number, body in recorder["uploaded"] if number == 1]
+    assert part_one_uploads == [payload[:part_size]]
+    part_two_uploads = [body for number, body in recorder["uploaded"] if number == 2]
+    assert part_two_uploads == [payload[part_size : 2 * part_size]] * 2
+    assert recorder["completed"][0]["MultipartUpload"] == {
+        "Parts": [
+            {"PartNumber": 1, "ETag": '"etag-1"'},
+            {"PartNumber": 2, "ETag": '"etag-2"'},
+            {"PartNumber": 3, "ETag": '"etag-3"'},
+        ]
+    }
+    assert recorder["aborted"] == []
+
+
+def test_stage_reel_mp4_aborts_when_a_part_fails_permanently(monkeypatch, tmp_path):
+    _configure(monkeypatch)
+    source = tmp_path / "reel.mp4"
+    part_size = 5 * 1024 * 1024
+    source.write_bytes(b"\xab" * (part_size + 1))
+
+    recorder = _install_multipart_client(
+        monkeypatch, tmp_path, curl_failure_indexes={2, 3, 4}
+    )
+
+    with pytest.raises(RuntimeError, match="Failed to upload Reel MP4"):
+        r2_media.stage_reel_mp4(str(source), PUBLICATION_A)
+
+    assert [part_number for part_number, _ in recorder["uploaded"]] == [1, 2, 2, 2]
+    assert len(recorder["curl_calls"]) == 4
+    assert recorder["completed"] == []
+    assert recorder["aborted"] == [
+        {
+            "Bucket": "configured",
+            "Key": recorder["created"][0]["Key"],
+            "UploadId": "upload-id-1",
+        }
+    ]
+    assert recorder["head_calls"] == []
+    assert all(not Path(path).exists() for path in recorder["temp_files"])
+
+
+def test_stage_reel_mp4_fails_safely_when_curl_is_unavailable(monkeypatch, tmp_path):
+    _configure(monkeypatch)
+    source = tmp_path / "reel.mp4"
+    source.write_bytes(b"not-decoded-by-r2")
+
+    recorder = _install_multipart_client(monkeypatch, tmp_path)
+    monkeypatch.setattr(r2_media.shutil, "which", lambda name: None)
+
+    with pytest.raises(RuntimeError, match="curl is required"):
+        r2_media.stage_reel_mp4(str(source), PUBLICATION_A)
+
+    assert recorder["created"] == []
+    assert recorder["completed"] == []
+    assert recorder["aborted"] == []
+    assert recorder["curl_calls"] == []
+    assert recorder["head_calls"] == []
+
+
+@pytest.mark.parametrize(
+    "unsafe_url",
+    (
+        "http://presigned.example/part-1",
+        "https://localhost/part-1",
+        "https://127.0.0.1/part-1",
+        "https://10.0.0.5/part-1",
+    ),
+)
+def test_stage_reel_mp4_rejects_unsafe_presigned_part_urls(
+    monkeypatch, tmp_path, unsafe_url
+):
+    _configure(monkeypatch)
+    source = tmp_path / "reel.mp4"
+    source.write_bytes(b"not-decoded-by-r2")
+
+    recorder = _install_multipart_client(
+        monkeypatch, tmp_path, presigned_url_overrides={1: unsafe_url}
+    )
+
+    with pytest.raises(RuntimeError, match="Failed to upload Reel MP4") as excinfo:
+        r2_media.stage_reel_mp4(str(source), PUBLICATION_A)
+
+    assert "Presigned Reel part URL" in str(excinfo.value.__cause__)
+    assert recorder["curl_calls"] == []
+    assert recorder["completed"] == []
+    assert recorder["aborted"] == [
+        {
+            "Bucket": "configured",
+            "Key": recorder["created"][0]["Key"],
+            "UploadId": "upload-id-1",
+        }
+    ]
+
+
+def test_stage_reel_mp4_removes_temp_files_on_success_and_failure(
+    monkeypatch, tmp_path
+):
+    _configure(monkeypatch)
+    source = tmp_path / "reel.mp4"
+    source.write_bytes(b"not-decoded-by-r2")
+
+    recorder = _install_multipart_client(monkeypatch, tmp_path)
+    r2_media.stage_reel_mp4(str(source), PUBLICATION_A)
+
+    assert recorder["temp_files"]
+    assert all(not Path(path).exists() for path in recorder["temp_files"])
+
+    part_size = 5 * 1024 * 1024
+    failing_source = tmp_path / "reel-large.mp4"
+    failing_source.write_bytes(b"\xab" * (part_size + 1))
+    recorder = _install_multipart_client(
+        monkeypatch, tmp_path, curl_failure_indexes={2, 3, 4}
+    )
+    with pytest.raises(RuntimeError, match="Failed to upload Reel MP4"):
+        r2_media.stage_reel_mp4(str(failing_source), PUBLICATION_A)
+
+    assert recorder["temp_files"]
+    assert all(not Path(path).exists() for path in recorder["temp_files"])
+
+
+def test_stage_reel_mp4_aborts_and_skips_health_check_when_complete_fails(
+    monkeypatch, tmp_path
+):
+    _configure(monkeypatch)
+    source = tmp_path / "reel.mp4"
+    source.write_bytes(b"not-decoded-by-r2")
+
+    recorder = _install_multipart_client(
+        monkeypatch,
+        tmp_path,
+        complete_error=ConnectionClosedError(endpoint_url="https://r2.example"),
+    )
+
+    with pytest.raises(RuntimeError, match="Failed to upload Reel MP4"):
+        r2_media.stage_reel_mp4(str(source), PUBLICATION_A)
+
+    assert len(recorder["completed"]) == 1
+    assert recorder["aborted"] == [
+        {
+            "Bucket": "configured",
+            "Key": recorder["created"][0]["Key"],
+            "UploadId": "upload-id-1",
+        }
+    ]
+    assert recorder["head_calls"] == []
 
 
 @pytest.mark.parametrize(
@@ -202,27 +501,24 @@ def test_reel_public_health_check_rejects_non_200_empty_or_non_mp4_response(
     _configure(monkeypatch)
     source = tmp_path / "reel.mp4"
     source.write_bytes(b"not-decoded-by-r2")
-    deleted = []
 
-    class Client:
-        def put_object(self, **kwargs):
-            pass
-
-        def delete_object(self, **kwargs):
-            deleted.append(kwargs["Key"])
-
-    class Unhealthy:
-        status_code = status
-        headers = {"Content-Type": content_type, "Content-Length": content_length}
-
-    monkeypatch.setattr(r2_media.boto3, "client", lambda *args, **kwargs: Client())
-    monkeypatch.setattr(r2_media.requests, "head", lambda *args, **kwargs: Unhealthy())
+    recorder = _install_multipart_client(
+        monkeypatch,
+        tmp_path,
+        health_status=status,
+        health_headers={
+            "Content-Type": content_type,
+            "Content-Length": content_length,
+        },
+    )
 
     with pytest.raises(RuntimeError, match="public health check failed"):
         r2_media.stage_reel_mp4(str(source), PUBLICATION_A)
 
-    assert len(deleted) == 1
-    assert deleted[0].startswith("reels/publications/publication-a/")
+    assert len(recorder["completed"]) == 1
+    assert recorder["deleted"] == [recorder["created"][0]["Key"]]
+    assert recorder["deleted"][0].startswith("reels/publications/publication-a/")
+    assert recorder["aborted"] == []
 
 
 def test_exact_reel_cleanup_rejects_image_handle_and_deletes_one_reel_object(
