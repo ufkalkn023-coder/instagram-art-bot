@@ -14,7 +14,7 @@ import shutil
 import stat
 import subprocess
 import tempfile
-from typing import ContextManager, Iterator, Mapping
+from typing import Iterator, Mapping
 
 from src.models import ReelReleaseIdentity, normalize_artwork_id
 

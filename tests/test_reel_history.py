@@ -222,6 +222,10 @@ def test_reel_ambiguous_blocks_feed_reservation(monkeypatch):
 @pytest.mark.parametrize("status", ["PENDING", "PUBLISHED"])
 def test_active_or_published_reel_blocks_feed_reservation(monkeypatch, status):
     history = _valid_reel_history(status=status)
+    if status == "PENDING":
+        history["reel_reservations"][0]["reserved_at"] = (
+            datetime.now(timezone.utc) - history_tracker.PENDING_RESERVATION_TTL / 4
+        ).strftime("%Y-%m-%dT%H:%M:%SZ")
     _install_history(monkeypatch, history)
 
     with pytest.raises(RuntimeError, match="already protected"):
