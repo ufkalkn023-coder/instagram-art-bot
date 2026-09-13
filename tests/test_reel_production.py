@@ -1,7 +1,9 @@
 """Focused tests for the single-Reel production orchestration entry point."""
 
+import json
 import subprocess
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import Mock
 
 import pytest
@@ -205,3 +207,278 @@ def test_produce_reel_handoff_never_crosses_publication_boundaries(monkeypatch, 
     )
 
     assert selection.canonical_id == "met_1"
+
+
+def _reels_checkout(tmp_path):
+    reels_root = tmp_path / "artfolio-reels"
+    (reels_root / "scripts").mkdir(parents=True)
+    (reels_root / "package.json").write_text("{}\n", encoding="utf-8")
+    for script in ("reel.ts", "package-release.ts", "verify-release.ts"):
+        (reels_root / "scripts" / script).write_text("// stub\n", encoding="utf-8")
+    return reels_root
+
+
+def _selection(tmp_path, canonical_id="met_123"):
+    handoff_path = tmp_path / "handoffs" / f"{canonical_id}.json"
+    handoff_path.parent.mkdir(parents=True, exist_ok=True)
+    handoff_path.write_text(
+        json.dumps(
+            {
+                "canonicalId": canonical_id,
+                "imagePath": str(tmp_path / "assets" / f"{canonical_id}.jpg"),
+            }
+        ),
+        encoding="utf-8",
+    )
+    return reel_production.ReelProductionSelection(
+        canonical_id=canonical_id,
+        handoff_path=handoff_path,
+        acquisition=AcquisitionResult(manifest={"safeCandidateCount": 1}),
+        queue=_queue([_entry(canonical_id, handoff_path)]),
+    )
+
+
+def _install_command_runner(
+    monkeypatch,
+    reels_root,
+    *,
+    reel_id,
+    failing_labels=(),
+    verify_payload=None,
+    verify_exit_code=0,
+):
+    commands = []
+
+    def fake_runner(command, **kwargs):
+        commands.append((list(command), kwargs))
+        label = command[2]
+        if label in failing_labels:
+            return SimpleNamespace(returncode=1, stdout="", stderr="boom")
+        if label == "reels:verify-release":
+            payload = verify_payload or {
+                "valid": True,
+                "errors": [],
+                "reelId": reel_id,
+                "directory": str(reels_root / "output" / "releases" / reel_id),
+            }
+            (reels_root / "output" / "releases" / reel_id).mkdir(
+                parents=True, exist_ok=True
+            )
+            banner = "> artfolio-reels@1.0.0 verify\n\n"
+            return SimpleNamespace(
+                returncode=verify_exit_code,
+                stdout=banner + json.dumps(payload) + "\n",
+                stderr="",
+            )
+        return SimpleNamespace(returncode=0, stdout="", stderr="")
+
+    monkeypatch.setattr(reel_production.subprocess, "run", fake_runner)
+    return commands
+
+
+def test_produce_verified_reel_release_runs_real_commands_in_order(
+    monkeypatch, tmp_path
+):
+    reels_root = _reels_checkout(tmp_path)
+    selection = _selection(tmp_path)
+    commands = _install_command_runner(monkeypatch, reels_root, reel_id="met_123")
+
+    staged = reel_production.produce_verified_reel_release(
+        selection, reels_repository=reels_root
+    )
+
+    assert [command[0][2] for command in commands] == [
+        "reel",
+        "package",
+        "reels:verify-release",
+    ]
+    staged_handoff = reels_root / "handoffs" / "met_123.json"
+    assert [command[0] for command in commands] == [
+        ["npm", "run", "reel", "--", str(staged_handoff), "--render"],
+        ["npm", "run", "package", "--", "met_123"],
+        ["npm", "run", "reels:verify-release", "--", "met_123", "--deep", "--json"],
+    ]
+    assert all(kwargs["cwd"] == str(reels_root) for _, kwargs in commands)
+    assert staged_handoff.read_text(encoding="utf-8") == (
+        selection.handoff_path.read_text(encoding="utf-8")
+    )
+    assert staged.reel_id == "met_123"
+    assert staged.handoff_path == staged_handoff
+    assert staged.release_directory == reels_root / "output" / "releases" / "met_123"
+
+
+def test_produce_verified_reel_release_requires_existing_checkout(tmp_path):
+    selection = _selection(tmp_path)
+    missing_root = tmp_path / "not-a-checkout"
+    missing_root.mkdir()
+
+    with pytest.raises(RuntimeError, match="checkout"):
+        reel_production.produce_verified_reel_release(
+            selection, reels_repository=missing_root
+        )
+
+    partial_root = tmp_path / "partial"
+    partial_root.mkdir()
+    (partial_root / "package.json").write_text("{}\n", encoding="utf-8")
+    with pytest.raises(RuntimeError, match="checkout"):
+        reel_production.produce_verified_reel_release(
+            selection, reels_repository=partial_root
+        )
+
+
+def test_produce_verified_reel_release_rejects_unsafe_reel_id(monkeypatch, tmp_path):
+    reels_root = _reels_checkout(tmp_path)
+    selection = _selection(tmp_path, canonical_id="met/../evil")
+    commands = _install_command_runner(monkeypatch, reels_root, reel_id="unused")
+
+    with pytest.raises(RuntimeError, match="safe reel id"):
+        reel_production.produce_verified_reel_release(
+            selection, reels_repository=reels_root
+        )
+
+    assert commands == []
+
+
+def test_produce_verified_reel_release_stops_on_first_command_failure(
+    monkeypatch, tmp_path
+):
+    reels_root = _reels_checkout(tmp_path)
+    selection = _selection(tmp_path)
+
+    commands = _install_command_runner(
+        monkeypatch, reels_root, reel_id="met_123", failing_labels={"reel"}
+    )
+    with pytest.raises(RuntimeError, match="reel command failed"):
+        reel_production.produce_verified_reel_release(
+            selection, reels_repository=reels_root
+        )
+    assert len(commands) == 1
+
+    commands = _install_command_runner(
+        monkeypatch, reels_root, reel_id="met_123", failing_labels={"package"}
+    )
+    with pytest.raises(RuntimeError, match="package command failed"):
+        reel_production.produce_verified_reel_release(
+            selection, reels_repository=reels_root
+        )
+    assert [command[0][2] for command in commands] == ["reel", "package"]
+
+
+def test_produce_verified_reel_release_fails_closed_on_invalid_verification(
+    monkeypatch, tmp_path
+):
+    reels_root = _reels_checkout(tmp_path)
+    selection = _selection(tmp_path)
+
+    commands = _install_command_runner(
+        monkeypatch,
+        reels_root,
+        reel_id="met_123",
+        verify_payload={"valid": False, "errors": ["decode failed"]},
+    )
+    with pytest.raises(RuntimeError, match="did not report a valid release"):
+        reel_production.produce_verified_reel_release(
+            selection, reels_repository=reels_root
+        )
+    assert len(commands) == 3
+
+    commands = _install_command_runner(
+        monkeypatch,
+        reels_root,
+        reel_id="met_123",
+        verify_payload={
+            "valid": True,
+            "errors": [],
+            "reelId": "other_reel",
+            "directory": str(reels_root / "output" / "releases" / "other_reel"),
+        },
+    )
+    with pytest.raises(RuntimeError, match="reel id does not match"):
+        reel_production.produce_verified_reel_release(
+            selection, reels_repository=reels_root
+        )
+
+    commands = _install_command_runner(
+        monkeypatch, reels_root, reel_id="met_123", verify_exit_code=1
+    )
+    with pytest.raises(RuntimeError, match="verify-release command failed"):
+        reel_production.produce_verified_reel_release(
+            selection, reels_repository=reels_root
+        )
+
+
+def test_produce_verified_reel_release_reuses_identical_staged_handoff(
+    monkeypatch, tmp_path
+):
+    reels_root = _reels_checkout(tmp_path)
+    selection = _selection(tmp_path)
+    staged = reels_root / "handoffs" / "met_123.json"
+    staged.parent.mkdir(parents=True, exist_ok=True)
+    staged.write_text(
+        selection.handoff_path.read_text(encoding="utf-8"), encoding="utf-8"
+    )
+    staged.chmod(0o444)
+    _install_command_runner(monkeypatch, reels_root, reel_id="met_123")
+
+    staged_release = reel_production.produce_verified_reel_release(
+        selection, reels_repository=reels_root
+    )
+
+    assert staged_release.handoff_path == staged
+    assert staged.read_text(encoding="utf-8") == (
+        selection.handoff_path.read_text(encoding="utf-8")
+    )
+
+
+def test_produce_verified_reel_release_fails_closed_on_conflicting_staged_handoff(
+    monkeypatch, tmp_path
+):
+    reels_root = _reels_checkout(tmp_path)
+    selection = _selection(tmp_path)
+    staged = reels_root / "handoffs" / "met_123.json"
+    staged.parent.mkdir(parents=True, exist_ok=True)
+    staged.write_text("{}\n", encoding="utf-8")
+    commands = _install_command_runner(monkeypatch, reels_root, reel_id="met_123")
+
+    with pytest.raises(RuntimeError, match="Conflicting staged handoff"):
+        reel_production.produce_verified_reel_release(
+            selection, reels_repository=reels_root
+        )
+
+    assert commands == []
+
+
+def test_produce_verified_reel_release_never_publishes_or_mutates(
+    monkeypatch, tmp_path
+):
+    reels_root = _reels_checkout(tmp_path)
+    selection = _selection(tmp_path)
+    _install_command_runner(monkeypatch, reels_root, reel_id="met_123")
+    forbidden = [
+        (history_tracker, "reserve_reel"),
+        (history_tracker, "record_reel_staging"),
+        (history_tracker, "finalize_reel_publication"),
+        (history_tracker, "_upload_history"),
+        (r2_media, "stage_reel_mp4"),
+        (r2_media, "cleanup_temp_reel_upload"),
+        (r2_media, "cleanup_publication_reels"),
+        (instagram_poster, "post_to_instagram_graph_api"),
+        (instagram_poster, "get_instagram_permalink"),
+        (instagram_poster, "_publish_container"),
+        (reel_publication, "publish_verified_reel"),
+        (reel_release, "verified_reel_release_snapshot"),
+        (reel_reconciliation, "reconcile_reel_publications"),
+    ]
+    for module, name in forbidden:
+        monkeypatch.setattr(
+            module,
+            name,
+            Mock(side_effect=AssertionError(f"{name} must not run before verification")),
+        )
+
+    staged = reel_production.produce_verified_reel_release(
+        selection, reels_repository=reels_root
+    )
+
+    assert staged.reel_id == "met_123"
+    assert staged.release_directory.is_dir()
