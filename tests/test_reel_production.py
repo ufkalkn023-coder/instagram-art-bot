@@ -299,6 +299,16 @@ def test_produce_verified_reel_release_runs_real_commands_in_order(
         ["npm", "run", "reels:verify-release", "--", "met_123", "--deep", "--json"],
     ]
     assert all(kwargs["cwd"] == str(reels_root) for _, kwargs in commands)
+    assert [command[1]["stdout"] for command in commands] == [
+        None,
+        None,
+        subprocess.PIPE,
+    ]
+    assert [command[1]["stderr"] for command in commands] == [
+        None,
+        None,
+        subprocess.PIPE,
+    ]
     assert staged_handoff.read_text(encoding="utf-8") == (
         selection.handoff_path.read_text(encoding="utf-8")
     )

@@ -154,14 +154,16 @@ def _run_reel_command(
     *,
     cwd: Path,
     label: str,
+    capture_output: bool = False,
 ):
+    logger.info("reel_command_started label=%s", label)
     try:
         completed = command_runner(
             command,
             cwd=str(cwd),
             stdin=subprocess.DEVNULL,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
+            stdout=subprocess.PIPE if capture_output else None,
+            stderr=subprocess.PIPE if capture_output else None,
             text=True,
             check=False,
         )
@@ -179,6 +181,7 @@ def _run_reel_command(
         raise ReelProductionCommandError(
             f"Reel {label} command failed with exit {completed.returncode}"
         )
+    logger.info("reel_command_completed label=%s", label)
     return completed
 
 
@@ -259,6 +262,7 @@ def produce_verified_reel_release(
         ["npm", "run", "reels:verify-release", "--", reel_id, "--deep", "--json"],
         cwd=reels_root,
         label="reels:verify-release",
+        capture_output=True,
     )
     release_directory = _verified_reel_release_directory(verified.stdout, reel_id)
     logger.info(
