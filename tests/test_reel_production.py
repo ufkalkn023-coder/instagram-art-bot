@@ -482,3 +482,253 @@ def test_produce_verified_reel_release_never_publishes_or_mutates(
 
     assert staged.reel_id == "met_123"
     assert staged.release_directory.is_dir()
+
+
+def _publication_record():
+    from src.models import ReelPublicationRecord
+
+    return ReelPublicationRecord.model_validate(
+        {
+            "id": "12345678-1234-4234-8234-123456789abc",
+            "artwork_id": "met_123",
+            "media_id": "media-1",
+            "posted_at": "2026-09-13T12:00:00Z",
+            "permalink": None,
+            "release_identity": {
+                "version": "artfolio-release-v1",
+                "reel_id": "met_123",
+                "created_at": "2026-09-13T11:55:00Z",
+                "manifest_sha256": "a" * 64,
+                "files_sha256": {
+                    "reel.mp4": "a" * 64,
+                    "caption.txt": "a" * 64,
+                    "metadata.json": "a" * 64,
+                    "qc/contact-sheet.png": "a" * 64,
+                },
+            },
+        }
+    )
+
+
+def _install_full_pipeline(monkeypatch, tmp_path, *, publish_error=None):
+    reels_root = _reels_checkout(tmp_path)
+    events = []
+    handoff_path = tmp_path / "handoffs" / "met_123.json"
+    handoff_path.parent.mkdir(parents=True, exist_ok=True)
+    handoff_path.write_text(
+        json.dumps({"canonicalId": "met_123", "imagePath": "https://x.example/a.jpg"}),
+        encoding="utf-8",
+    )
+
+    def fake_acquire(**kwargs):
+        events.append("acquire")
+        return AcquisitionResult(manifest={"safeCandidateCount": 2})
+
+    def fake_queue(**kwargs):
+        events.append("queue")
+        return _queue([_entry("met_123", handoff_path)])
+
+    monkeypatch.setattr(
+        reel_candidate_acquisition, "acquire_reel_candidate_pool", fake_acquire
+    )
+    monkeypatch.setattr(
+        reel_batch_candidates, "build_batch_candidate_queue", fake_queue
+    )
+
+    def fake_runner(command, **kwargs):
+        events.append(f"command:{command[2]}")
+        if command[2] == "reels:verify-release":
+            release_directory = reels_root / "output" / "releases" / "met_123"
+            release_directory.mkdir(parents=True, exist_ok=True)
+            payload = {
+                "valid": True,
+                "errors": [],
+                "reelId": "met_123",
+                "directory": str(release_directory),
+            }
+            return SimpleNamespace(
+                returncode=0,
+                stdout="> banner\n\n" + json.dumps(payload) + "\n",
+                stderr="",
+            )
+        return SimpleNamespace(returncode=0, stdout="", stderr="")
+
+    monkeypatch.setattr(reel_production.subprocess, "run", fake_runner)
+
+    publish_calls = []
+
+    def fake_publish(**kwargs):
+        events.append("publish")
+        publish_calls.append(kwargs)
+        if publish_error is not None:
+            raise publish_error
+        return _publication_record()
+
+    monkeypatch.setattr(reel_publication, "publish_verified_reel", fake_publish)
+    return reels_root, events, publish_calls
+
+
+def test_produce_and_publish_reel_publishes_once_after_verification(
+    monkeypatch, tmp_path
+):
+    reels_root, events, publish_calls = _install_full_pipeline(monkeypatch, tmp_path)
+
+    outcome = reel_production.produce_and_publish_reel(
+        reels_repository=reels_root,
+        account_id="account",
+        access_token="token",
+        handoff_directory=tmp_path / "handoffs",
+        manifest_path=None,
+        work_directory=tmp_path / "work",
+        batch_output_directory=tmp_path / "batches",
+        selection_target=1,
+        environment={},
+    )
+
+    assert events == [
+        "acquire",
+        "queue",
+        "command:reel",
+        "command:package",
+        "command:reels:verify-release",
+        "publish",
+    ]
+    assert len(publish_calls) == 1
+    assert publish_calls[0] == {
+        "release": reels_root / "output" / "releases" / "met_123",
+        "reels_repository": reels_root,
+        "account_id": "account",
+        "access_token": "token",
+    }
+    assert outcome.canonical_id == "met_123"
+    assert outcome.release_directory == reels_root / "output" / "releases" / "met_123"
+    assert outcome.publication.media_id == "media-1"
+    assert outcome.publication.artwork_id == "met_123"
+
+
+def test_produce_and_publish_reel_never_publishes_when_production_fails(
+    monkeypatch, tmp_path
+):
+    reels_root, events, publish_calls = _install_full_pipeline(monkeypatch, tmp_path)
+
+    def failing_runner(command, **kwargs):
+        events.append(f"command:{command[2]}")
+        if command[2] == "reel":
+            return SimpleNamespace(returncode=1, stdout="", stderr="render boom")
+        return SimpleNamespace(returncode=0, stdout="", stderr="")
+
+    monkeypatch.setattr(reel_production.subprocess, "run", failing_runner)
+
+    with pytest.raises(RuntimeError, match="reel command failed"):
+        reel_production.produce_and_publish_reel(
+            reels_repository=reels_root,
+            account_id="account",
+            access_token="token",
+            handoff_directory=tmp_path / "handoffs",
+            manifest_path=None,
+            work_directory=tmp_path / "work",
+            batch_output_directory=tmp_path / "batches",
+            selection_target=1,
+            environment={},
+        )
+
+    assert "publish" not in events
+    assert publish_calls == []
+
+    def invalid_verification_runner(command, **kwargs):
+        events.append(f"command:{command[2]}")
+        if command[2] == "reels:verify-release":
+            release_directory = reels_root / "output" / "releases" / "met_123"
+            release_directory.mkdir(parents=True, exist_ok=True)
+            payload = {
+                "valid": False,
+                "errors": ["decode failed"],
+                "reelId": "met_123",
+                "directory": str(release_directory),
+            }
+            return SimpleNamespace(
+                returncode=0, stdout=json.dumps(payload) + "\n", stderr=""
+            )
+        return SimpleNamespace(returncode=0, stdout="", stderr="")
+
+    monkeypatch.setattr(reel_production.subprocess, "run", invalid_verification_runner)
+    events.clear()
+
+    with pytest.raises(RuntimeError, match="did not report a valid release"):
+        reel_production.produce_and_publish_reel(
+            reels_repository=reels_root,
+            account_id="account",
+            access_token="token",
+            handoff_directory=tmp_path / "handoffs",
+            manifest_path=None,
+            work_directory=tmp_path / "work",
+            batch_output_directory=tmp_path / "batches",
+            selection_target=1,
+            environment={},
+        )
+
+    assert "publish" not in events
+    assert publish_calls == []
+
+
+def test_produce_and_publish_reel_never_retries_publish(monkeypatch, tmp_path):
+    reels_root, events, publish_calls = _install_full_pipeline(
+        monkeypatch, tmp_path, publish_error=RuntimeError("publish failed")
+    )
+
+    with pytest.raises(RuntimeError, match="publish failed"):
+        reel_production.produce_and_publish_reel(
+            reels_repository=reels_root,
+            account_id="account",
+            access_token="token",
+            handoff_directory=tmp_path / "handoffs",
+            manifest_path=None,
+            work_directory=tmp_path / "work",
+            batch_output_directory=tmp_path / "batches",
+            selection_target=1,
+            environment={},
+        )
+
+    assert events.count("publish") == 1
+    assert len(publish_calls) == 1
+
+
+def test_produce_and_publish_reel_delegates_all_instagram_and_lifecycle_work(
+    monkeypatch, tmp_path
+):
+    reels_root, events, publish_calls = _install_full_pipeline(monkeypatch, tmp_path)
+    forbidden = [
+        (instagram_poster, "_publish_container"),
+        (instagram_poster, "_create_container"),
+        (instagram_poster, "get_instagram_permalink"),
+        (instagram_poster, "post_to_instagram_graph_api"),
+        (history_tracker, "reserve_reel"),
+        (history_tracker, "record_reel_staging"),
+        (history_tracker, "start_reel_publication_attempt"),
+        (history_tracker, "record_reel_publish_response"),
+        (history_tracker, "finalize_reel_publication"),
+        (history_tracker, "mark_reel_ambiguous"),
+        (history_tracker, "expire_reel_before_media_publish"),
+        (history_tracker, "_upload_history"),
+    ]
+    for module, name in forbidden:
+        monkeypatch.setattr(
+            module,
+            name,
+            Mock(side_effect=AssertionError(f"{name} is owned by publish_verified_reel")),
+        )
+
+    outcome = reel_production.produce_and_publish_reel(
+        reels_repository=reels_root,
+        account_id="account",
+        access_token="token",
+        handoff_directory=tmp_path / "handoffs",
+        manifest_path=None,
+        work_directory=tmp_path / "work",
+        batch_output_directory=tmp_path / "batches",
+        selection_target=1,
+        environment={},
+    )
+
+    assert outcome.publication.media_id == "media-1"
+    assert events[-1] == "publish"

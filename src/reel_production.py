@@ -15,7 +15,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable, Mapping, Sequence
 
-from src import reel_batch_candidates, reel_candidate_acquisition
+from src import reel_batch_candidates, reel_candidate_acquisition, reel_publication
+from src.models import ReelPublicationRecord
 
 logger = logging.getLogger(__name__)
 
@@ -48,6 +49,13 @@ class ReelReleaseStage:
     reel_id: str
     handoff_path: Path
     release_directory: Path
+
+
+@dataclass(frozen=True)
+class ReelPublicationOutcome:
+    canonical_id: str
+    release_directory: Path
+    publication: ReelPublicationRecord
 
 
 def produce_reel_handoff(
@@ -262,4 +270,58 @@ def produce_verified_reel_release(
         reel_id=reel_id,
         handoff_path=staged_handoff,
         release_directory=release_directory,
+    )
+
+
+def produce_and_publish_reel(
+    *,
+    reels_repository: str | Path,
+    account_id: str,
+    access_token: str,
+    pool_size: int | str | None = None,
+    attempt_limit: int | str | None = None,
+    handoff_directory: str | Path = reel_candidate_acquisition.DEFAULT_HANDOFF_DIRECTORY,
+    manifest_path: str | Path | None = reel_candidate_acquisition.DEFAULT_ACQUISITION_MANIFEST,
+    work_directory: str | Path = reel_candidate_acquisition.DEFAULT_ACQUISITION_WORK_DIRECTORY,
+    batch_output_directory: str | Path = reel_batch_candidates.DEFAULT_BATCH_HANDOFF_DIRECTORY,
+    excluded_canonical_ids: Sequence[str] = (),
+    selection_target: int | str | None = None,
+    environment: Mapping[str, str] | None = None,
+    command_runner: Callable[..., Any] | None = None,
+) -> ReelPublicationOutcome:
+    """Produce exactly one verified Reel and publish it once.
+
+    Composes the existing pipeline in order: one selected handoff (Task 1), the
+    pinned reels repository's own render/package/deep-verification commands
+    (Task 2), then exactly one call to the existing ``publish_verified_reel``
+    production path. All publication lifecycle semantics (reservation, the durable
+    publish boundary, receipts, finalization, ambiguity, expiry) remain owned by
+    that publisher. Failures propagate unchanged and are never retried.
+    """
+    selection = produce_reel_handoff(
+        pool_size=pool_size,
+        attempt_limit=attempt_limit,
+        handoff_directory=handoff_directory,
+        manifest_path=manifest_path,
+        work_directory=work_directory,
+        batch_output_directory=batch_output_directory,
+        excluded_canonical_ids=excluded_canonical_ids,
+        selection_target=selection_target,
+        environment=environment,
+    )
+    stage = produce_verified_reel_release(
+        selection,
+        reels_repository=reels_repository,
+        command_runner=command_runner,
+    )
+    publication = reel_publication.publish_verified_reel(
+        release=stage.release_directory,
+        reels_repository=reels_repository,
+        account_id=account_id,
+        access_token=access_token,
+    )
+    return ReelPublicationOutcome(
+        canonical_id=stage.reel_id,
+        release_directory=stage.release_directory,
+        publication=publication,
     )
