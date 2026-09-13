@@ -108,6 +108,18 @@ def test_workflow_never_uploads_reel_mp4_or_uses_retry_actions():
     assert "nick-fields/retry" not in text
 
 
+def test_workflow_installs_ffmpeg_before_production():
+    text = _workflow_text()
+    assert "Install FFmpeg" in text
+    assert "apt-get install -y ffmpeg" in text
+    assert "ffmpeg -version" in text
+    assert "ffprobe -version" in text
+    install_index = text.index("Install FFmpeg")
+    produce_index = text.index("scripts/produce_reel.py")
+    assert install_index < produce_index
+    assert text.count("scripts/produce_reel.py") == 1
+
+
 def _set_production_credentials(monkeypatch):
     monkeypatch.setenv("INSTAGRAM_ACCOUNT_ID", "account")
     monkeypatch.setenv("INSTAGRAM_ACCESS_TOKEN", "token")

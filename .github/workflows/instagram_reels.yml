@@ -74,6 +74,13 @@ jobs:
         run: npm ci
         working-directory: artfolio-reels
 
+      - name: Install FFmpeg
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ffmpeg
+          ffmpeg -version
+          ffprobe -version
+
       - name: Compile validation
         run: python -m compileall -q main.py src scripts tests
 
