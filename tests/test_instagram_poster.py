@@ -307,6 +307,23 @@ def test_publish_requires_valid_media_id(monkeypatch, response):
         instagram_poster._publish_container("account", "token", "container-1")
 
 
+@pytest.mark.parametrize("status_code", [307, 308])
+def test_publish_redirect_is_ambiguous_and_never_followed(monkeypatch, status_code):
+    calls = []
+
+    def post(*_args, **kwargs):
+        calls.append(kwargs)
+        return FakeResponse(status_code, {"error": {"message": "redirect"}})
+
+    monkeypatch.setattr(instagram_poster.requests, "post", post)
+
+    with pytest.raises(instagram_poster.InstagramPublishAmbiguousError):
+        instagram_poster._publish_container("account", "token", "container-1")
+
+    assert len(calls) == 1
+    assert calls[0]["allow_redirects"] is False
+
+
 def test_carousel_stops_when_child_or_parent_is_not_finished(monkeypatch):
     child_posts = []
     monkeypatch.setattr(

@@ -260,11 +260,17 @@ def _publish_container(account_id: str, access_token: str, container_id: str) ->
             data=payload,
             headers=_auth_headers(access_token),
             timeout=HTTP_TIMEOUT_SECONDS,
+            allow_redirects=False,
         )
     except (requests.Timeout, requests.ConnectionError) as error:
         raise InstagramPublishAmbiguousError(
             "Instagram publish outcome is unknown after a network failure; do not retry automatically."
         ) from error
+
+    if 300 <= response.status_code < 400:
+        raise InstagramPublishAmbiguousError(
+            "Instagram publish outcome is unknown after a redirect response; do not retry automatically."
+        )
 
     try:
         response_payload = _parse_json(response, "media publish")
