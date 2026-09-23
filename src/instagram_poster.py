@@ -339,6 +339,37 @@ def get_instagram_media_id(media_id: str, access_token: str) -> str:
     return _require_id(payload, "explicit media identity lookup")
 
 
+def validate_instagram_account_access(account_id: str, access_token: str) -> None:
+    """Read account identity before carousel production without Graph mutation."""
+    account_id, access_token = validate_instagram_credentials(
+        account_id, access_token
+    )
+    try:
+        payload = _request_json(
+            requests.get,
+            "account preflight",
+            retry_transient=True,
+            max_attempts=RECONCILIATION_RETRY_ATTEMPTS,
+            timeout_seconds=RECONCILIATION_HTTP_TIMEOUT_SECONDS,
+            url=f"{config.GRAPH_API_BASE_URL}/{quote(account_id, safe='')}",
+            params={"fields": "id"},
+            headers=_auth_headers(access_token),
+        )
+    except InstagramAPIError as error:
+        raise type(error)(
+            "Instagram account preflight failed "
+            f"(HTTP {error.status_code}, code {error.error_code}); "
+            "check the account, token, and permissions.",
+            status_code=error.status_code,
+            error_code=error.error_code,
+            error_type=error.error_type,
+            error_subcode=error.error_subcode,
+            fbtrace_id=error.fbtrace_id,
+        ) from None
+    if _require_id(payload, "account preflight") != account_id:
+        raise InstagramAPIError("Instagram account identity does not match configuration.")
+
+
 def _validate_credentials(account_id: str, access_token: str) -> None:
     validate_instagram_credentials(account_id, access_token)
 

@@ -293,8 +293,21 @@ def test_r2_upload_uses_decoded_content_type_and_does_not_rewrite_source(
             "Content-Length": str(len(original_bytes)),
         }
 
+    class GetResponse:
+        status_code = 200
+        headers = {"Content-Type": "image/jpeg; charset=binary"}
+        url = "https://media.example/image.jpg"
+
+        def iter_content(self, chunk_size):
+            assert chunk_size == 1
+            yield original_bytes[:1]
+
+        def close(self):
+            pass
+
     monkeypatch.setattr(r2_media.boto3, "client", lambda *args, **kwargs: FakeS3Client())
     monkeypatch.setattr(r2_media.requests, "head", lambda *args, **kwargs: HeadResponse())
+    monkeypatch.setattr(r2_media.requests, "get", lambda *args, **kwargs: GetResponse())
     monkeypatch.setattr(r2_media.time, "sleep", lambda _seconds: None)
 
     upload = image_processor.upload_temp_media(str(source), "publication-1")

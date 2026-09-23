@@ -77,11 +77,11 @@ Her workflow invocation şu sırayla ilerler:
 dependency install
 → compile validation
 → pytest
-→ production configuration validation
+→ read-only carousel production preflight
 → production bot
 ```
 
-Compile adımı `main.py`, `src`, `scripts` ve `tests` kapsamını; test adımı hızlı olan full `pytest -q` suite’ini çalıştırır. Install, compile, test veya configuration validation başarısız olursa production adımı çalışmaz. Production secret’ları yalnız config-validation ve publish adımlarına verilir; compile ve test adımları secret almaz. Uygulama aynı required-config kontrolünü history okuması veya artwork acquisition başlamadan önce tekrarlar.
+Compile adımı `main.py`, `src`, `scripts` ve `tests` kapsamını; test adımı hızlı olan full `pytest -q` suite’ini çalıştırır. Install, compile, test veya preflight başarısız olursa production adımı çalışmaz. Production secret’ları yalnız preflight ve publish adımlarına verilir; compile ve test adımları secret almaz. Preflight strict rights/config ve public HTTPS URL biçimini doğrular, Instagram hesap kimliğini GET ile okur, R2’de mevcut `posted_history.json` dosyasını ve feed lifecycle şemasını kontrol eder. Yeni içerik üretmeden önce aynı read-only preflight tekrar çalışır. Preflight R2 write veya Instagram publish yetkisini kanıtlamaz.
 
 ### Reel candidate, portfolio ve handoff katmanı
 
@@ -190,7 +190,7 @@ PENDING → EXPIRED
 
 `PENDING`, hiçbir irreversible `media_publish` isteğinin gönderilmediği anlamına gelir. Tek eser creation container ID'si veya carousel parent + child container ID'leri hazır olduktan sonra, `media_publish` çağrısından hemen önce bütün publication unit tek conditional R2 yazısıyla `PUBLISHING` olur. Bu yazı başarısızsa publish isteği gönderilmez. `media_publish` timeout, connection reset, malformed response veya 5xx sonucu otomatik tekrar edilmez; unit `AMBIGUOUS` kalır. Kesin 4xx reddi `EXPIRED`, başarılı response media ID'si ise önce durable receipt, ardından `PUBLISHED` olarak yazılır.
 
-Yeni staging media objeleri yalnız `images/publications/<publication_id>/<timestamp>_<uuid>.<suffix>` altında oluşturulur. Tek eser ve carousel, history reservation'ın döndürdüğü aynı durable `publication_id` değerini kullanır. Upload sonucu exact object key + public URL taşıyan immutable bir handle olarak korunur. Public HEAD doğrulaması başarısızsa yalnız o exact obje silinmeye çalışılır; Meta çağrılmadan önce yarım kalan carousel staging'i yalnız o invocation'ın tamamlanmış handle'larını geri alır.
+Yeni staging media objeleri yalnız `images/publications/<publication_id>/<timestamp>_<uuid>.<suffix>` altında oluşturulur. Tek eser ve carousel, history reservation'ın döndürdüğü aynı durable `publication_id` değerini kullanır. Upload sonucu exact object key + public URL taşıyan immutable bir handle olarak korunur. Public HEAD sonucu kaydedilir; anonymous GET asıl erişim kontrolüdür. GET doğrulaması başarısızsa yalnız o exact obje silinmeye çalışılır; Meta çağrılmadan önce yarım kalan carousel staging'i yalnız o invocation'ın tamamlanmış handle'larını geri alır.
 
 Crash recovery için authoritative `EXPIRED` geçişi aynı history CAS yazısında additive `staging_media_cleanup_queue` kaydı oluşturur. Cleanup önce lifecycle kararının durable olmasını bekler, sonra yalnız exact publication prefix'ini bounded olarak listeler (en fazla 100 obje, 25 objelik sayfalar) ve yeniden ownership validation'dan geçen key'leri siler. Başarısız cleanup state'i geri açmaz; queue sonraki startup veya manuel reconciliation koşusunda tekrar denenir. Policy fail-closed'dur: `PENDING`, `PUBLISHING`, `AMBIGUOUS` ve `PUBLISHED` media tutulur; yalnız authoritative `EXPIRED` cleanup-eligible'dır. Başarılı media Pinterest'in aynı public URL'yi kullanabilmesi için bu görevde tutulur. Eski `images/<timestamp>_<uuid>.<suffix>` objeleri publication ownership kanıtı taşımadığından otomatik cleanup kapsamı dışındadır.
 
@@ -265,6 +265,9 @@ python main.py --mode carousel
 
 # Network/acquisition başlatmadan yalnız required production config'i doğrular
 python main.py --validate-production-config
+
+# Instagram/R2 GET kontrolleriyle carousel production hazırlığını read-only doğrular
+python main.py --preflight-carousel
 
 # Yeni içerik üretmeden unresolved publication lifecycle durumunu uzlaştırır
 python3 main.py --reconcile-publications

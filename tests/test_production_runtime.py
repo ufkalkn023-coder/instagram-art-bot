@@ -43,6 +43,11 @@ def _production_environment() -> dict[str, str]:
 
 def _mock_reconciliation(monkeypatch, calls=None):
     monkeypatch.setattr(
+        main,
+        "validate_carousel_production_preflight",
+        lambda: {"gemini": "disabled"},
+    )
+    monkeypatch.setattr(
         main.publication_reconciliation,
         "reconcile_publications",
         lambda **kwargs: (

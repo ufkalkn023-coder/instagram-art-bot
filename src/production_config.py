@@ -1,8 +1,11 @@
 """Fail-fast validation for configuration required by production publishing."""
 
 from collections.abc import Mapping
+import ipaddress
 import os
+from urllib.parse import urlsplit
 
+from src import history_tracker, instagram_poster
 from src.rights_policy import RIGHTS_POLICY_ENV, RightsPolicyMode, resolve_rights_policy
 
 
@@ -89,3 +92,63 @@ def validate_reconciliation_configuration(
         raise ProductionConfigurationError(
             "Missing required reconciliation configuration: " + ", ".join(missing)
         )
+
+
+def _validate_public_media_base_url(value: str) -> None:
+    """Ensure staged image URLs can be anonymous public HTTPS URLs."""
+    try:
+        parsed = urlsplit(value)
+        hostname = parsed.hostname
+        port = parsed.port
+    except ValueError:
+        hostname = None
+        port = None
+        parsed = None
+    if (
+        parsed is None
+        or parsed.scheme != "https"
+        or not hostname
+        or "." not in hostname
+        or hostname == "localhost"
+        or hostname.endswith(".local")
+        or parsed.username is not None
+        or parsed.password is not None
+        or "?" in value
+        or "#" in value
+        or parsed.query
+        or parsed.fragment
+        or port not in (None, 443)
+        or any(character.isspace() or ord(character) < 32 for character in value)
+    ):
+        raise ProductionConfigurationError(
+            "CLOUDFLARE_R2_PUBLIC_URL must be an anonymous public HTTPS base URL"
+        )
+    try:
+        address = ipaddress.ip_address(hostname)
+    except ValueError:
+        return
+    if not address.is_global:
+        raise ProductionConfigurationError(
+            "CLOUDFLARE_R2_PUBLIC_URL must be an anonymous public HTTPS base URL"
+        )
+
+
+def validate_carousel_production_preflight() -> dict[str, str]:
+    """Read-only carousel readiness check before reconciliation or acquisition."""
+    optional_status = validate_production_configuration()
+    account_id, access_token = instagram_poster.validate_instagram_credentials(
+        os.environ.get("INSTAGRAM_ACCOUNT_ID"),
+        os.environ.get("INSTAGRAM_ACCESS_TOKEN"),
+    )
+    _validate_public_media_base_url(os.environ["CLOUDFLARE_R2_PUBLIC_URL"].strip())
+    instagram_poster.validate_instagram_account_access(
+        account_id,
+        access_token,
+    )
+    history, etag = history_tracker.load_history_with_etag()
+    if etag is None:
+        raise ProductionConfigurationError(
+            "Authoritative R2 posted_history.json is missing; restore or explicitly initialize it before carousel production"
+        )
+    history_tracker.validate_carousel_history_for_production(history)
+    return optional_status

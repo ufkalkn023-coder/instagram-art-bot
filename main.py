@@ -72,6 +72,7 @@ from src.theme_feasibility import (
     record_theme_availability,
 )
 from src.production_config import (
+    validate_carousel_production_preflight,
     validate_production_configuration,
     validate_reconciliation_configuration,
 )
@@ -1049,6 +1050,11 @@ def main(argv: list[str] | None = None) -> int:
         help="Validate required production environment variables and exit",
     )
     parser.add_argument(
+        "--preflight-carousel",
+        action="store_true",
+        help="Read-only production carousel readiness check and exit",
+    )
+    parser.add_argument(
         "--reconcile-publications",
         action="store_true",
         help="Reconcile existing publication lifecycle state without creating or publishing media",
@@ -1069,6 +1075,17 @@ def main(argv: list[str] | None = None) -> int:
             optional_status = validate_production_configuration()
             logger.info(
                 "validation_complete config_only=true optional_integrations=%s",
+                ",".join(
+                    f"{name}:{status}"
+                    for name, status in sorted(optional_status.items())
+                ),
+            )
+            return 0
+
+        if args.preflight_carousel:
+            optional_status = validate_carousel_production_preflight()
+            logger.info(
+                "preflight_complete mode=carousel optional_integrations=%s",
                 ",".join(
                     f"{name}:{status}"
                     for name, status in sorted(optional_status.items())
@@ -1132,7 +1149,7 @@ def main(argv: list[str] | None = None) -> int:
         mode = _resolve_production_mode(args)
         if not args.dry_run:
             logger.info("production_start mode=%s", mode.value)
-            optional_status = validate_production_configuration()
+            optional_status = validate_carousel_production_preflight()
             logger.info(
                 "validation_complete config_only=false optional_integrations=%s",
                 ",".join(
@@ -1161,6 +1178,11 @@ def main(argv: list[str] | None = None) -> int:
                 getattr(summary, "cleanup_deleted", 0),
                 getattr(summary, "cleanup_failures", 0),
             )
+            if summary.errors:
+                raise RuntimeError(
+                    "Publication reconciliation reported errors; resolve the locked "
+                    "history units before starting a new carousel"
+                )
 
         run_carousel_post(args)
 

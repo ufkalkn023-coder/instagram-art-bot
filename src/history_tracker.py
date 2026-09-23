@@ -10,7 +10,7 @@ from enum import Enum
 from uuid import UUID
 import boto3
 from botocore.config import Config
-from botocore.exceptions import ClientError
+from botocore.exceptions import BotoCoreError, ClientError
 from pydantic import ValidationError
 from typing import Any, Callable, Dict, Iterable, Mapping, Sequence, Set, Tuple, TypeVar
 from src.carousel_themes import CarouselFormat, ThemeFamily, ThemeHistorySlot
@@ -259,8 +259,7 @@ def _is_precondition_failed(error: ClientError) -> bool:
 def _is_missing_object(error: ClientError) -> bool:
     response = error.response
     code = str(response.get("Error", {}).get("Code", ""))
-    status = response.get("ResponseMetadata", {}).get("HTTPStatusCode")
-    return code in {"NoSuchKey", "NotFound", "404"} or status == 404
+    return code == "NoSuchKey"
 
 def _get_s3_client():
     account_id = os.environ.get("CLOUDFLARE_R2_ACCOUNT_ID", "").strip()
@@ -289,8 +288,8 @@ def _get_bucket_name() -> str:
 def load_history_with_etag() -> Tuple[Dict[str, Any], str | None]:
     """Loads posted history JSON from Cloudflare R2 and returns (data, etag)."""
     try:
-        s3 = _get_s3_client()
         bucket = _get_bucket_name()
+        s3 = _get_s3_client()
         logger.info(f"Downloading {HISTORY_OBJECT_KEY} from R2...")
         
         response = s3.get_object(Bucket=bucket, Key=HISTORY_OBJECT_KEY)
@@ -307,24 +306,46 @@ def load_history_with_etag() -> Tuple[Dict[str, Any], str | None]:
             raise CorruptedHistoryError("Corrupted history.json in R2") from e
             
     except ValueError as e:
-        logger.warning(f"R2 credentials not found, assuming local/dry-run mode: {e}")
-        return {"posted_artworks": []}, None
+        required = (
+            "CLOUDFLARE_R2_ACCOUNT_ID",
+            "CLOUDFLARE_R2_ACCESS_KEY_ID",
+            "CLOUDFLARE_R2_SECRET_ACCESS_KEY",
+            "CLOUDFLARE_R2_BUCKET_NAME",
+        )
+        if any(not os.environ.get(name, "").strip() for name in required):
+            logger.warning("R2 configuration incomplete; using local/dry-run history")
+            return {"posted_artworks": []}, None
+        logger.error("R2 client configuration invalid error=%s", type(e).__name__)
+        raise RuntimeError("R2 client configuration invalid for posted_history.json") from None
     except ClientError as e:
         if _is_missing_object(e):
-            logger.info("History file not found in R2, starting fresh.")
-            return {"posted_artworks": []}, None
-        else:
-            logger.error(f"Error fetching history from R2: {e}")
-            raise
+            diagnostic = r2_media.r2_failure_context(
+                "GetObject", bucket, HISTORY_OBJECT_KEY, e
+            )
+            logger.error("Authoritative R2 history is missing %s", diagnostic)
+            raise RuntimeError(
+                f"Authoritative R2 {HISTORY_OBJECT_KEY} is missing; "
+                f"restore or explicitly initialize it before production. {diagnostic}"
+            ) from None
+        diagnostic = r2_media.r2_failure_context(
+            "GetObject", bucket, HISTORY_OBJECT_KEY, e
+        )
+        logger.error("%s", diagnostic)
+        raise RuntimeError(diagnostic) from None
+    except BotoCoreError as e:
+        diagnostic = r2_media.r2_failure_context(
+            "GetObject", bucket, HISTORY_OBJECT_KEY, e
+        )
+        logger.error("%s", diagnostic)
+        raise RuntimeError(diagnostic) from None
     except CorruptedHistoryError:
         raise
     except Exception as e:
-        logger.error(f"Unexpected error reading history file ({e}). Failing closed.")
+        logger.error("Unexpected error reading history file error=%s. Failing closed.", type(e).__name__)
         raise
 
 def _upload_history(history: Dict[str, Any], etag: str | None = None):
     """Write history with create-if-absent or exact-ETag CAS semantics."""
-    s3 = _get_s3_client()
     bucket = _get_bucket_name()
     content = json.dumps(history, ensure_ascii=False, indent=2)
     
@@ -349,12 +370,59 @@ def _upload_history(history: Dict[str, Any], etag: str | None = None):
     )
     
     try:
+        s3 = _get_s3_client()
         s3.put_object(**kwargs)
     except ClientError as e:
         if _is_precondition_failed(e):
             logger.error("Concurrent R2 history write rejected by precondition.")
             raise ConcurrentWriteError("Conditional R2 history write failed") from e
-        raise
+        diagnostic = r2_media.r2_failure_context(
+            "PutObject", bucket, HISTORY_OBJECT_KEY, e
+        )
+        logger.error("%s", diagnostic)
+        raise RuntimeError(diagnostic) from None
+    except BotoCoreError as e:
+        diagnostic = r2_media.r2_failure_context(
+            "PutObject", bucket, HISTORY_OBJECT_KEY, e
+        )
+        logger.error("%s", diagnostic)
+        raise RuntimeError(diagnostic) from None
+
+
+def validate_carousel_history_for_production(history: Any) -> None:
+    """Check feed locks and publication indexes before a production mutation."""
+    if not isinstance(history, dict) or not isinstance(history.get("posted_artworks"), list):
+        raise CorruptedHistoryError("History posted_artworks must be a list")
+
+    active_ids: set[str] = set()
+    valid_statuses = {status.value for status in PublicationStatus}
+    for index, item in enumerate(history["posted_artworks"]):
+        if not isinstance(item, dict):
+            raise CorruptedHistoryError(f"History artwork at index {index} must be an object")
+        artwork_id = item.get("id")
+        if not isinstance(artwork_id, str) or not artwork_id or artwork_id != artwork_id.strip():
+            raise CorruptedHistoryError(f"History artwork at index {index} has invalid id")
+        status = item.get("status")
+        if status is not None and status not in valid_statuses:
+            raise CorruptedHistoryError(f"History artwork at index {index} has invalid status")
+        if status == PublicationStatus.PENDING.value and _parse_reserved_at(item.get("reserved_at")) is None:
+            raise CorruptedHistoryError(f"History artwork at index {index} has no valid reservation time")
+        if status == PublicationStatus.PUBLISHING.value and (
+            not isinstance(item.get("container_id"), str)
+            or not item["container_id"]
+            or _parse_reserved_at(item.get("publish_started_at", item.get("publishing_at"))) is None
+        ):
+            raise CorruptedHistoryError(f"History artwork at index {index} has incomplete publish boundary")
+        if status != PublicationStatus.EXPIRED.value:
+            canonical_id = normalize_artwork_id(artwork_id)
+            if canonical_id in active_ids:
+                raise CorruptedHistoryError(f"Duplicate protected artwork ID: {canonical_id}")
+            active_ids.add(canonical_id)
+
+    publications = _validated_publications(history)
+    _grid_publication_count(history, publications)
+    _validated_staging_media_cleanup_queue(history)
+    _validated_reel_history(history)
 
 
 def _parse_reserved_at(value: Any) -> datetime | None:
@@ -1998,14 +2066,7 @@ def reserve_carousel(
 
     history, etag = load_history_with_etag()
     now = datetime.now(timezone.utc)
-    protected_existing = {
-        normalize_artwork_id(item.get("id", ""))
-        for item in history.get("posted_artworks", [])
-        if isinstance(item, dict)
-        and isinstance(item.get("id"), str)
-        and str(item.get("status", "")).upper() != "EXPIRED"
-        and not _is_stale_pending(item, now)
-    }
+    protected_existing = globally_protected_artwork_ids(history, now=now)
     collisions = set(publication_ids).intersection(protected_existing)
     if collisions:
         raise RuntimeError(

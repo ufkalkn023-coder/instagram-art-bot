@@ -55,7 +55,7 @@ jobs:
       - name: Run test suite
         run: pytest -q
 
-      - name: Validate production configuration
+      - name: Preflight normal carousel production
         env:
           ARTFOLIO_RIGHTS_POLICY: strict_public_domain
           INSTAGRAM_ACCOUNT_ID: ${{ secrets.INSTAGRAM_ACCOUNT_ID }}
@@ -65,7 +65,7 @@ jobs:
           CLOUDFLARE_R2_SECRET_ACCESS_KEY: ${{ secrets.CLOUDFLARE_R2_SECRET_ACCESS_KEY }}
           CLOUDFLARE_R2_BUCKET_NAME: ${{ secrets.CLOUDFLARE_R2_BUCKET_NAME }}
           CLOUDFLARE_R2_PUBLIC_URL: ${{ secrets.CLOUDFLARE_R2_PUBLIC_URL }}
-        run: python main.py --validate-production-config
+        run: python main.py --preflight-carousel
 
       - name: Fetch artwork, process image, and post to Instagram
         env:

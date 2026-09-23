@@ -93,6 +93,58 @@ def test_explicit_media_identity_read_uses_only_the_operator_supplied_media_node
     assert calls[0][1]["headers"] == {"Authorization": "Bearer token"}
 
 
+def test_account_preflight_checks_read_only_identity_without_publishing(monkeypatch):
+    calls = []
+
+    def get(*args, **kwargs):
+        calls.append(kwargs)
+        return FakeResponse(200, {"id": "account-1"})
+
+    monkeypatch.setattr(instagram_poster.requests, "get", get)
+    monkeypatch.setattr(
+        instagram_poster.requests,
+        "post",
+        lambda *args, **kwargs: pytest.fail("account preflight posted to Graph"),
+    )
+
+    instagram_poster.validate_instagram_account_access("account-1", "token")
+
+    assert len(calls) == 1
+    assert calls[0]["url"].endswith("/account-1")
+    assert calls[0]["params"] == {"fields": "id"}
+    assert calls[0]["headers"] == {"Authorization": "Bearer token"}
+
+
+def test_account_preflight_rejects_wrong_account_identity(monkeypatch):
+    monkeypatch.setattr(
+        instagram_poster.requests,
+        "get",
+        response_sequence(FakeResponse(200, {"id": "different-account"})),
+    )
+
+    with pytest.raises(instagram_poster.InstagramAPIError, match="account identity"):
+        instagram_poster.validate_instagram_account_access("account-1", "token")
+
+
+def test_account_preflight_does_not_expose_provider_message(monkeypatch):
+    monkeypatch.setattr(
+        instagram_poster.requests,
+        "get",
+        response_sequence(
+            FakeResponse(
+                403,
+                {"error": {"code": 10, "message": "secret-must-not-appear"}},
+            )
+        ),
+    )
+
+    with pytest.raises(instagram_poster.InstagramAPIError) as caught:
+        instagram_poster.validate_instagram_account_access("account-1", "token")
+    assert "secret-must-not-appear" not in str(caught.value)
+    assert "HTTP 403" in str(caught.value)
+    assert "code 10" in str(caught.value)
+
+
 @pytest.mark.parametrize("status", ["ERROR", "EXPIRED", "UNEXPECTED"])
 def test_non_finished_status_stops_before_publish(monkeypatch, status):
     post_calls = []

@@ -364,3 +364,26 @@ def test_carousel_reservation_rejects_cover_featured_identity_collision_before_w
         history_tracker.reserve_carousel(cover, featured)
 
     assert uploads == []
+
+
+def test_carousel_reservation_honors_forward_publication_duplicate_lock(monkeypatch):
+    cover, featured = _publication()
+    history = {
+        "posted_artworks": [],
+        "publications": [
+            {
+                "id": "earlier-feed-publication",
+                "type": "single",
+                "media_id": "earlier-media",
+                "artwork_ids": [cover["id"]],
+                "posted_at": "2026-08-01T12:00:00Z",
+            }
+        ],
+        "grid_publication_count": 1,
+    }
+    _, uploads = _history_backend(monkeypatch, history)
+
+    with pytest.raises(RuntimeError, match="protected artwork"):
+        history_tracker.reserve_carousel(cover, featured)
+
+    assert uploads == []

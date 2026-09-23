@@ -114,14 +114,14 @@ def test_production_workflow_retains_operational_safety_gates():
         "python -m compileall -q main.py src scripts tests"
     )
     assert steps["Run test suite"]["run"] == "pytest -q"
-    assert steps["Validate production configuration"]["run"] == (
-        "python main.py --validate-production-config"
+    assert steps["Preflight normal carousel production"]["run"] == (
+        "python main.py --preflight-carousel"
     )
 
 
 def test_production_workflow_sets_strict_rights_policy_and_keeps_secrets_unchanged():
     steps = _steps_by_name()
-    validation_environment = steps["Validate production configuration"]["env"]
+    validation_environment = steps["Preflight normal carousel production"]["env"]
     publish_environment = steps[
         "Fetch artwork, process image, and post to Instagram"
     ]["env"]

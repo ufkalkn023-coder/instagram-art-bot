@@ -840,7 +840,7 @@ def test_reconcile_only_cli_reports_cleanup_failure_separately(monkeypatch):
 
 def test_startup_reconciliation_runs_before_new_acquisition(monkeypatch):
     events = []
-    monkeypatch.setattr(main, "validate_production_configuration", lambda: {})
+    monkeypatch.setattr(main, "validate_carousel_production_preflight", lambda: {})
     monkeypatch.setattr(
         main.publication_reconciliation,
         "reconcile_publications",
