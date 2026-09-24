@@ -203,6 +203,30 @@ def test_internal_acquisition_error_is_not_recorded_as_feasibility(monkeypatch):
     assert recorded == []
 
 
+def test_dry_run_does_not_write_theme_feasibility_feedback(monkeypatch):
+    theme = get_default_theme_registry().by_id("women_reading")
+    _install_common(monkeypatch, [theme], [])
+    monkeypatch.setattr(
+        main,
+        "record_theme_availability",
+        lambda *args, **kwargs: pytest.fail("dry run attempted feasibility write"),
+    )
+
+    def unavailable(*args, **kwargs):
+        raise art_fetcher.CarouselSelectionError(
+            "no eligible artworks",
+            reason="insufficient_relevance_pool",
+            availability=object(),
+        )
+
+    monkeypatch.setattr(main.art_fetcher, "fetch_themed_artworks", unavailable)
+
+    with pytest.raises(art_fetcher.CarouselThemeAvailabilityError):
+        main.run_carousel_post(
+            SimpleNamespace(dry_run=True, image_url=None, pinterest=False)
+        )
+
+
 def test_only_successful_fallback_theme_is_reserved_in_history(monkeypatch):
     registry = get_default_theme_registry()
     first = registry.by_id("women_reading")
