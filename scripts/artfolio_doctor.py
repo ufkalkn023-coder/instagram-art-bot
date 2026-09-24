@@ -62,7 +62,6 @@ from src.production_config import (  # noqa: E402
     ProductionConfigurationError,
     validate_production_configuration,
 )
-from src import publication_state  # noqa: E402
 from src.publication_reconciliation import (  # noqa: E402
     PUBLISHING_RECONCILIATION_GRACE,
 )
@@ -450,6 +449,7 @@ def check_r2(credentials: CredentialContext) -> tuple[CheckResult, ProductionDat
         ),
         "collector_read_access": "NOT_CHECKED",
         "audit_list_get_access": "NOT_CHECKED",
+        "lifecycle_control_plane": "CONTROL_PLANE_LIFECYCLE_NOT_AVAILABLE_TO_SCOPED_CREDENTIAL",
         "write_permission": (
             "INVALID_ROLE_COLLISION"
             if credentials.role_collision
@@ -495,8 +495,6 @@ def check_r2(credentials: CredentialContext) -> tuple[CheckResult, ProductionDat
     collector_history = None
     try:
         with _selected_environment(credentials.collector_environment):
-            state_store = publication_state.PublicationStateStore()
-            publication_state.validate_state_bucket_lifecycle(state_store)
             collector_history = InsightsStorage().load_history()
     except Exception:
         details["collector_read_access"] = "INACCESSIBLE"

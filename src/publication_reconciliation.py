@@ -318,7 +318,6 @@ def reconcile_publications(
     import os
     if os.environ.get("CLOUDFLARE_STATE_R2_BUCKET_NAME", "").strip():
         state_store = publication_state.PublicationStateStore()
-        publication_state.validate_state_bucket_lifecycle(state_store)
         state_store.load_safety()
         state_store.load_receipts()
         publication_state.replay_pending_receipts(state_store)

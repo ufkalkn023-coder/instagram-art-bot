@@ -73,13 +73,17 @@ class FakeS3:
         self.etags = {key: 1 for key in self.objects}
         self.puts = 0
         self.uncertain = False
+        self.expiration_metadata = {}
 
     def get_object(self, *, Bucket, Key):
         if Key not in self.objects:
             raise ClientError({"Error": {"Code": "NoSuchKey"},
                                "ResponseMetadata": {"HTTPStatusCode": 404}}, "GetObject")
-        return {"Body": io.BytesIO(publication_state.canonical_bytes(self.objects[Key])),
-                "ETag": f'"{self.etags[Key]}"'}
+        return {
+            "Body": io.BytesIO(publication_state.canonical_bytes(self.objects[Key])),
+            "ETag": f'"{self.etags[Key]}"',
+            **self.expiration_metadata.get(Key, {}),
+        }
 
     def put_object(self, *, Bucket, Key, Body, IfMatch=None, IfNoneMatch=None, **kwargs):
         self.puts += 1
@@ -151,7 +155,7 @@ def test_unresolved_positions_keep_source_embargo_at_selection_and_reservation(m
 def test_missing_malformed_and_forward_schema_fail_closed():
     state = safety_candidate()
     store, client = store_for(state, receipts=None)
-    with pytest.raises(publication_state.StateValidationError):
+    with pytest.raises(publication_state.StateValidationError, match="RECOVERY_STATE_NOT_BOOTSTRAPPED"):
         store.load_receipts()
     bad = copy.deepcopy(state)
     bad["schema_version"] = 3
@@ -168,8 +172,42 @@ def test_missing_malformed_and_forward_schema_fail_closed():
     with pytest.raises(publication_state.StateValidationError):
         publication_state.validate_safety_state(bad)
     del client.objects[publication_state.SAFETY_KEY]
-    with pytest.raises(publication_state.StateValidationError):
+    with pytest.raises(publication_state.StateValidationError, match="RECOVERY_STATE_NOT_BOOTSTRAPPED"):
         store.load_safety()
+
+
+@pytest.mark.parametrize("key", (publication_state.SAFETY_KEY, publication_state.RECEIPTS_KEY))
+@pytest.mark.parametrize("metadata", (
+    {"Expiration": 'expiry-date="Fri, 25 Sep 2026 00:00:00 GMT", rule-id="delete"'},
+    {"Expiration": ""},
+    {"ResponseMetadata": {"HTTPHeaders": {"x-amz-expiration": "malformed"}}},
+))
+def test_durable_object_expiration_metadata_blocks_load(key, metadata):
+    store, client = store_for(safety_candidate())
+    client.expiration_metadata[key] = metadata
+    with pytest.raises(publication_state.StateValidationError, match="expiration"):
+        (store.load_safety if key == publication_state.SAFETY_KEY else store.load_receipts)()
+    assert client.puts == 0
+
+
+def test_durable_objects_without_expiration_metadata_load_normally():
+    store, client = store_for(safety_candidate())
+    assert store.load_safety()[0].generation == 1
+    assert store.load_receipts()[0].generation == 1
+    assert client.puts == 0
+
+
+def test_control_plane_lifecycle_access_denied_is_reported_separately():
+    class Client:
+        def get_bucket_lifecycle_configuration(self, **_kwargs):
+            raise ClientError({"Error": {"Code": "AccessDenied"}}, "GetBucketLifecycleConfiguration")
+
+    store = publication_state.PublicationStateStore(
+        publication_state.StateConfiguration("account", "state", "key", "secret"),
+        Client(),
+    )
+    with pytest.raises(publication_state.StateValidationError, match="CONTROL_PLANE_LIFECYCLE_NOT_AVAILABLE_TO_SCOPED_CREDENTIAL"):
+        publication_state.validate_state_bucket_lifecycle(store)
 
 
 def test_structurally_valid_test_state_is_not_accepted_as_production_recovery():
@@ -214,6 +252,20 @@ def test_malformed_lifecycle_response_fails_closed():
         Client(),
     )
     with pytest.raises(publication_state.StateValidationError, match="malformed"):
+        publication_state.validate_state_bucket_lifecycle(store)
+
+
+@pytest.mark.parametrize("expiration", ({"Days": 1}, {}))
+def test_control_plane_audit_blocks_object_expiration_rules(expiration):
+    class Client:
+        def get_bucket_lifecycle_configuration(self, **_kwargs):
+            return {"Rules": [{"Status": "Enabled", "Expiration": expiration}]}
+
+    store = publication_state.PublicationStateStore(
+        publication_state.StateConfiguration("account", "state", "key", "secret"),
+        Client(),
+    )
+    with pytest.raises(publication_state.StateValidationError, match="destructive lifecycle"):
         publication_state.validate_state_bucket_lifecycle(store)
 
 

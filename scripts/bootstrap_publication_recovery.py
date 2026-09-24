@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import os
 import re
 import sys
 from pathlib import Path
@@ -17,7 +18,7 @@ if str(ROOT) not in sys.path:
 
 from src.models import require_canonical_artwork_id  # noqa: E402
 from src.publication_state import (  # noqa: E402
-    PublicationStateStore, StateValidationError, canonical_bytes, seal,
+    PublicationStateStore, StateConfiguration, StateValidationError, canonical_bytes, seal,
     validate_receipts, validate_safety_state, validate_state_bucket_lifecycle,
     SAFETY_KEY, RECEIPTS_KEY,
 )
@@ -248,6 +249,11 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--confirm-production-write", default="")
     parser.add_argument("--target-bucket", default="",
                         help="Explicit durable-state bucket name required with --write")
+    parser.add_argument("--lifecycle-audit-source", default="",
+                        choices=("dashboard", "control-plane-s3"),
+                        help="Separate bucket lifecycle audit required with --write")
+    parser.add_argument("--confirm-dashboard-lifecycle", default="",
+                        help="Exact attestation after checking the target bucket in Cloudflare Dashboard")
     args = parser.parse_args(argv)
     safety, receipts, report = build_candidate(args.evidence_dir)
     if args.output_dir:
@@ -259,10 +265,28 @@ def main(argv: list[str] | None = None) -> int:
             raise StateValidationError("Production write requires exact affirmative confirmation")
         if not args.target_bucket.strip():
             raise StateValidationError("Production write requires --target-bucket")
+        if not args.lifecycle_audit_source:
+            raise StateValidationError("Production write requires a lifecycle audit source")
+        target_bucket = args.target_bucket.strip()
+        if args.lifecycle_audit_source == "dashboard":
+            confirmation = f"I_VERIFIED_NO_OBJECT_EXPIRATION_FOR_{target_bucket}"
+            if args.confirm_dashboard_lifecycle != confirmation:
+                raise StateValidationError("Production write requires a confirmed dashboard lifecycle audit")
+        else:
+            control_access = os.environ.get("CLOUDFLARE_R2_CONTROL_PLANE_ACCESS_KEY_ID", "").strip()
+            control_secret = os.environ.get("CLOUDFLARE_R2_CONTROL_PLANE_SECRET_ACCESS_KEY", "").strip()
+            if not control_access or not control_secret:
+                raise StateValidationError("Separate control-plane R2 credentials are required")
         store = PublicationStateStore()
-        if args.target_bucket.strip() != store.config.bucket:
+        if target_bucket != store.config.bucket:
             raise StateValidationError("Explicit bootstrap target differs from configured state bucket")
-        validate_state_bucket_lifecycle(store)
+        if args.lifecycle_audit_source == "control-plane-s3":
+            if control_access == store.config.access_key:
+                raise StateValidationError("Control-plane audit must use a separate R2 credential")
+            control_config = StateConfiguration(
+                store.config.account_id, target_bucket, control_access, control_secret,
+            )
+            validate_state_bucket_lifecycle(PublicationStateStore(control_config))
         store.require_uninitialized()
         # Activate safety last. A failure after the receipt write leaves a
         # receipts-only target, which production cannot read as active state.

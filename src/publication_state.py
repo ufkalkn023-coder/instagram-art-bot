@@ -359,9 +359,24 @@ class PublicationStateStore:
     def _read(self, key: str) -> tuple[dict[str, Any], str]:
         try:
             response = self.client.get_object(Bucket=self.config.bucket, Key=key)
-        except (ClientError, BotoCoreError) as error:
+        except ClientError as error:
+            if str(error.response.get("Error", {}).get("Code", "")) == "NoSuchKey":
+                raise StateValidationError(f"RECOVERY_STATE_NOT_BOOTSTRAPPED: {key}") from error
             raise StateValidationError(f"Required durable state object is unreadable: {key}") from error
-        if response.get("Expiration"):
+        except BotoCoreError as error:
+            raise StateValidationError(f"Required durable state object is unreadable: {key}") from error
+        if not isinstance(response, dict):
+            raise StateValidationError("Durable state response is malformed")
+        metadata = response.get("ResponseMetadata")
+        if metadata is not None and not isinstance(metadata, Mapping):
+            raise StateValidationError("Durable state expiration metadata is malformed")
+        headers = metadata.get("HTTPHeaders") if metadata is not None else None
+        if headers is not None and not isinstance(headers, Mapping):
+            raise StateValidationError("Durable state expiration metadata is malformed")
+        if "Expiration" in response or (
+            headers is not None
+            and any(str(name).lower() == "x-amz-expiration" for name in headers)
+        ):
             raise StateValidationError("Durable state object has an expiration policy")
         etag = response.get("ETag")
         if not isinstance(etag, str) or len(etag) < 3 or not etag.startswith('"') or not etag.endswith('"'):
@@ -625,13 +640,17 @@ def synchronize_receipt(publication_id: str, store: PublicationStateStore | None
 
 
 def validate_state_bucket_lifecycle(store: PublicationStateStore) -> None:
-    """Read-only gate: reject any deletion/transition lifecycle rule or unknown result."""
+    """Deployment control-plane audit; never use with scoped runtime credentials."""
     try:
         response = store.client.get_bucket_lifecycle_configuration(Bucket=store.config.bucket)
     except ClientError as error:
         code = str(error.response.get("Error", {}).get("Code", ""))
         if code in {"NoSuchLifecycleConfiguration", "NoSuchLifecycle"}:
             return
+        if code in {"AccessDenied", "403"}:
+            raise StateValidationError(
+                "CONTROL_PLANE_LIFECYCLE_NOT_AVAILABLE_TO_SCOPED_CREDENTIAL"
+            ) from error
         raise StateValidationError("Durable state lifecycle cannot be verified") from error
     except (BotoCoreError, AttributeError) as error:
         raise StateValidationError("Durable state lifecycle cannot be verified") from error
@@ -643,7 +662,7 @@ def validate_state_bucket_lifecycle(store: PublicationStateStore) -> None:
             raise StateValidationError("Durable state lifecycle rule is malformed")
         if rule.get("Status") != "Enabled":
             continue
-        if any(rule.get(field) for field in (
+        if any(field in rule for field in (
             "Expiration", "Transitions", "NoncurrentVersionExpiration",
             "NoncurrentVersionTransitions",
         )):

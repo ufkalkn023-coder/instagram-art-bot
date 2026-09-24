@@ -2,8 +2,12 @@ import json
 import plistlib
 import subprocess
 from datetime import datetime, timedelta, timezone
+from types import SimpleNamespace
+
+import pytest
 
 import scripts.artfolio_doctor as doctor
+from src import publication_state
 from scripts.artfolio_doctor import (
     CheckResult,
     CredentialContext,
@@ -194,6 +198,34 @@ def test_credential_role_collision_fails_before_r2_access(monkeypatch):
     assert result.status is Status.CRITICAL
     assert {issue.code for issue in result.issues} == {"R2_ROLE_COLLISION"}
     assert data.history is None
+
+
+def test_doctor_reports_control_plane_audit_separately_from_object_reads(monkeypatch):
+    class Storage:
+        last_snapshot_load_diagnostics = SimpleNamespace(
+            invalid_snapshots=(), partitions_loaded=0,
+        )
+
+        def load_history(self):
+            return {"_safety_state": {}}
+
+        def load_all_snapshots(self):
+            return []
+
+    monkeypatch.setattr(doctor, "InsightsStorage", Storage)
+    monkeypatch.setattr(
+        publication_state,
+        "validate_state_bucket_lifecycle",
+        lambda _store: pytest.fail("doctor used scoped credential for bucket configuration"),
+    )
+
+    result, _data = doctor.check_r2(_credential_context())
+
+    assert result.status is Status.HEALTHY
+    assert result.details["collector_read_access"] == "OK"
+    assert result.details["lifecycle_control_plane"] == (
+        "CONTROL_PLANE_LIFECYCLE_NOT_AVAILABLE_TO_SCOPED_CREDENTIAL"
+    )
 
 
 def test_collector_stale_beyond_critical_threshold(tmp_path):

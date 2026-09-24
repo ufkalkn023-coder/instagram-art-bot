@@ -29,12 +29,16 @@ def _configure(monkeypatch, *, public_url="https://media.example"):
     monkeypatch.setattr(instagram_poster, "validate_instagram_account_access", lambda *_: None)
 
 
-def _fake_store(monkeypatch, *, safety=None, receipts=True):
+def _fake_store(monkeypatch, *, safety=None, safety_present=True, receipts=True):
     state = publication_state.validate_safety_state(safety or safety_candidate())
     calls = []
     class Store:
         def load_safety(self):
             calls.append("safety-read")
+            if not safety_present:
+                raise publication_state.StateValidationError(
+                    "RECOVERY_STATE_NOT_BOOTSTRAPPED: publication_safety_state.v2.json"
+                )
             return state, '"etag"'
         def load_receipts(self):
             calls.append("receipts-read")
@@ -42,7 +46,11 @@ def _fake_store(monkeypatch, *, safety=None, receipts=True):
                 raise publication_state.StateValidationError("Receipt ledger missing")
             return SimpleNamespace(generation=1, records=[]), '"receipt-etag"'
     monkeypatch.setattr(publication_state, "PublicationStateStore", Store)
-    monkeypatch.setattr(publication_state, "validate_state_bucket_lifecycle", lambda _store: calls.append("lifecycle-read"))
+    monkeypatch.setattr(
+        publication_state,
+        "validate_state_bucket_lifecycle",
+        lambda _store: pytest.fail("runtime requested bucket lifecycle configuration"),
+    )
     return calls
 
 
@@ -51,7 +59,19 @@ def test_preflight_reads_both_durable_objects_without_mutation(monkeypatch):
     calls = _fake_store(monkeypatch)
     monkeypatch.setattr(history_tracker, "_upload_history", lambda *_: pytest.fail("preflight wrote state"))
     assert production_config.validate_carousel_production_preflight() == {"gemini": "disabled"}
-    assert calls == ["lifecycle-read", "safety-read", "receipts-read"]
+    assert calls == ["safety-read", "receipts-read"]
+
+
+def test_preflight_reports_unbootstrapped_state_before_instagram_or_mutation(monkeypatch):
+    _configure(monkeypatch)
+    calls = _fake_store(monkeypatch, safety_present=False)
+    monkeypatch.setattr(
+        instagram_poster, "validate_instagram_account_access",
+        lambda *_: pytest.fail("missing state reached Instagram"),
+    )
+    with pytest.raises(publication_state.StateValidationError, match="RECOVERY_STATE_NOT_BOOTSTRAPPED"):
+        production_config.validate_carousel_production_preflight()
+    assert calls == ["safety-read"]
 
 
 def test_preflight_normalizes_instagram_credentials(monkeypatch):

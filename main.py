@@ -1113,7 +1113,6 @@ def main(argv: list[str] | None = None) -> int:
         if args.preview_publication_reconciliation:
             from src import publication_state
             store = publication_state.PublicationStateStore()
-            publication_state.validate_state_bucket_lifecycle(store)
             state, _ = store.load_safety()
             store.load_receipts()
             feed = sum(

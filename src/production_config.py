@@ -156,7 +156,6 @@ def validate_carousel_production_preflight() -> dict[str, str]:
     )
     _validate_public_media_base_url(os.environ["CLOUDFLARE_R2_PUBLIC_URL"].strip())
     store = publication_state.PublicationStateStore()
-    publication_state.validate_state_bucket_lifecycle(store)
     safety, _ = store.load_safety()
     receipts, _ = store.load_receipts()
     publication_state.validate_live_receipt_coverage(safety, receipts)
