@@ -509,7 +509,7 @@ def run_carousel_post(args):
             else:
                 candidate_artworks = selection
                 candidate_acquisition = None
-            if candidate_acquisition is not None:
+            if candidate_acquisition is not None and not args.dry_run:
                 record_theme_availability(
                     candidate_acquisition.availability,
                     theme=candidate_theme,
@@ -540,7 +540,7 @@ def run_carousel_post(args):
                 "availability",
                 None,
             )
-            if availability is not None and not availability_recorded:
+            if availability is not None and not availability_recorded and not args.dry_run:
                 record_theme_availability(
                     availability,
                     theme=candidate_theme,
@@ -625,7 +625,7 @@ def run_carousel_post(args):
             else:
                 candidate_artworks = selection
                 candidate_set_optimization = None
-            if candidate_acquisition is not None:
+            if candidate_acquisition is not None and not args.dry_run:
                 record_theme_availability(
                     candidate_acquisition.availability,
                     theme=generic_theme,
@@ -653,7 +653,7 @@ def run_carousel_post(args):
                 "availability",
                 None,
             )
-            if availability is not None and not availability_recorded:
+            if availability is not None and not availability_recorded and not args.dry_run:
                 record_theme_availability(
                     availability,
                     theme=generic_theme,
