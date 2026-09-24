@@ -149,6 +149,7 @@ def _handle_pre_meta_staging_failure(
             artwork_ids,
             "pre_meta_staging_failure",
             authoritative=True,
+            expected_publication_id=publication_id,
         )
         expiration_persisted = True
     except Exception as error:
@@ -956,7 +957,8 @@ def run_carousel_post(args):
     def before_publish(container_id: str, child_container_ids: tuple[str, ...]) -> None:
         nonlocal publish_attempt_started
         history_tracker.start_publication_attempt(
-            plan.publication_ids, container_id, child_container_ids
+            plan.publication_ids, container_id, child_container_ids,
+            expected_publication_id=publication_id,
         )
         publish_attempt_started = True
 
@@ -971,7 +973,8 @@ def run_carousel_post(args):
         )
         if not publish_attempt_started:
             history_tracker.mark_artworks_ambiguous(
-                plan.publication_ids, "publisher_skipped_durable_boundary"
+                plan.publication_ids, "publisher_skipped_durable_boundary",
+                expected_publication_id=publication_id,
             )
             raise RuntimeError("Instagram publisher skipped the durable publication boundary")
         logger.info("publish_complete mode=carousel media_id=%s", carousel_id)
@@ -980,6 +983,7 @@ def run_carousel_post(args):
             plan.publication_ids,
             "pre_publish_boundary_failure",
             authoritative=True,
+            expected_publication_id=publication_id,
         )
         _cleanup_authoritatively_expired_media(
             publication_id,
@@ -989,7 +993,9 @@ def run_carousel_post(args):
     except instagram_poster.InstagramPublishAmbiguousError:
         logger.error("Instagram carousel publish result is ambiguous; preserving duplicate locks.")
         try:
-            history_tracker.mark_artworks_ambiguous(plan.publication_ids)
+            history_tracker.mark_artworks_ambiguous(
+                plan.publication_ids, expected_publication_id=publication_id
+            )
         except Exception:
             logger.exception("Failed to preserve ambiguous carousel reservations.")
             raise
@@ -1000,6 +1006,7 @@ def run_carousel_post(args):
                 plan.publication_ids,
                 f"definitive_media_publish_rejection:{type(error).__name__}",
                 authoritative=True,
+                expected_publication_id=publication_id,
             )
             _cleanup_authoritatively_expired_media(
                 publication_id,
@@ -1012,13 +1019,17 @@ def run_carousel_post(args):
                 history_tracker.mark_artworks_ambiguous(
                     plan.publication_ids,
                     f"unexpected_post_boundary_error:{type(error).__name__}",
+                    expected_publication_id=publication_id,
                 )
             except Exception:
                 logger.exception("Failed to preserve uncertain carousel reservations.")
         raise
 
     try:
-        history_tracker.record_publish_response(plan.publication_ids, carousel_id)
+        history_tracker.record_publish_response(
+            plan.publication_ids, carousel_id,
+            expected_publication_id=publication_id,
+        )
     except Exception:
         logger.exception(
             "Failed to record Instagram carousel media ID before final history confirmation; "
@@ -1030,6 +1041,7 @@ def run_carousel_post(args):
         plan.cover.canonical_id,
         plan.featured_ids,
         carousel_id,
+        publication_id=publication_id,
         **finalization_kwargs,
     )
     logger.info("history_confirmed mode=carousel count=%s", len(plan.publication_ids))
@@ -1058,6 +1070,11 @@ def main(argv: list[str] | None = None) -> int:
         "--reconcile-publications",
         action="store_true",
         help="Reconcile existing publication lifecycle state without creating or publishing media",
+    )
+    parser.add_argument(
+        "--preview-publication-reconciliation",
+        action="store_true",
+        help="List unresolved live units from durable state without Meta or R2 writes",
     )
     parser.add_argument(
         "--recover-publication-id",
@@ -1090,6 +1107,26 @@ def main(argv: list[str] | None = None) -> int:
                     f"{name}:{status}"
                     for name, status in sorted(optional_status.items())
                 ),
+            )
+            return 0
+
+        if args.preview_publication_reconciliation:
+            from src import publication_state
+            store = publication_state.PublicationStateStore()
+            publication_state.validate_state_bucket_lifecycle(store)
+            state, _ = store.load_safety()
+            store.load_receipts()
+            feed = sum(
+                item.get("status") in {"PUBLISHING", "AMBIGUOUS"}
+                for item in state.active_publication_state.posted_artworks
+            )
+            reel = sum(
+                item.get("status") in {"PUBLISHING", "AMBIGUOUS"}
+                for item in state.active_publication_state.reel_reservations
+            )
+            logger.info(
+                "reconciliation_preview feed_locked_artworks=%s reel_locked_units=%s pending_receipts=%s",
+                feed, reel, len(state.active_publication_state.receipt_sync_pending),
             )
             return 0
 

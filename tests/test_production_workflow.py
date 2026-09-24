@@ -19,6 +19,9 @@ EXPECTED_PRODUCTION_SECRET_NAMES = {
     "CLOUDFLARE_R2_SECRET_ACCESS_KEY",
     "CLOUDFLARE_R2_BUCKET_NAME",
     "CLOUDFLARE_R2_PUBLIC_URL",
+    "CLOUDFLARE_STATE_R2_BUCKET_NAME",
+    "CLOUDFLARE_STATE_R2_ACCESS_KEY_ID",
+    "CLOUDFLARE_STATE_R2_SECRET_ACCESS_KEY",
 }
 RIGHTS_POLICY_VARIABLE = "ARTFOLIO_RIGHTS_POLICY"
 PRODUCTION_RIGHTS_POLICY = "strict_public_domain"
@@ -119,7 +122,7 @@ def test_production_workflow_retains_operational_safety_gates():
     )
 
 
-def test_production_workflow_sets_strict_rights_policy_and_keeps_secrets_unchanged():
+def test_production_workflow_sets_strict_rights_policy_and_fences_legacy_token():
     steps = _steps_by_name()
     validation_environment = steps["Preflight normal carousel production"]["env"]
     publish_environment = steps[
@@ -133,7 +136,9 @@ def test_production_workflow_sets_strict_rights_policy_and_keeps_secrets_unchang
     assert validation_environment[RIGHTS_POLICY_VARIABLE] == PRODUCTION_RIGHTS_POLICY
     assert publish_environment[RIGHTS_POLICY_VARIABLE] == PRODUCTION_RIGHTS_POLICY
     for variable in EXPECTED_PRODUCTION_SECRET_NAMES:
-        expected = "${{ secrets." + variable + " }}"
+        secret = "INSTAGRAM_ACCESS_TOKEN_V2" if variable == "INSTAGRAM_ACCESS_TOKEN" else variable
+        expected = "${{ secrets." + secret + " }}"
         assert validation_environment[variable] == expected
         assert publish_environment[variable] == expected
+    assert "${{ secrets.INSTAGRAM_ACCESS_TOKEN }}" not in WORKFLOW_PATH.read_text()
     assert all("keychain" not in step.get("run", "").lower() for step in steps.values())

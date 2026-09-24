@@ -39,7 +39,7 @@ Availability preflight image indirmeden canonical/history duplicate, merkezi rig
 
 Attempt sıralaması editorial score'un anlamını değiştirmeden ayrı bir feasibility katmanı uygular. Mevcut adapter/credential/circuit-breaker kapasitesi ile `theme_feasibility.json` içindeki tema başına son 12 gerçek acquisition sonucu, 30 günlük half-life ve üç effective örnekte doygunlaşan confidence ile değerlendirilir. Tek başarısızlık sınırlı bir ceza verir; tekrar eden güncel başarısızlıklar en fazla `-6`, güçlü güncel headroom en fazla `+3`, hiç aktif compatible source bulunmaması `-8` etkiler ve toplam feasibility adjustment `[-8, +3]` aralığında kalır. Bu bounded skor gözlemlenebilir kalır; ancak o anda hiç aktif compatible source'u olmayan tema yalnız mevcut run için attempt dışıdır. Yeni temalar nötrdür; eski sonuçlar nötre decay eder ve hiçbir tema kalıcı olarak elenmez. Production state ayrı, ETag-conditional R2 objesinde tutulur; local ortam atomik dosya fallback'i kullanır. Okuma/yazma veya corruption hatası cold start'a düşer ve publishing'i engellemez. Objede credential, query metni, response body veya exception dump saklanmaz.
 
-İlk planner teması yeterli değilse feasibility ile açıklanabilir deterministic sıradaki sonraki tema denenir; en fazla beş METADATA teması değerlendirilir. Beşinin tamamı başarısız olursa aynı acquisition, rights, quality, secure-image, optimizer ve cover yolunu kullanan tek `Artfolio Selection` fallback'i theme relevance kapısı olmadan denenir. Bu nötr fallback ortak subject, period, medium, region veya çoklu museum iddiası kurmaz. Yalnız tamamlanmış 1 cover + 5–8 featured planının kimliği publication history'ye yazılır; feasibility telemetry `posted_history.json` ile birleşmez.
+İlk planner teması yeterli değilse feasibility ile açıklanabilir deterministic sıradaki sonraki tema denenir; en fazla beş METADATA teması değerlendirilir. Beşinin tamamı başarısız olursa aynı acquisition, rights, quality, secure-image, optimizer ve cover yolunu kullanan tek `Artfolio Selection` fallback'i theme relevance kapısı olmadan denenir. Bu nötr fallback ortak subject, period, medium, region veya çoklu museum iddiası kurmaz. Yalnız tamamlanmış 1 cover + 5–8 featured planının kimliği publication state'e yazılır; feasibility telemetry ayrı media bucket nesnesinde kalır.
 
 Theme Planner aynı selection-run seed'i kullanarak global random state'i değiştirmeden deterministic serendipity üretir. Son carousel publication slot'larında aynı theme ID, family ve format tekrarları yalnız küçük, bounded anti-spam guardrail'larıdır; güçlü learned engagement kanıtını ana amaç olarak bastırmaz. Artwork sayısı fatigue'i çoğaltmaz: aynı `publication_id` altındaki bir cover ve 5–8 featured kayıt history'de tek tema slotudur. Eski kayıtlar okunmaya devam eder.
 
@@ -81,7 +81,7 @@ dependency install
 → production bot
 ```
 
-Compile adımı `main.py`, `src`, `scripts` ve `tests` kapsamını; test adımı hızlı olan full `pytest -q` suite’ini çalıştırır. Install, compile, test veya preflight başarısız olursa production adımı çalışmaz. Production secret’ları yalnız preflight ve publish adımlarına verilir; compile ve test adımları secret almaz. Preflight strict rights/config ve public HTTPS URL biçimini doğrular, Instagram hesap kimliğini GET ile okur, R2’de mevcut `posted_history.json` dosyasını ve feed lifecycle şemasını kontrol eder. Yeni içerik üretmeden önce aynı read-only preflight tekrar çalışır. Preflight R2 write veya Instagram publish yetkisini kanıtlamaz.
+Compile adımı `main.py`, `src`, `scripts` ve `tests` kapsamını; test adımı hızlı olan full `pytest -q` suite’ini çalıştırır. Install, compile, test veya preflight başarısız olursa production adımı çalışmaz. Production secret’ları yalnız preflight ve publish adımlarına verilir; compile ve test adımları secret almaz. Preflight strict rights/config ve public HTTPS URL biçimini, ayrı durable-state bucket lifecycle kurallarını, `publication_safety_state.v2.json` ve `publication_receipts.v2.json` şemalarını doğrular ve Instagram hesap kimliğini GET ile okur. Eksik veya bozuk v2 state production'ı durdurur; eski `posted_history.json` otomatik fallback değildir. Yeni içerik üretmeden önce aynı read-only preflight tekrar çalışır. Preflight R2 write veya Instagram publish yetkisini kanıtlamaz.
 
 ### Reel candidate, portfolio ve handoff katmanı
 
@@ -113,14 +113,14 @@ Yerel Mac credential’ları launchd plist’ine veya repo dosyalarına yazılma
 Collector için bir kerelik Keychain kurulumu, güvenli durum kontrolü ve LaunchAgent kurulumu:
 
 ```console
-cd /Users/ufuk/Desktop/instagram-art-bot-push
+cd /path/to/instagram-art-bot
 python3 scripts/install_insights_launchd.py configure-keychain
 python3 scripts/collect_insights.py --check-secrets
 python3 scripts/collect_insights.py --health-check
 python3 scripts/install_insights_launchd.py install
 ```
 
-`configure-keychain`, yalnız collector profilini yapılandırır ve her eksik değer için macOS Keychain’in gizli giriş prompt’unu açar; değer komut satırı argümanına, shell history’ye veya log’a girmez. Mevcut process environment değerleri interaktif çalıştırmada önceliklidir, fakat LaunchAgent yalnız `com.artfolio.instagram-insights.*` kayıtlarını yükler. Installer idempotent olarak `~/Library/LaunchAgents/com.artfolio.instagram-insights.plist` dosyasını günceller ve user LaunchAgent’ı yeniden yükler. Her login/reboot sonrasında ve en fazla saatte bir tek-seferlik collector çalışır. Dönen operasyon log’ları `~/Library/Logs/Artfolio/instagram-insights.log` altında 1 MiB + üç backup ile sınırlıdır.
+`configure-keychain`, collector profiline media bucket değişkenleri ile ayrı state bucket'ın üç değişkenini yükler ve her eksik değer için macOS Keychain’in gizli giriş prompt’unu açar; değer komut satırı argümanına, shell history’ye veya log’a girmez. Mevcut process environment değerleri interaktif çalıştırmada önceliklidir, fakat LaunchAgent yalnız `com.artfolio.instagram-insights.*` kayıtlarını yükler. Installer idempotent olarak `~/Library/LaunchAgents/com.artfolio.instagram-insights.plist` dosyasını günceller ve user LaunchAgent’ı yeniden yükler. Her login/reboot sonrasında ve en fazla saatte bir tek-seferlik collector çalışır. Dönen operasyon log’ları `~/Library/Logs/Artfolio/instagram-insights.log` altında 1 MiB + üç backup ile sınırlıdır.
 
 `--health-check` yalnız GET/read işlemleriyle collector profil bütünlüğünü, Instagram media read erişimini, R2 history read erişimini, bucket yapılandırmasını ve son yerel collector başarısının tazeliğini kontrol eder. Saatlik schedule için `HEALTHY <= 2h`, `STALE > 2h` ve `CRITICAL > 6h` eşikleri kullanılır. Read-only preflight, R2 `PutObject` yetkisini kanıtlamaz; yalnız gerekli write yapılandırmasının mevcut olduğunu raporlar. Aktif collector R2 key pair'i audit profilindeki key pair ile aynıysa rol ayrımı ihlali olarak `INVALID_ROLE_COLLISION` raporlanır ve normal collector koşusu R2/Instagram mutation sınırından önce fail-closed durur.
 
@@ -171,7 +171,7 @@ python3 scripts/audit_engagement_learning.py
 python3 scripts/audit_engagement_learning.py --verbose
 ```
 
-`configure-audit-keychain`, yalnız `com.artfolio.engagement-audit.*` altında `CLOUDFLARE_R2_ACCOUNT_ID`, `CLOUDFLARE_R2_ACCESS_KEY_ID`, `CLOUDFLARE_R2_SECRET_ACCESS_KEY` ve `CLOUDFLARE_R2_BUCKET_NAME` alanlarını güvenli Keychain prompt’larıyla kurar. `audit-status` değerleri göstermeden yalnız `AVAILABLE`/`MISSING` durumunu raporlar. Audit bu profilden collector namespace’ine fallback yapmaz ve Instagram credential’ı yüklemez. Her iki yerel komutta da mevcut process environment değerleri seçilen Keychain profilinden önce gelir; environment değişkenleri credential rolü metadata’sı taşımadığından doğru rolü sağlamak çağıranın sorumluluğundadır.
+`configure-audit-keychain`, yalnız `com.artfolio.engagement-audit.*` altında media R2 alanlarını ve ayrı state bucket'ın üç değişkenini güvenli Keychain prompt’larıyla kurar. Audit state credential'ı yalnız okuma yetkili olmalıdır; analytics partition erişimi media bucket'ta kalır. `audit-status` değerleri göstermeden yalnız `AVAILABLE`/`MISSING` durumunu raporlar. Audit bu profilden collector namespace’ine fallback yapmaz ve Instagram credential’ı yüklemez. Her iki yerel komutta da mevcut process environment değerleri seçilen Keychain profilinden önce gelir; environment değişkenleri credential rolü metadata’sı taşımadığından doğru rolü sağlamak çağıranın sorumluluğundadır.
 
 Komut publication/media identity eşleşmelerini, 24h/72h/168h coverage'ını, exclusion nedenlerini, seçilen slotları, reach dağılımını, maturity durumunu, effective observation toplamını ve global confidence'ı raporlar. `--verbose` publication kimliklerini hash'leyerek her observation weight faktörünü gösterir. Production R2’den okurken audit yalnız `GetObject` ve `ListObjectsV2` yollarını kullanır; `PutObject`, `DeleteObject` veya başka bir write yolu çağırmaz. `--history` ve `--snapshots` birlikte yerel dosya gösterdiğinde Keychain’e erişmez.
 
@@ -183,7 +183,7 @@ History, Git commit/push ile değil Cloudflare R2’de saklanır. Kayıtların k
 
 ```text
 PENDING → PUBLISHING → PUBLISHED
-            ↘ EXPIRED (Meta kesin olarak publish edilmediğini kanıtlarsa)
+            ↘ EXPIRED (media_publish öncesi durma veya kesin 4xx reddi)
             ↘ AMBIGUOUS (sonuç kanıtlanamıyorsa)
 PENDING → EXPIRED
 ```
@@ -213,7 +213,7 @@ Başarılı normal finalization, artwork state'lerini `PUBLISHED` yapmayı, tek
 exact-ETag conditional write içinde gerçekleştirir. Eski history objeleri additive
 alanlar yokken okunmaya devam eder; forward-only sayaç eski satırlardan tahmin edilmez.
 
-Her production başlangıcı yeni seçimden önce en fazla 20 unresolved publication unit'i ve son 30 günlük pencereyi inceler. `PUBLISHING` unit'lerinde aktif 45 dakikalık workflow ile çakışmamak için 50 dakikalık grace kullanılır. Unit başına yalnız parent/creation container için bir logical status lookup yapılır; reconciliation GET çağrısı 10 saniyelik timeout ile en fazla iki HTTP attempt kullanır. `PUBLISHED` container status'u publication'ı kanıtlar; `FINISHED` yalnız publish edilmeye hazır olduğunu gösterir ve `AMBIGUOUS` kalır. Unresolved unit'in kendi canonical ID'leri karantinada kalırken farklı eserler sonraki koşularda seçilebilir.
+Her production başlangıcı yeni seçimden önce en fazla 20 unresolved publication unit'i ve son 30 günlük pencereyi inceler. `PUBLISHING` unit'lerinde aktif 45 dakikalık workflow ile çakışmamak için 50 dakikalık grace kullanılır. Unit başına yalnız parent/creation container için bir logical status lookup yapılır; reconciliation GET çağrısı 10 saniyelik timeout ile en fazla iki HTTP attempt kullanır. `PUBLISHED` container status'u publication'ı kanıtlar; media ID'si olmadan unit yine `AMBIGUOUS` kalır. `FINISHED`, `ERROR` ve `EXPIRED` status'ları olası önceki `media_publish` çağrısının başarısızlığını tek başına kanıtlamaz; bunlar da `AMBIGUOUS` kalır. Unresolved unit'in kendi canonical ID'leri karantinada kalırken farklı eserler sonraki koşularda seçilebilir.
 
 Manuel reconciliation bütün geçmişten en fazla 100 unresolved unit'i inceler; yeni eser seçmez, container oluşturmaz veya `media_publish` çağırmaz:
 
@@ -272,6 +272,9 @@ python main.py --preflight-carousel
 # Yeni içerik üretmeden unresolved publication lifecycle durumunu uzlaştırır
 python3 main.py --reconcile-publications
 
+# Yalnız v2 state/receipt GET ile unresolved state sayısını gösterir
+python3 main.py --preview-publication-reconciliation
+
 # Publish etmeden yerel carousel review bundle'ları üretir
 python3 scripts/qc_carousels.py --count 8
 python3 scripts/qc_carousels.py --theme women_reading
@@ -320,14 +323,17 @@ saklayarak görünen iddiaların seçilen setle karşılaştırılmasını sağl
 | Variable | Gerekli mi? | Amaç |
 | --- | --- | --- |
 | `INSTAGRAM_ACCOUNT_ID` | Production publish için gerekli | Instagram Business/Creator account ID |
-| `INSTAGRAM_ACCESS_TOKEN` | Production publish için gerekli | Meta Graph API erişim token’ı |
+| `INSTAGRAM_ACCESS_TOKEN` | Production publish için gerekli | Meta Graph API erişim token’ı; v2 GitHub workflow'ları bunu `INSTAGRAM_ACCESS_TOKEN_V2` repository secret'ından alır |
 | `INSTAGRAM_GRAPH_API_VERSION` | Opsiyonel | Ortak Graph API sürümünü override eder (varsayılan `v22.0`) |
 | `ARTFOLIO_RIGHTS_POLICY` | Production publish için gerekli | Production'da yalnız `strict_public_domain`; production dışı çağrılarda env yoksa geriye uyumlu `permissive` default |
 | `ARTFOLIO_REELS_ROOT` | Opsiyonel | Varsayılan sibling konumunda değilse Artfolio Reels repo yolu |
-| `CLOUDFLARE_R2_ACCOUNT_ID` | Production history ve R2 media için gerekli | R2 account ID |
-| `CLOUDFLARE_R2_ACCESS_KEY_ID` | Production history ve R2 media için gerekli | R2 access key |
-| `CLOUDFLARE_R2_SECRET_ACCESS_KEY` | Production history ve R2 media için gerekli | R2 secret key |
-| `CLOUDFLARE_R2_BUCKET_NAME` | Production history ve R2 media için gerekli | History ve media bucket’ı |
+| `CLOUDFLARE_R2_ACCOUNT_ID` | Production state ve media için gerekli | R2 account ID |
+| `CLOUDFLARE_R2_ACCESS_KEY_ID` | Media için gerekli | Media bucket access key |
+| `CLOUDFLARE_R2_SECRET_ACCESS_KEY` | Media için gerekli | Media bucket secret key |
+| `CLOUDFLARE_R2_BUCKET_NAME` | Media için gerekli | Expiring media bucket |
+| `CLOUDFLARE_STATE_R2_BUCKET_NAME` | Production için gerekli | Ayrı private, silme lifecycle kuralı olmayan durable-state bucket |
+| `CLOUDFLARE_STATE_R2_ACCESS_KEY_ID` | Production için gerekli | State bucket'a scoped access key; media key'den farklı |
+| `CLOUDFLARE_STATE_R2_SECRET_ACCESS_KEY` | Production için gerekli | State bucket'a scoped secret key |
 | `CLOUDFLARE_R2_PUBLIC_URL` | R2 media upload kullanılıyorsa gerekli | Instagram’ın erişeceği R2 public URL tabanı |
 | `GOOGLE_GEMINI_API_KEY` | Opsiyonel | Gemini caption/alt-text üretimi; yoksa fallback kullanılır |
 | `SMITHSONIAN_API_KEY` | Opsiyonel | Smithsonian Open Access adapter'ını etkinleştirir |
@@ -340,9 +346,19 @@ varlığıyla kendiliğinden çalışmaz. Mimari, güvenlik sınırları ve aç�
 komutu için [Cloudflare R2 concurrency verification](docs/r2-integration-verification.md)
 belgesine bakın.
 
-Instagram publish ile R2-backed history zorunludur. `CLOUDFLARE_R2_PUBLIC_URL`, carousel media upload akışında gerekir.
+Instagram publish ile ayrı durable R2 safety state ve receipt ledger zorunludur. Temporary media cleanup yalnız media bucket'ın uygulamaya ait `images/publications/<id>/` veya `reels/publications/<id>/` anahtarlarına erişir. `CLOUDFLARE_R2_PUBLIC_URL`, carousel media upload akışında gerekir.
 
-Production startup’ta Instagram ve beş R2 değişkeni (`ACCOUNT_ID`, access key, secret key, bucket ve public URL) **required** kabul edilir ve eksik adlar secret değerleri yazdırılmadan tek tanıda raporlanır. Gemini template fallback sunduğu için optional kalır; Rijksmuseum Data Services adapter’ı anahtarsız çalışır.
+Production startup’ta Instagram, media R2 ve ayrı state R2 değişkenleri **required** kabul edilir; eksik adlar secret değerleri yazdırılmadan tek tanıda raporlanır. State ve media bucket/credential değerleri aynı olamaz. Gemini template fallback sunduğu için optional kalır; Rijksmuseum Data Services adapter’ı anahtarsız çalışır.
+
+Recovery bootstrap, forensic artifact dizininden yalnız yerel candidate üretir:
+
+```bash
+python3 scripts/bootstrap_publication_recovery.py --evidence-dir /path/to/carousel-history-recovery --output-dir /private/tmp/artfolio-recovery-candidate
+```
+
+Varsayılan mod R2'ye yazmaz. `--output-dir` yalnız yerel dosya üretir. Üretim yüklemesi ayrı yetki ve `--write --target-bucket <durable-state-bucket> --confirm-production-write I_AUTHORIZE_PRODUCTION_RECOVERY_BOOTSTRAP` gerektirir; bu komut normal geliştirme/CI doğrulamasında çalıştırılmaz. Bootstrap iki nesnenin de yokluğunu doğrular, receipt nesnesini önce, safety nesnesini en son create-only koşuluyla oluşturur. Herhangi bir belirsiz veya kısmi sonuçta otomatik tekrar denenmez; operatör iki nesneyi okuyup durumu incelemelidir. Kaynak forensic JSON, eski `data/posted_history.json` veya örnek şemalar doğrudan production'a yüklenmez.
+
+Recovery rollout sırası: feed ve Reel schedule değişkenlerini kapalı tut; feed ve Reel GitHub workflow'larını devre dışı bırakıp queued/in-progress job kalmadığını doğrula. Schedule değişkeni manuel dispatch'i engellemez. GitHub rerun'ları ilk koşunun commit SHA'sını kullandığı için eski workflow'lara verilen `INSTAGRAM_ACCESS_TOKEN` repository secret'ını bootstrap öncesinde kaldır; v2 feed, Reel ve Insights workflow'larının kullandığı ayrı `INSTAGRAM_ACCESS_TOKEN_V2` secret'ını güvenli şekilde hazırla. Eski token'ı almış job kalmadığını yeniden doğrula. Ayrı private durable-state bucket'ı silme lifecycle kuralı olmadan ve ayrı scoped credential'larla hazırla, v2 kodu `main` üzerine ayrı yetkiyle merge et, forensic bootstrap için ayrı yetki al, iki nesneyi doğrula, read-only preflight ve izole R2 testlerini tamamla. Yalnız bundan sonra workflow'ları yeniden açmak ve schedule/canary için ayrı operatör kararı verilir. Eski SHA rerun'ları eski secret yokken Instagram'a yazamaz; kısmi dağıtımda yeni kod eksik v2 state ile durur. Stale v2 PENDING lock yalnız açık reconciliation/expiry CAS ile kaldırılır ve v2 feed worker'ı reservation ID ile fence edilir. Bu secret cutover ve workflow kapatma işlemleri bu hazırlık görevinde yapılmaz.
 
 Normal outbound isteklerin tümü bounded timeout kullanır. R2 connect/read sınırları 10/30 saniyedir; SDK-level retry kapalıdır. Media upload yalnız transient network, rate-limit ve 5xx hatalarında en fazla üç loglanan uygulama denemesi yapar; permanent 4xx/config hataları hemen durur. Gemini isteği 60 saniye ve tek attempt ile sınırlıdır; hata halinde deterministic template fallback kullanılır. Instagram yalnız transient container/status hatalarını üç bounded attempt ile tekrarlar; publish sınırındaki belirsiz sonuç otomatik retry edilmez.
 

@@ -1,308 +1,122 @@
-"""Read-only production checks for the normal carousel entry point."""
+"""Read-only production gates for the versioned durable publication state."""
 
-from botocore.exceptions import ClientError, EndpointConnectionError
-import pytest
 from types import SimpleNamespace
 
+import pytest
+
 import main
-from src import history_tracker, instagram_poster, production_config
+from src import history_tracker, instagram_poster, production_config, publication_state
 from src.production_config import ProductionConfigurationError
+from tests.test_publication_state import safety_candidate
 
 
 def _configure(monkeypatch, *, public_url="https://media.example"):
-    for name in (
-        "INSTAGRAM_ACCOUNT_ID",
-        "INSTAGRAM_ACCESS_TOKEN",
-        "CLOUDFLARE_R2_ACCOUNT_ID",
-        "CLOUDFLARE_R2_ACCESS_KEY_ID",
-        "CLOUDFLARE_R2_SECRET_ACCESS_KEY",
-        "CLOUDFLARE_R2_BUCKET_NAME",
-    ):
-        monkeypatch.setenv(name, "configured")
-    monkeypatch.setenv("CLOUDFLARE_R2_PUBLIC_URL", public_url)
-    monkeypatch.setenv("ARTFOLIO_RIGHTS_POLICY", "strict_public_domain")
-    monkeypatch.setattr(
-        instagram_poster,
-        "validate_instagram_account_access",
-        lambda _account_id, _access_token: None,
-        raising=False,
-    )
+    values = {
+        "INSTAGRAM_ACCOUNT_ID": "account-1",
+        "INSTAGRAM_ACCESS_TOKEN": "token",
+        "CLOUDFLARE_R2_ACCOUNT_ID": "account",
+        "CLOUDFLARE_R2_ACCESS_KEY_ID": "media-key",
+        "CLOUDFLARE_R2_SECRET_ACCESS_KEY": "media-secret",
+        "CLOUDFLARE_R2_BUCKET_NAME": "media",
+        "CLOUDFLARE_STATE_R2_ACCESS_KEY_ID": "state-key",
+        "CLOUDFLARE_STATE_R2_SECRET_ACCESS_KEY": "state-secret",
+        "CLOUDFLARE_STATE_R2_BUCKET_NAME": "state",
+        "CLOUDFLARE_R2_PUBLIC_URL": public_url,
+        "ARTFOLIO_RIGHTS_POLICY": "strict_public_domain",
+    }
+    for key, value in values.items():
+        monkeypatch.setenv(key, value)
+    monkeypatch.setattr(instagram_poster, "validate_instagram_account_access", lambda *_: None)
 
 
-def _client_error(code, status, operation="GetObject"):
-    return ClientError(
-        {
-            "Error": {"Code": code, "Message": "secret-must-not-appear"},
-            "ResponseMetadata": {"HTTPStatusCode": status},
-        },
-        operation,
-    )
-
-
-def test_preflight_reads_authoritative_history_without_mutation(monkeypatch):
-    _configure(monkeypatch)
+def _fake_store(monkeypatch, *, safety=None, receipts=True):
+    state = publication_state.validate_safety_state(safety or safety_candidate())
     calls = []
-    monkeypatch.setattr(
-        history_tracker,
-        "load_history_with_etag",
-        lambda: (calls.append("read") or {"posted_artworks": []}, '"etag"'),
-    )
-    monkeypatch.setattr(
-        history_tracker,
-        "_upload_history",
-        lambda *_args: pytest.fail("preflight mutated history"),
-    )
+    class Store:
+        def load_safety(self):
+            calls.append("safety-read")
+            return state, '"etag"'
+        def load_receipts(self):
+            calls.append("receipts-read")
+            if not receipts:
+                raise publication_state.StateValidationError("Receipt ledger missing")
+            return SimpleNamespace(generation=1, records=[]), '"receipt-etag"'
+    monkeypatch.setattr(publication_state, "PublicationStateStore", Store)
+    monkeypatch.setattr(publication_state, "validate_state_bucket_lifecycle", lambda _store: calls.append("lifecycle-read"))
+    return calls
 
-    assert production_config.validate_carousel_production_preflight() == {"gemini": "disabled"}
-    assert calls == ["read"]
 
-
-def test_preflight_uses_normalized_instagram_credentials(monkeypatch):
+def test_preflight_reads_both_durable_objects_without_mutation(monkeypatch):
     _configure(monkeypatch)
+    calls = _fake_store(monkeypatch)
+    monkeypatch.setattr(history_tracker, "_upload_history", lambda *_: pytest.fail("preflight wrote state"))
+    assert production_config.validate_carousel_production_preflight() == {"gemini": "disabled"}
+    assert calls == ["lifecycle-read", "safety-read", "receipts-read"]
+
+
+def test_preflight_normalizes_instagram_credentials(monkeypatch):
+    _configure(monkeypatch)
+    _fake_store(monkeypatch)
     monkeypatch.setenv("INSTAGRAM_ACCOUNT_ID", " account-1 ")
     monkeypatch.setenv("INSTAGRAM_ACCESS_TOKEN", " token ")
-    checked = []
-    monkeypatch.setattr(
-        instagram_poster,
-        "validate_instagram_account_access",
-        lambda account_id, access_token: checked.append((account_id, access_token)),
-    )
-    monkeypatch.setattr(
-        history_tracker,
-        "load_history_with_etag",
-        lambda: ({"posted_artworks": []}, '"etag"'),
-    )
-
-    validate = production_config.validate_carousel_production_preflight
-    assert validate() == {"gemini": "disabled"}
-    assert checked == [("account-1", "token")]
+    seen = []
+    monkeypatch.setattr(instagram_poster, "validate_instagram_account_access",
+                        lambda account, token: seen.append((account, token)))
+    production_config.validate_carousel_production_preflight()
+    assert seen == [("account-1", "token")]
 
 
-def test_preflight_rejects_missing_authoritative_history(monkeypatch):
+def test_preflight_rejects_missing_receipts(monkeypatch):
     _configure(monkeypatch)
-    monkeypatch.setattr(
-        history_tracker,
-        "load_history_with_etag",
-        lambda: ({"posted_artworks": []}, None),
-    )
-
-    with pytest.raises(ProductionConfigurationError, match="posted_history.json.*missing"):
+    _fake_store(monkeypatch, receipts=False)
+    with pytest.raises(publication_state.StateValidationError, match="ledger missing"):
         production_config.validate_carousel_production_preflight()
 
 
-def test_preflight_checks_instagram_access_before_history_read(monkeypatch):
+def test_preflight_rejects_missing_state_config(monkeypatch):
     _configure(monkeypatch)
-    monkeypatch.setattr(
-        instagram_poster,
-        "validate_instagram_account_access",
-        lambda *_args: (_ for _ in ()).throw(
-            instagram_poster.InstagramAuthError("Instagram account access unavailable")
-        ),
-    )
-    monkeypatch.setattr(
-        history_tracker,
-        "load_history_with_etag",
-        lambda: pytest.fail("unavailable Instagram account reached R2"),
-    )
+    monkeypatch.delenv("CLOUDFLARE_STATE_R2_BUCKET_NAME")
+    with pytest.raises(ProductionConfigurationError, match="CLOUDFLARE_STATE_R2_BUCKET_NAME"):
+        production_config.validate_carousel_production_preflight()
 
-    with pytest.raises(instagram_poster.InstagramAuthError):
+
+def test_preflight_rejects_same_media_and_state_bucket(monkeypatch):
+    _configure(monkeypatch)
+    monkeypatch.setenv("CLOUDFLARE_STATE_R2_BUCKET_NAME", "media")
+    with pytest.raises(ProductionConfigurationError, match="differ from media bucket"):
         production_config.validate_carousel_production_preflight()
 
 
 @pytest.mark.parametrize("url", ["http://media.example", "https://user:pass@media.example", "https://media.example/?token=secret", "https://media.example/#", "https://bad host.example", "https://localhost"])
-def test_preflight_rejects_unsafe_public_media_url_before_r2_read(monkeypatch, url):
+def test_preflight_rejects_unsafe_public_url_before_state_read(monkeypatch, url):
     _configure(monkeypatch, public_url=url)
-    monkeypatch.setattr(
-        history_tracker,
-        "load_history_with_etag",
-        lambda: pytest.fail("invalid URL reached R2"),
-    )
-
+    monkeypatch.setattr(publication_state, "PublicationStateStore",
+                        lambda: pytest.fail("invalid URL reached durable state"))
     with pytest.raises(ProductionConfigurationError, match="CLOUDFLARE_R2_PUBLIC_URL"):
         production_config.validate_carousel_production_preflight()
 
 
-@pytest.mark.parametrize(
-    "history",
-    [
-        {"posted_artworks": "invalid"},
-        {"posted_artworks": [{"status": "PUBLISHED"}]},
-        {"posted_artworks": [{"id": "aic_1", "status": "UNKNOWN"}]},
-        {"posted_artworks": [{"id": "aic_1"}, {"id": "artic_1"}]},
-        {"posted_artworks": [{"id": "aic_1", "status": "PENDING"}]},
-        {
-            "posted_artworks": [
-                {
-                    "id": "aic_1",
-                    "status": "PUBLISHING",
-                    "reserved_at": "2026-09-23T12:00:00Z",
-                }
-            ]
-        },
-    ],
-)
-def test_preflight_rejects_history_that_could_weaken_duplicate_protection(
-    monkeypatch, history
-):
+def test_preflight_rejects_unresolved_live_ambiguity(monkeypatch):
     _configure(monkeypatch)
-    monkeypatch.setattr(
-        history_tracker,
-        "load_history_with_etag",
-        lambda: (history, '"etag"'),
-    )
-
-    with pytest.raises(history_tracker.CorruptedHistoryError):
+    state = safety_candidate()
+    state["active_publication_state"]["posted_artworks"].append({
+        "id": "aic_999999", "publication_id": "unit-1", "status": "AMBIGUOUS",
+        "reserved_at": "2026-09-23T12:00:00Z", "ambiguity_reason": "unknown",
+    })
+    _fake_store(monkeypatch, safety=publication_state.seal(state))
+    with pytest.raises(ProductionConfigurationError, match="Unresolved live feed"):
         production_config.validate_carousel_production_preflight()
 
 
-def test_preflight_keeps_legacy_history_readable(monkeypatch):
+def test_legacy_history_is_not_a_production_fallback(monkeypatch):
     _configure(monkeypatch)
-    monkeypatch.setattr(
-        history_tracker,
-        "load_history_with_etag",
-        lambda: ({"posted_artworks": [{"id": "artic_84774"}]}, '"etag"'),
-    )
-
-    assert production_config.validate_carousel_production_preflight() == {"gemini": "disabled"}
-
-
-def test_missing_bucket_is_not_treated_as_missing_history_object(monkeypatch):
-    class Client:
-        def get_object(self, **_kwargs):
-            raise _client_error("NoSuchBucket", 404)
-
-    monkeypatch.setattr(history_tracker, "_get_s3_client", Client)
-    monkeypatch.setattr(history_tracker, "_get_bucket_name", lambda: "art-bucket")
-
-    with pytest.raises(RuntimeError) as caught:
+    monkeypatch.delenv("CLOUDFLARE_STATE_R2_BUCKET_NAME")
+    monkeypatch.delenv("CLOUDFLARE_STATE_R2_ACCESS_KEY_ID")
+    monkeypatch.delenv("CLOUDFLARE_STATE_R2_SECRET_ACCESS_KEY")
+    with pytest.raises(publication_state.StateValidationError, match="Durable-state configuration"):
         history_tracker.load_history_with_etag()
-    message = str(caught.value)
-    assert "operation=GetObject" in message
-    assert "code=NoSuchBucket" in message
-    assert "http_status=404" in message
-    assert "bucket=art-bucket" in message
-    assert "key=posted_history.json" in message
-    assert "secret-must-not-appear" not in message
-
-
-@pytest.mark.parametrize("code", ["AccessDenied", "SignatureDoesNotMatch"])
-def test_history_access_failure_has_safe_actionable_diagnostics(monkeypatch, code):
-    class Client:
-        def get_object(self, **_kwargs):
-            raise _client_error(code, 403)
-
-    monkeypatch.setattr(history_tracker, "_get_s3_client", Client)
-    monkeypatch.setattr(history_tracker, "_get_bucket_name", lambda: "art-bucket")
-
-    with pytest.raises(RuntimeError) as caught:
-        history_tracker.load_history_with_etag()
-    message = str(caught.value)
-    assert f"code={code}" in message
-    assert "http_status=403" in message
-    assert "secret-must-not-appear" not in message
-
-
-def test_history_endpoint_failure_reports_type_without_endpoint_url(monkeypatch):
-    class Client:
-        def get_object(self, **_kwargs):
-            raise EndpointConnectionError(
-                endpoint_url="https://r2.example/?token=secret-must-not-appear"
-            )
-
-    monkeypatch.setattr(history_tracker, "_get_s3_client", Client)
-    monkeypatch.setattr(history_tracker, "_get_bucket_name", lambda: "art-bucket")
-
-    with pytest.raises(RuntimeError) as caught:
-        history_tracker.load_history_with_etag()
-    message = str(caught.value)
-    assert "operation=GetObject" in message
-    assert "error_type=EndpointConnectionError" in message
-    assert "secret-must-not-appear" not in message
-
-
-def test_history_client_initialization_failure_keeps_bucket_context(monkeypatch):
-    monkeypatch.setattr(history_tracker, "_get_bucket_name", lambda: "art-bucket")
-    monkeypatch.setattr(
-        history_tracker,
-        "_get_s3_client",
-        lambda: (_ for _ in ()).throw(
-            EndpointConnectionError(endpoint_url="https://secret-must-not-appear")
-        ),
-    )
-
-    with pytest.raises(RuntimeError) as caught:
-        history_tracker.load_history_with_etag()
-    assert "bucket=art-bucket" in str(caught.value)
-    assert "error_type=EndpointConnectionError" in str(caught.value)
-    assert "secret-must-not-appear" not in str(caught.value)
-
-
-def test_history_write_access_denied_reports_safe_operation_context(monkeypatch):
-    class Client:
-        def put_object(self, **_kwargs):
-            raise _client_error("AccessDenied", 403, "PutObject")
-
-    monkeypatch.setattr(history_tracker, "_get_s3_client", Client)
-    monkeypatch.setattr(history_tracker, "_get_bucket_name", lambda: "art-bucket")
-
-    with pytest.raises(RuntimeError) as caught:
+    with pytest.raises(publication_state.StateValidationError, match="Legacy history writes are disabled"):
         history_tracker._upload_history({"posted_artworks": []}, '"etag"')
-    message = str(caught.value)
-    assert "operation=PutObject" in message
-    assert "code=AccessDenied" in message
-    assert "bucket=art-bucket" in message
-    assert "key=posted_history.json" in message
-    assert "secret-must-not-appear" not in message
-
-
-def test_history_write_client_initialization_failure_is_sanitized(monkeypatch):
-    monkeypatch.setattr(history_tracker, "_get_bucket_name", lambda: "art-bucket")
-    monkeypatch.setattr(
-        history_tracker,
-        "_get_s3_client",
-        lambda: (_ for _ in ()).throw(
-            EndpointConnectionError(endpoint_url="https://secret-must-not-appear")
-        ),
-    )
-
-    with pytest.raises(RuntimeError) as caught:
-        history_tracker._upload_history({"posted_artworks": []}, '"etag"')
-    message = str(caught.value)
-    assert "operation=PutObject" in message
-    assert "bucket=art-bucket" in message
-    assert "error_type=EndpointConnectionError" in message
-    assert "secret-must-not-appear" not in message
-
-
-def test_invalid_r2_client_configuration_is_not_treated_as_fresh_history(monkeypatch):
-    monkeypatch.setenv("CLOUDFLARE_R2_ACCOUNT_ID", "configured")
-    monkeypatch.setenv("CLOUDFLARE_R2_ACCESS_KEY_ID", "configured")
-    monkeypatch.setenv("CLOUDFLARE_R2_SECRET_ACCESS_KEY", "configured")
-    monkeypatch.setenv("CLOUDFLARE_R2_BUCKET_NAME", "art-bucket")
-    monkeypatch.setattr(
-        history_tracker,
-        "_get_s3_client",
-        lambda: (_ for _ in ()).throw(ValueError("secret-must-not-appear")),
-    )
-
-    with pytest.raises(RuntimeError) as caught:
-        history_tracker.load_history_with_etag()
-    assert "R2 client configuration invalid" in str(caught.value)
-    assert "secret-must-not-appear" not in str(caught.value)
-
-
-def test_missing_key_remains_distinct_from_access_failure(monkeypatch):
-    class Client:
-        def get_object(self, **_kwargs):
-            raise _client_error("NoSuchKey", 404)
-
-    monkeypatch.setattr(history_tracker, "_get_s3_client", Client)
-    monkeypatch.setattr(history_tracker, "_get_bucket_name", lambda: "art-bucket")
-
-    with pytest.raises(RuntimeError) as caught:
-        history_tracker.load_history_with_etag()
-    assert "posted_history.json is missing" in str(caught.value)
-    assert "code=NoSuchKey" in str(caught.value)
 
 
 def test_cli_preflight_exits_before_reconciliation_and_acquisition(monkeypatch):

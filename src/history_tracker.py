@@ -32,7 +32,7 @@ from src.models import (
     ValidatedReelHistory,
     normalize_artwork_id,
 )
-from src import r2_media
+from src import r2_media, publication_state
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -286,7 +286,27 @@ def _get_bucket_name() -> str:
     return bucket
 
 def load_history_with_etag() -> Tuple[Dict[str, Any], str | None]:
-    """Loads posted history JSON from Cloudflare R2 and returns (data, etag)."""
+    """Load strict v2 state, or empty local history without R2 credentials."""
+    if any(os.environ.get(name, "").strip() for name in publication_state.STATE_VARIABLES[1:]):
+        state, etag = publication_state.PublicationStateStore().load_safety()
+        return publication_state.history_view(state), etag
+    if any(os.environ.get(name, "").strip() for name in (
+        "CLOUDFLARE_R2_ACCOUNT_ID", "CLOUDFLARE_R2_ACCESS_KEY_ID",
+        "CLOUDFLARE_R2_SECRET_ACCESS_KEY", "CLOUDFLARE_R2_BUCKET_NAME",
+    )):
+        raise publication_state.StateValidationError(
+            "Durable-state configuration is required; legacy history is migration input only"
+        )
+    return {"posted_artworks": []}, None
+
+
+def load_legacy_history_for_migration() -> Tuple[Dict[str, Any], str]:
+    """Read the old object explicitly for offline migration; never a live fallback."""
+    if any(not os.environ.get(name, "").strip() for name in (
+        "CLOUDFLARE_R2_ACCOUNT_ID", "CLOUDFLARE_R2_ACCESS_KEY_ID",
+        "CLOUDFLARE_R2_SECRET_ACCESS_KEY", "CLOUDFLARE_R2_BUCKET_NAME",
+    )):
+        raise publication_state.StateValidationError("Legacy migration read needs explicit R2 configuration")
     try:
         bucket = _get_bucket_name()
         s3 = _get_s3_client()
@@ -306,26 +326,15 @@ def load_history_with_etag() -> Tuple[Dict[str, Any], str | None]:
             raise CorruptedHistoryError("Corrupted history.json in R2") from e
             
     except ValueError as e:
-        required = (
-            "CLOUDFLARE_R2_ACCOUNT_ID",
-            "CLOUDFLARE_R2_ACCESS_KEY_ID",
-            "CLOUDFLARE_R2_SECRET_ACCESS_KEY",
-            "CLOUDFLARE_R2_BUCKET_NAME",
-        )
-        if any(not os.environ.get(name, "").strip() for name in required):
-            logger.warning("R2 configuration incomplete; using local/dry-run history")
-            return {"posted_artworks": []}, None
-        logger.error("R2 client configuration invalid error=%s", type(e).__name__)
-        raise RuntimeError("R2 client configuration invalid for posted_history.json") from None
+        raise publication_state.StateValidationError("Legacy migration R2 configuration is invalid") from e
     except ClientError as e:
         if _is_missing_object(e):
             diagnostic = r2_media.r2_failure_context(
                 "GetObject", bucket, HISTORY_OBJECT_KEY, e
             )
-            logger.error("Authoritative R2 history is missing %s", diagnostic)
+            logger.error("Legacy R2 migration source is missing %s", diagnostic)
             raise RuntimeError(
-                f"Authoritative R2 {HISTORY_OBJECT_KEY} is missing; "
-                f"restore or explicitly initialize it before production. {diagnostic}"
+                f"Legacy R2 {HISTORY_OBJECT_KEY} is missing; migration cannot assume empty history. {diagnostic}"
             ) from None
         diagnostic = r2_media.r2_failure_context(
             "GetObject", bucket, HISTORY_OBJECT_KEY, e
@@ -346,47 +355,23 @@ def load_history_with_etag() -> Tuple[Dict[str, Any], str | None]:
 
 def _upload_history(history: Dict[str, Any], etag: str | None = None):
     """Write history with create-if-absent or exact-ETag CAS semantics."""
-    bucket = _get_bucket_name()
-    content = json.dumps(history, ensure_ascii=False, indent=2)
-    
-    kwargs = {
-        "Bucket": bucket,
-        "Key": HISTORY_OBJECT_KEY,
-        "Body": content.encode('utf-8'),
-        "ContentType": "application/json"
-    }
-    
-    if etag is None:
-        # The missing-object load and first write must also be atomic. Without
-        # this condition, simultaneous first reservations are last-writer-wins.
-        kwargs["IfNoneMatch"] = "*"
-    else:
-        kwargs["IfMatch"] = _validated_etag(etag)
-    
-    logger.info(
-        "Uploading %s to R2 with %s.",
-        HISTORY_OBJECT_KEY,
-        "create-if-absent" if etag is None else "ETag precondition",
+    if "_safety_state" in history:
+        if etag is None:
+            raise publication_state.StateValidationError(
+                "Normal production may not create missing safety state"
+            )
+        try:
+            publication_state.PublicationStateStore().update_safety(
+                publication_state.state_from_history(history), etag
+            )
+        except publication_state.StateConflictError as error:
+            raise ConcurrentWriteError("Conditional publication safety state write failed") from error
+        return
+    if any(os.environ.get(name, "").strip() for name in publication_state.STATE_VARIABLES[1:]):
+        raise publication_state.StateValidationError("Versioned safety state is missing")
+    raise publication_state.StateValidationError(
+        "Legacy history writes are disabled; use a validated v2 safety state"
     )
-    
-    try:
-        s3 = _get_s3_client()
-        s3.put_object(**kwargs)
-    except ClientError as e:
-        if _is_precondition_failed(e):
-            logger.error("Concurrent R2 history write rejected by precondition.")
-            raise ConcurrentWriteError("Conditional R2 history write failed") from e
-        diagnostic = r2_media.r2_failure_context(
-            "PutObject", bucket, HISTORY_OBJECT_KEY, e
-        )
-        logger.error("%s", diagnostic)
-        raise RuntimeError(diagnostic) from None
-    except BotoCoreError as e:
-        diagnostic = r2_media.r2_failure_context(
-            "PutObject", bucket, HISTORY_OBJECT_KEY, e
-        )
-        logger.error("%s", diagnostic)
-        raise RuntimeError(diagnostic) from None
 
 
 def validate_carousel_history_for_production(history: Any) -> None:
@@ -588,6 +573,7 @@ def _conditional_publication_update(
         [Dict[str, Any], str, list[Dict[str, Any]]], None
     ]
     | None = None,
+    expected_publication_id: str | None = None,
 ) -> _MutationResult:
     """Reload and re-evaluate bounded lifecycle writes after an ETag conflict."""
     canonical_ids = tuple(normalize_artwork_id(value) for value in artwork_ids)
@@ -595,6 +581,12 @@ def _conditional_publication_update(
         history, etag = load_history_with_etag()
         original_history = copy.deepcopy(history)
         publication_id, records = _publication_records(history, canonical_ids)
+        if "_safety_state" in history and not expected_publication_id:
+            raise publication_state.StateValidationError(
+                "Live publication mutation requires its reservation ID"
+            )
+        if expected_publication_id is not None and publication_id != expected_publication_id:
+            raise RuntimeError("Publication reservation was replaced")
         try:
             result, changed = mutation(publication_id, records)
             if changed and history_mutation is not None:
@@ -757,7 +749,7 @@ def globally_protected_artwork_ids(
         raise ValueError("Global protection time must be timezone-aware")
     current_time = now.astimezone(timezone.utc)
     reel_history = _validated_reel_history(history)
-    protected: set[str] = set()
+    protected: set[str] = publication_state.blocked_ids(history)
 
     posted_list = history.get("posted_artworks", [])
     if isinstance(posted_list, list):
@@ -770,7 +762,8 @@ def globally_protected_artwork_ids(
             status = str(item.get("status", "")).upper()
             if status == PublicationStatus.EXPIRED.value:
                 continue
-            if status == PublicationStatus.PENDING.value and _is_stale_pending(item, current_time):
+            if ("_safety_state" not in history and status == PublicationStatus.PENDING.value
+                    and _is_stale_pending(item, current_time)):
                 continue
             protected.add(normalize_artwork_id(artwork_id))
 
@@ -791,7 +784,7 @@ def globally_protected_artwork_ids(
     for reservation in reel_history.reservations:
         if reservation.status is ReelPublicationStatus.EXPIRED:
             continue
-        if _is_stale_reel_pending(reservation, current_time):
+        if "_safety_state" not in history and _is_stale_reel_pending(reservation, current_time):
             continue
         protected.add(normalize_artwork_id(reservation.artwork_id))
     protected.update(
@@ -804,15 +797,36 @@ def globally_protected_artwork_ids(
 def artwork_is_globally_protected(
     history: Mapping[str, Any], artwork_id: str, *, now: datetime
 ) -> bool:
-    return normalize_artwork_id(artwork_id) in globally_protected_artwork_ids(
-        history, now=now
+    canonical_id = normalize_artwork_id(artwork_id)
+    source = canonical_id.split("_", 1)[0]
+    return (
+        source in publication_state.blocked_sources(history)
+        or canonical_id in globally_protected_artwork_ids(history, now=now)
     )
+
+
+class ProtectedArtworkIds(set[str]):
+    def __init__(self, values: Iterable[str], blocked_sources: Iterable[str]):
+        super().__init__(values)
+        self.blocked_sources = frozenset(blocked_sources)
+
+    def __contains__(self, value: object) -> bool:
+        if not isinstance(value, str):
+            return False
+        canonical_id = normalize_artwork_id(value)
+        return (
+            canonical_id.split("_", 1)[0] in self.blocked_sources
+            or super().__contains__(canonical_id)
+        )
 
 
 def get_posted_ids() -> Set[str]:
     """Return the shared feed/Reel set protected from automatic reuse."""
     history, _ = load_history_with_etag()
-    return globally_protected_artwork_ids(history, now=datetime.now(timezone.utc))
+    return ProtectedArtworkIds(
+        globally_protected_artwork_ids(history, now=datetime.now(timezone.utc)),
+        publication_state.blocked_sources(history),
+    )
 
 def _confirmed_artworks(history: Dict[str, Any]) -> list[Dict[str, Any]]:
     now = datetime.now(timezone.utc)
@@ -1159,8 +1173,8 @@ def reserve_artworks(
         original_history = copy.deepcopy(history)
         now = datetime.now(timezone.utc)
         try:
-            protected = globally_protected_artwork_ids(history, now=now)
-            collision = requested_ids & protected
+            collision = {item for item in requested_ids
+                         if artwork_is_globally_protected(history, item, now=now)}
             if collision:
                 raise RuntimeError(
                     f"Artwork {sorted(collision)[0]} is already protected by history"
@@ -1727,7 +1741,10 @@ def finalize_reel_publication(
         history["reel_publication_count"] = reel_history.publication_count + 1
         return publication, True
 
-    return _conditional_reel_update(publication_id, release_identity, mutation)
+    result = _conditional_reel_update(publication_id, release_identity, mutation)
+    if any(os.environ.get(name, "").strip() for name in publication_state.STATE_VARIABLES[1:]):
+        publication_state.synchronize_receipt(normalized_publication_id)
+    return result
 
 
 def record_reel_permalink(
@@ -2066,8 +2083,8 @@ def reserve_carousel(
 
     history, etag = load_history_with_etag()
     now = datetime.now(timezone.utc)
-    protected_existing = globally_protected_artwork_ids(history, now=now)
-    collisions = set(publication_ids).intersection(protected_existing)
+    collisions = {item for item in publication_ids
+                  if artwork_is_globally_protected(history, item, now=now)}
     if collisions:
         raise RuntimeError(
             "Carousel reservation collided with protected artwork(s): "
@@ -2135,6 +2152,8 @@ def start_publication_attempt(
     artwork_ids: Iterable[str],
     container_id: str,
     child_container_ids: Sequence[str] = (),
+    *,
+    expected_publication_id: str | None = None,
 ) -> int:
     """Persist the irreversible boundary and its container evidence atomically."""
     if not isinstance(container_id, str) or not container_id:
@@ -2171,11 +2190,14 @@ def start_publication_attempt(
         )
         return len(records), True
 
-    return _conditional_publication_update(artwork_ids, mutation)
+    return _conditional_publication_update(
+        artwork_ids, mutation, expected_publication_id=expected_publication_id
+    )
 
 
 def mark_artworks_ambiguous(
-    artwork_ids: Iterable[str], ambiguity_reason: str = "uncertain_media_publish_result"
+    artwork_ids: Iterable[str], ambiguity_reason: str = "uncertain_media_publish_result",
+    *, expected_publication_id: str | None = None,
 ) -> int:
     """Quarantine a whole publication unit after an unprovable publish result."""
     ambiguous_at = _utc_timestamp()
@@ -2198,7 +2220,9 @@ def mark_artworks_ambiguous(
         )
         return len(records), True
 
-    return _conditional_publication_update(artwork_ids, mutation)
+    return _conditional_publication_update(
+        artwork_ids, mutation, expected_publication_id=expected_publication_id
+    )
 
 
 def mark_artwork_ambiguous(
@@ -2253,7 +2277,8 @@ def mark_artworks_pending(artwork_ids: Iterable[str]) -> int:
 
 
 def mark_publication_not_published(
-    artwork_ids: Iterable[str], reason: str, *, authoritative: bool = False
+    artwork_ids: Iterable[str], reason: str, *, authoritative: bool = False,
+    expected_publication_id: str | None = None,
 ) -> int:
     """Release a whole unit only after conclusive non-publication evidence."""
     expired_at = _utc_timestamp()
@@ -2284,11 +2309,15 @@ def mark_publication_not_published(
             )
 
     return _conditional_publication_update(
-        artwork_ids, mutation, history_mutation=queue_cleanup
+        artwork_ids, mutation, history_mutation=queue_cleanup,
+        expected_publication_id=expected_publication_id,
     )
 
 
-def record_publish_response(artwork_ids: Iterable[str], media_id: str) -> int:
+def record_publish_response(
+    artwork_ids: Iterable[str], media_id: str, *,
+    expected_publication_id: str | None = None,
+) -> int:
     """Durably retain the authoritative media ID before final confirmation."""
     if not isinstance(media_id, str) or not media_id:
         raise ValueError("A non-empty Instagram media ID is required")
@@ -2303,6 +2332,9 @@ def record_publish_response(artwork_ids: Iterable[str], media_id: str) -> int:
             raise RuntimeError(f"Cannot record publish response from {status.value}")
         if all(record.get("publish_response_media_id") == media_id for record in records):
             return 0, False
+        if any(record.get("publish_response_media_id") not in (None, media_id)
+               for record in records):
+            raise RuntimeError("Publication has a conflicting media receipt")
         for record in records:
             record["publish_response_media_id"] = media_id
         logger.info(
@@ -2312,7 +2344,9 @@ def record_publish_response(artwork_ids: Iterable[str], media_id: str) -> int:
         )
         return len(records), True
 
-    return _conditional_publication_update(artwork_ids, mutation)
+    return _conditional_publication_update(
+        artwork_ids, mutation, expected_publication_id=expected_publication_id
+    )
 
 
 def _finalize_publication_history(
@@ -2525,6 +2559,11 @@ def _finalize_publication_history(
             for artwork_id, status in sorted(invalid_states.items())
         )
         raise RuntimeError(f"Cannot finalize reservation(s): {details}")
+    if any(item.get("publish_response_media_id") not in (None, media_id)
+           for item in target_records):
+        raise CorruptedHistoryError(
+            "Finalization media ID conflicts with the durable publish response"
+        )
 
     posted_at = _utc_timestamp()
     publication = PublicationRecord(
@@ -2585,6 +2624,10 @@ def confirm_artworks_and_record_publication(
 
     for attempt in range(1, HISTORY_CONDITIONAL_WRITE_ATTEMPTS + 1):
         history, etag = load_history_with_etag()
+        if "_safety_state" in history and not publication_id:
+            raise publication_state.StateValidationError(
+                "Live finalization requires its reservation ID"
+            )
         original_history = copy.deepcopy(history)
         publication, changed = _finalize_publication_history(
             history,
@@ -2597,6 +2640,8 @@ def confirm_artworks_and_record_publication(
             permalink,
         )
         if not changed:
+            if "_safety_state" in history:
+                publication_state.synchronize_receipt(publication["id"])
             return publication
         try:
             _upload_history(history, etag)
@@ -2614,6 +2659,8 @@ def confirm_artworks_and_record_publication(
         except Exception:
             _restore_history_snapshot_in_place(history, original_history)
             raise
+        if "_safety_state" in history:
+            publication_state.synchronize_receipt(publication["id"])
         return publication
     raise AssertionError("unreachable")
 
@@ -2674,6 +2721,7 @@ def confirm_carousel_publication(
     media_id: str,
     *,
     permalink: str | None = None,
+    publication_id: str | None = None,
 ) -> int:
     """Finalize all variable-length role-bearing carousel records atomically."""
     cover_id = normalize_artwork_id(cover_artwork_id)
@@ -2689,6 +2737,8 @@ def confirm_carousel_publication(
         )
 
     finalization_kwargs = {"permalink": permalink} if permalink is not None else {}
+    if publication_id is not None:
+        finalization_kwargs["publication_id"] = publication_id
     publication = confirm_artworks_and_record_publication(
         [cover_id, *featured_ids], media_id, "carousel", **finalization_kwargs
     )
@@ -2941,6 +2991,7 @@ def record_reconciliation_result(
     expected_status: PublicationStatus | None = None,
     now: datetime | None = None,
     permalink: str | None = None,
+    expected_publication_id: str | None = None,
 ) -> int:
     """Atomically record one publication-level reconciliation result."""
     reconciled_at = _utc_timestamp(now)
@@ -2953,6 +3004,12 @@ def record_reconciliation_result(
             history, etag = load_history_with_etag()
             original_history = copy.deepcopy(history)
             publication_id, records = _publication_records(history, canonical_ids)
+            if "_safety_state" in history and not expected_publication_id:
+                raise publication_state.StateValidationError(
+                    "Live reconciliation requires its reservation ID"
+                )
+            if expected_publication_id is not None and publication_id != expected_publication_id:
+                raise RuntimeError("Publication reservation was replaced")
             current = _uniform_status(records)
             if expected_status is not None and current is not expected_status:
                 if current is PublicationStatus.PUBLISHED:
@@ -3017,6 +3074,8 @@ def record_reconciliation_result(
             except Exception:
                 _restore_history_snapshot_in_place(history, original_history)
                 raise
+            if "_safety_state" in history:
+                publication_state.synchronize_receipt(publication_id)
             return len(records)
         raise AssertionError("unreachable")
 
@@ -3061,7 +3120,8 @@ def record_reconciliation_result(
             )
 
     return _conditional_publication_update(
-        artwork_ids, mutation, history_mutation=queue_cleanup
+        artwork_ids, mutation, history_mutation=queue_cleanup,
+        expected_publication_id=expected_publication_id,
     )
 
 def get_grid_color_tone(read_only: bool = False) -> str:

@@ -10,11 +10,13 @@ import uuid
 from botocore.exceptions import ClientError
 import pytest
 
-from src import history_tracker
+from src import history_tracker, publication_state
+from tests.test_publication_state import safety_candidate, store_for
 from tests.integration.r2_test_support import (
     R2IntegrationContext,
     assert_integration_test_key,
     assert_integration_test_prefix,
+    assert_isolated_test_bucket,
     integration_enabled,
     make_run_prefix,
 )
@@ -41,6 +43,36 @@ def test_integration_opt_in_is_exact_and_not_implied_by_credentials():
     assert not integration_enabled(credentials_only)
     assert not integration_enabled({"ARTFOLIO_RUN_R2_INTEGRATION": "true"})
     assert integration_enabled({"ARTFOLIO_RUN_R2_INTEGRATION": "1"})
+
+
+def test_live_test_bucket_must_differ_from_both_production_buckets():
+    environment = {
+        "CLOUDFLARE_R2_ACCOUNT_ID": "account",
+        "CLOUDFLARE_R2_ACCESS_KEY_ID": "test-key",
+        "CLOUDFLARE_R2_SECRET_ACCESS_KEY": "test-secret",
+        "CLOUDFLARE_R2_BUCKET_NAME": "disposable",
+        "CLOUDFLARE_PRODUCTION_R2_BUCKET_NAME": "media",
+        "CLOUDFLARE_PRODUCTION_STATE_R2_BUCKET_NAME": "state",
+    }
+    assert_isolated_test_bucket(environment)
+    for production_bucket in ("media", "state"):
+        with pytest.raises(ValueError, match="overlaps"):
+            assert_isolated_test_bucket({**environment, "CLOUDFLARE_R2_BUCKET_NAME": production_bucket})
+    with pytest.raises(ValueError, match="Missing"):
+        assert_isolated_test_bucket({**environment, "CLOUDFLARE_PRODUCTION_STATE_R2_BUCKET_NAME": ""})
+
+
+def test_live_test_bucket_rejects_known_media_bucket_when_reference_is_wrong():
+    environment = {
+        "CLOUDFLARE_R2_ACCOUNT_ID": "account",
+        "CLOUDFLARE_R2_ACCESS_KEY_ID": "test-key",
+        "CLOUDFLARE_R2_SECRET_ACCESS_KEY": "test-secret",
+        "CLOUDFLARE_R2_BUCKET_NAME": "instagram-art-bot",
+        "CLOUDFLARE_PRODUCTION_R2_BUCKET_NAME": "wrong-media-reference",
+        "CLOUDFLARE_PRODUCTION_STATE_R2_BUCKET_NAME": "state",
+    }
+    with pytest.raises(ValueError, match="production bucket"):
+        assert_isolated_test_bucket(environment)
 
 
 def test_integration_key_guard_accepts_only_exact_uuid_run_namespace():
@@ -85,34 +117,26 @@ def test_etag_is_preserved_as_an_opaque_quoted_validator():
 
 
 def test_history_put_uses_create_or_match_precondition(monkeypatch):
-    calls = []
-
-    class Client:
-        def put_object(self, **kwargs):
-            calls.append(kwargs)
-
-    monkeypatch.setattr(history_tracker, "_get_s3_client", Client)
-    monkeypatch.setattr(history_tracker, "_get_bucket_name", lambda: "bucket")
-
-    history_tracker._upload_history({"posted_artworks": []}, None)
-    history_tracker._upload_history({"posted_artworks": []}, '"opaque-etag"')
-
-    assert calls[0]["IfNoneMatch"] == "*"
-    assert "IfMatch" not in calls[0]
-    assert calls[1]["IfMatch"] == '"opaque-etag"'
-    assert "IfNoneMatch" not in calls[1]
+    state = safety_candidate()
+    store, client = store_for(state)
+    with pytest.raises(publication_state.StateValidationError, match="may not create"):
+        history_tracker._upload_history({"_safety_state": state}, None)
+    assert client.puts == 0
+    with pytest.raises(publication_state.StateConflictError):
+        store.create_initial(publication_state.SAFETY_KEY, state)
+    assert client.puts == 1
 
 
 def test_history_load_fails_closed_when_existing_object_has_no_etag(monkeypatch):
     class Client:
         def get_object(self, **kwargs):
-            return {"Body": BytesIO(b'{"posted_artworks":[]}')}
+            return {"Body": BytesIO(b'{}')}
 
-    monkeypatch.setattr(history_tracker, "_get_s3_client", Client)
-    monkeypatch.setattr(history_tracker, "_get_bucket_name", lambda: "bucket")
+    config = publication_state.StateConfiguration("account", "state", "key", "secret")
+    store = publication_state.PublicationStateStore(config, Client())
 
-    with pytest.raises(RuntimeError, match="missing a valid ETag"):
-        history_tracker.load_history_with_etag()
+    with pytest.raises(publication_state.StateValidationError, match="strong ETag"):
+        store.load_safety()
 
 
 @pytest.mark.parametrize(
@@ -137,11 +161,13 @@ def test_history_precondition_failure_is_not_reclassified_as_transient(
         def put_object(self, **kwargs):
             raise _client_error("PreconditionFailed", 412)
 
-    monkeypatch.setattr(history_tracker, "_get_s3_client", Client)
-    monkeypatch.setattr(history_tracker, "_get_bucket_name", lambda: "bucket")
+    config = publication_state.StateConfiguration("account", "state", "key", "secret")
+    store = publication_state.PublicationStateStore(config, Client())
 
-    with pytest.raises(history_tracker.ConcurrentWriteError) as captured:
-        history_tracker._upload_history({"posted_artworks": []}, '"stale"')
+    with pytest.raises(publication_state.StateConflictError) as captured:
+        store._conditional_put(
+            publication_state.SAFETY_KEY, safety_candidate(), '"stale"'
+        )
     assert isinstance(captured.value.__cause__, ClientError)
 
 
@@ -165,4 +191,4 @@ def test_live_module_is_skipped_without_explicit_opt_in():
     )
 
     assert result.returncode == 0, result.stdout + result.stderr
-    assert "8 skipped" in result.stdout
+    assert "10 skipped" in result.stdout

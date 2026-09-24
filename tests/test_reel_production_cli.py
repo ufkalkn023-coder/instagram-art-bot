@@ -76,12 +76,15 @@ def test_workflow_requires_all_publication_secrets():
     text = _workflow_text()
     for secret in (
         "INSTAGRAM_ACCOUNT_ID",
-        "INSTAGRAM_ACCESS_TOKEN",
+        "INSTAGRAM_ACCESS_TOKEN_V2",
         "CLOUDFLARE_R2_ACCOUNT_ID",
         "CLOUDFLARE_R2_ACCESS_KEY_ID",
         "CLOUDFLARE_R2_SECRET_ACCESS_KEY",
         "CLOUDFLARE_R2_BUCKET_NAME",
         "CLOUDFLARE_R2_PUBLIC_URL",
+        "CLOUDFLARE_STATE_R2_BUCKET_NAME",
+        "CLOUDFLARE_STATE_R2_ACCESS_KEY_ID",
+        "CLOUDFLARE_STATE_R2_SECRET_ACCESS_KEY",
         "SMITHSONIAN_API_KEY",
         "EUROPEANA_API_KEY",
     ):
@@ -123,6 +126,7 @@ def test_workflow_installs_ffmpeg_before_production():
 def _set_production_credentials(monkeypatch):
     monkeypatch.setenv("INSTAGRAM_ACCOUNT_ID", "account")
     monkeypatch.setenv("INSTAGRAM_ACCESS_TOKEN", "token")
+    monkeypatch.setattr(produce_reel, "validate_carousel_production_preflight", lambda: {})
 
 
 def test_produce_reel_cli_delegates_once_and_reports_success(monkeypatch, caplog):
@@ -204,6 +208,7 @@ def test_produce_reel_cli_reports_safe_domain_error_messages(monkeypatch, caplog
 def test_reconcile_reels_cli_delegates_once_and_reports_summary(monkeypatch, caplog):
     caplog.set_level(logging.INFO)
     monkeypatch.setenv("INSTAGRAM_ACCESS_TOKEN", "token")
+    monkeypatch.setattr(reconcile_reels, "validate_reconciliation_configuration", lambda: None)
     calls = []
 
     def fake_reconcile(**kwargs):
@@ -247,6 +252,7 @@ def test_reconcile_reels_cli_failure_is_sanitized_and_returns_nonzero(
 ):
     caplog.set_level(logging.INFO)
     monkeypatch.setenv("INSTAGRAM_ACCESS_TOKEN", "token")
+    monkeypatch.setattr(reconcile_reels, "validate_reconciliation_configuration", lambda: None)
 
     def failing_reconcile(**kwargs):
         raise RuntimeError("history unavailable token=SUPERSECRET")

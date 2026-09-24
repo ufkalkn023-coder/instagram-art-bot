@@ -3,15 +3,19 @@
 from __future__ import annotations
 
 import json
-from datetime import datetime, timezone
+from concurrent.futures import ThreadPoolExecutor
+from threading import Barrier
+import time
 
 from botocore.exceptions import ClientError
 import pytest
 
-from src import history_tracker
+from src import history_tracker, publication_state
+from tests.test_publication_state import safety_candidate
 from tests.integration.r2_test_support import (
     R2IntegrationContext,
     assert_integration_test_key,
+    assert_isolated_test_bucket,
     integration_enabled,
     is_missing_object_error,
     make_run_prefix,
@@ -42,6 +46,10 @@ def r2_context() -> R2IntegrationContext:
             "LIVE_R2_NOT_RUN_MISSING_CREDENTIALS: " + ", ".join(missing),
             pytrace=False,
         )
+    try:
+        assert_isolated_test_bucket()
+    except ValueError as error:
+        pytest.fail(str(error), pytrace=False)
 
     context = R2IntegrationContext(
         client=history_tracker._get_s3_client(),
@@ -161,6 +169,43 @@ def test_matching_stale_and_two_writer_cas(r2_context):
     print("Two-writer CAS .......... PASS")
 
 
+def test_concurrent_writers_cannot_both_win(r2_context):
+    key = r2_context.key("raw/concurrent-cas.json")
+    _put(r2_context, key, b'{"version":"initial"}', IfNoneMatch="*")
+    etag = r2_context.client.head_object(Bucket=r2_context.bucket, Key=key)["ETag"]
+    # Avoid the documented same-key write limit obscuring the first CAS attempt.
+    time.sleep(1.2)
+    start = Barrier(2)
+
+    def write(body: bytes) -> tuple[bytes, int]:
+        start.wait()
+        try:
+            r2_context.client.put_object(
+                Bucket=r2_context.bucket, Key=key, Body=body,
+                ContentType="application/json", IfMatch=etag,
+            )
+        except ClientError as error:
+            return body, error.response["ResponseMetadata"]["HTTPStatusCode"]
+        return body, 200
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        results = list(pool.map(write, (b'{"writer":1}', b'{"writer":2}')))
+    winners = [body for body, status in results if status == 200]
+    losers = [status for _, status in results if status != 200]
+    assert len(winners) == 1 and len(losers) == 1
+    assert losers[0] in {412, 429}
+    assert _get_bytes(r2_context, key) == winners[0]
+    if losers[0] == 429:
+        time.sleep(1.2)
+        with pytest.raises(ClientError) as captured:
+            r2_context.client.put_object(
+                Bucket=r2_context.bucket, Key=key, Body=b'{"writer":"retry"}',
+                ContentType="application/json", IfMatch=etag,
+            )
+        _assert_precondition_failed(captured.value)
+    print("Concurrent CAS ......... PASS")
+
+
 def test_missing_object_classification(r2_context):
     key = r2_context.key("raw/intentionally-missing.json")
 
@@ -174,82 +219,89 @@ def test_missing_object_classification(r2_context):
     print("Missing object .......... PASS")
 
 
-def test_application_lifecycle_cas_reloads_and_re_evaluates(
-    r2_context, monkeypatch
-):
-    key = r2_context.key("application/reconciliation-history.json")
-    artwork_id = "integration_fake_artwork"
-    initial = {
-        "posted_artworks": [
-            {
-                "id": artwork_id,
-                "publication_id": "integration-fake-publication",
-                "publication_type": "SINGLE",
-                "status": "PENDING",
-                "reserved_at": "2026-08-26T00:00:00Z",
-                "container_id": None,
-            }
-        ]
-    }
-    monkeypatch.setattr(history_tracker, "HISTORY_OBJECT_KEY", key)
-    r2_context.wait_for_write_slot(key)
-    history_tracker._upload_history(initial, None)
-    loaded, etag = history_tracker.load_history_with_etag()
-    assert loaded == initial
-    assert history_tracker._validated_etag(etag) == etag
+class NamespacedStateClient:
+    """Map fixed application keys into one guarded integration namespace."""
 
-    original_upload = history_tracker._upload_history
-    upload_calls = 0
+    def __init__(self, context: R2IntegrationContext, subpath: str):
+        self.context = context
+        self.subpath = subpath
 
-    def race_once(history, stale_etag):
-        nonlocal upload_calls
-        upload_calls += 1
-        if upload_calls == 1:
-            current = json.loads(_get_bytes(r2_context, key))
-            current["posted_artworks"][0]["other_writer"] = "preserved"
-            _put(
-                r2_context,
-                key,
-                json.dumps(current, separators=(",", ":")).encode(),
-            )
-        r2_context.wait_for_write_slot(key)
-        original_upload(history, stale_etag)
+    def key(self, key: str) -> str:
+        return self.context.key(f"{self.subpath}/{key}")
 
-    monkeypatch.setattr(history_tracker, "_upload_history", race_once)
+    def get_object(self, *, Bucket, Key):
+        return self.context.client.get_object(Bucket=Bucket, Key=self.key(Key))
 
-    assert history_tracker.start_publication_attempt(
-        [artwork_id],
-        "integration-fake-container",
-        ["integration-fake-child"],
-    ) == 1
+    def put_object(self, *, Bucket, Key, **kwargs):
+        test_key = self.key(Key)
+        self.context.wait_for_write_slot(test_key)
+        return self.context.client.put_object(Bucket=Bucket, Key=test_key, **kwargs)
 
-    after_publish_boundary = json.loads(_get_bytes(r2_context, key))
-    record = after_publish_boundary["posted_artworks"][0]
-    assert upload_calls == 2
-    assert record["status"] == "PUBLISHING"
-    assert record["container_id"] == "integration-fake-container"
-    assert record["child_container_ids"] == ["integration-fake-child"]
-    assert record["other_writer"] == "preserved"
 
-    assert history_tracker.record_reconciliation_result(
-        [artwork_id],
-        target_status=history_tracker.PublicationStatus.AMBIGUOUS,
-        result="STILL_AMBIGUOUS",
-        evidence="integration_fake_container_status:FINISHED",
-        expected_status=history_tracker.PublicationStatus.PUBLISHING,
-        now=datetime(2026, 8, 26, tzinfo=timezone.utc),
-    ) == 1
+def _state_store(context: R2IntegrationContext, subpath: str):
+    config = publication_state.StateConfiguration("integration", context.bucket, "test", "test")
+    client = NamespacedStateClient(context, subpath)
+    return publication_state.PublicationStateStore(config, client)
 
-    reconciled = json.loads(_get_bytes(r2_context, key))["posted_artworks"][0]
-    assert reconciled["status"] == "AMBIGUOUS"
-    assert reconciled["reconciliation_result"] == "STILL_AMBIGUOUS"
-    assert (
-        reconciled["reconciliation_evidence"]
-        == "integration_fake_container_status:FINISHED"
-    )
-    assert reconciled["other_writer"] == "preserved"
-    print("App-level CAS ........... PASS")
-    print("Reconciliation payload .. PASS")
+
+def test_application_v2_safety_and_receipt_cas(r2_context):
+    store = _state_store(r2_context, "application")
+    safety = safety_candidate()
+    receipts = publication_state.seal({
+        "schema_version": 2, "generation": 1, "source_artifact": "integration-test",
+        "source_sha256": "a" * 64, "record_count": 0, "records": [],
+    })
+    store.create_initial(publication_state.SAFETY_KEY, safety)
+    store.create_initial(publication_state.RECEIPTS_KEY, receipts)
+    loaded, etag = store.load_safety()
+    assert len(loaded.published_artwork_protection.entries) == 634
+
+    candidate = loaded.model_dump(mode="json")
+    candidate["generation"] += 1
+    candidate = publication_state.seal(candidate)
+    store.update_safety(candidate, etag)
+    with pytest.raises(publication_state.StateConflictError):
+        store.update_safety(candidate, etag)
+    after, _ = store.load_safety()
+    ledger, _ = store.load_receipts()
+    assert after.generation == 2
+    assert len(after.published_artwork_protection.entries) == 634
+    assert ledger.record_count == 0
+    print("Application v2 CAS ....... PASS")
+    print("Protected IDs preserved .. PASS")
+
+
+def test_partial_bootstrap_fails_closed_then_clean_recovery_succeeds(r2_context):
+    store = _state_store(r2_context, "partial-bootstrap")
+    store.require_uninitialized()
+    safety = safety_candidate()
+    receipts = publication_state.seal({
+        "schema_version": 2, "generation": 1, "source_artifact": "integration-test",
+        "source_sha256": "a" * 64, "record_count": 0, "records": [],
+    })
+
+    # Simulate the first bootstrap write succeeding and the second failing.
+    store.create_initial(publication_state.RECEIPTS_KEY, receipts)
+    with pytest.raises(publication_state.StateConflictError):
+        store.require_uninitialized()
+    with pytest.raises(publication_state.StateValidationError):
+        store.load_safety()
+    assert store.load_receipts()[0].record_count == 0
+
+    # An operator can remove only the disposable partial object, then retry.
+    client = store.client
+    key = client.key(publication_state.RECEIPTS_KEY)
+    assert_integration_test_key(key, r2_context.prefix)
+    r2_context.client.delete_object(Bucket=r2_context.bucket, Key=key)
+    store.require_uninitialized()
+    store.create_initial(publication_state.RECEIPTS_KEY, receipts)
+    store.create_initial(publication_state.SAFETY_KEY, safety)
+    assert store.load_receipts()[0].record_count == 0
+    assert len(store.load_safety()[0].published_artwork_protection.entries) == 634
+    with pytest.raises(publication_state.StateConflictError):
+        store.require_uninitialized()
+    print("Partial bootstrap gate ... PASS")
+    print("Recovery bootstrap ...... PASS")
 
 
 def test_repeated_conditional_json_writes_remain_complete(r2_context):

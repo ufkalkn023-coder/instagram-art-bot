@@ -324,6 +324,35 @@ def test_publish_redirect_is_ambiguous_and_never_followed(monkeypatch, status_co
     assert calls[0]["allow_redirects"] is False
 
 
+@pytest.mark.parametrize(
+    ("outcome", "expected_error"),
+    [
+        (requests.Timeout(), instagram_poster.InstagramPublishAmbiguousError),
+        (requests.ConnectionError(), instagram_poster.InstagramPublishAmbiguousError),
+        (FakeResponse(200, json_error=True), instagram_poster.InstagramPublishAmbiguousError),
+        (FakeResponse(503, {"error": {"message": "unavailable"}}),
+         instagram_poster.InstagramPublishAmbiguousError),
+        (FakeResponse(400, {"error": {"message": "rejected"}}),
+         instagram_poster.InstagramAPIError),
+    ],
+)
+def test_media_publish_outcome_is_never_automatically_retried(
+    monkeypatch, outcome, expected_error
+):
+    calls = []
+
+    def post(*_args, **_kwargs):
+        calls.append(1)
+        if isinstance(outcome, Exception):
+            raise outcome
+        return outcome
+
+    monkeypatch.setattr(instagram_poster.requests, "post", post)
+    with pytest.raises(expected_error):
+        instagram_poster._publish_container("account", "token", "container-1")
+    assert calls == [1]
+
+
 def test_carousel_stops_when_child_or_parent_is_not_finished(monkeypatch):
     child_posts = []
     monkeypatch.setattr(

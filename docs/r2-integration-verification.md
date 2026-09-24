@@ -1,105 +1,68 @@
-# Cloudflare R2 concurrency verification
+# Cloudflare R2 conditional-write verification
 
-## Production architecture
+## Durable publication state
 
-`src/history_tracker.py` creates a boto3 S3 client for
-`https://<CLOUDFLARE_R2_ACCOUNT_ID>.r2.cloudflarestorage.com`, region `auto`,
-using the existing access key, secret key, and bucket environment variables.
-The client has a 10 second connect timeout, a 30 second read timeout, and one
-total SDK attempt.
+Production publication safety and documentary receipts use two fixed objects in a
+private, durable R2 bucket, separate from the media bucket:
 
-All selection history, reservation state, publication lifecycle state, publish
-receipts, and reconciliation results are rows in the single
-`posted_history.json` object. Reconciliation does not have a separate R2
-object. History is read with `GetObject`; no production history path uses copy,
-rename, multipart upload, or delete.
+- `publication_safety_state.v2.json` contains permanent artwork protection,
+  recovery quarantine, and strict active publication state.
+- `publication_receipts.v2.json` contains immutable publication receipts.
 
-`src/image_processor.py` creates an equivalent bounded client and uploads media
-under `images/<timestamp>_<uuid>.<suffix>` with boto3 `upload_file`. The pinned
-boto3 transfer default switches to multipart at 8 MiB. Media ETags are not used
-for concurrency or checksum decisions. After upload, a bounded public HTTP
-`HEAD` validates length and media type. Transient upload failures receive at
-most three application attempts; permanent failures stop immediately. There
-is currently no production R2 media deletion, including when the public health
-check ultimately fails.
+`src/publication_state.py` reads both with `GetObject`, validates schema and
+SHA-256 payload digests, and preserves the returned quoted ETag as an opaque
+validator. Updates use `PutObject(IfMatch=<ETag>)`. A failed precondition is a
+conflict; an uncertain response requires a fresh read before another mutation.
+Bootstrap is a separate, explicit `PutObject(IfNoneMatch="*")` operation that
+cannot replace an existing object. Production does not create missing state.
+The production preflight also reads the state bucket lifecycle configuration
+and rejects destructive rules or an unverifiable result.
 
-## History compare-and-swap contract
+Successful publication finalization adds artwork protection in the same safety
+state CAS as the `PUBLISHED` transition. It then appends the documentary receipt
+with a separate CAS. If that append fails, `receipt_sync_pending` stays in the
+safety state and preflight blocks new publishing until an idempotent receipt
+replay completes. Replay does not call Instagram.
 
-The exact production history write contract is:
-
-1. `GetObject` reads the complete JSON document and its quoted, opaque `ETag`.
-2. If the object was absent, `PutObject(IfNoneMatch="*")` creates it only while
-   it remains absent.
-3. If the object existed, `PutObject(IfMatch=<exact quoted ETag>)` replaces it
-   only while that validator still matches.
-4. R2 `PreconditionFailed` / HTTP 412 becomes `ConcurrentWriteError` and is not
-   classified as a transient network failure.
-5. Publication lifecycle mutations reload and re-evaluate after a conflict,
-   with at most three complete load/mutate/CAS attempts. They never retry the
-   same stale ETag blindly.
-6. Initial reservation and stale-reservation recovery use the same CAS write
-   but intentionally abort on a conflict instead of merging speculatively.
-7. A missing or malformed ETag on an existing object fails closed. The ETag is
-   never interpreted as an MD5 digest and its quotes are not removed.
-
-Consequently, exactly one writer can win from a shared ETag. An unconditional
-overwrite would otherwise be last-writer-wins on R2.
-
-## Cloudflare contract checked
-
-Cloudflare's current documentation lists `If-Match` and `If-None-Match` as
-implemented conditional operations for S3 `PutObject`, and documents failed
-conditions as `PreconditionFailed` with HTTP 412. Its S3 API is strongly
-consistent for write/read, overwrite/read, deletion, and object listing. The
-same documentation notes that unconditional writes to the same key are
-last-writer-wins.
+Cloudflare documents conditional `PutObject` support, HTTP 412 for failed
+conditions, strong consistency, and last-writer-wins behavior for unconditional
+same-key writes:
 
 - [S3 API compatibility](https://developers.cloudflare.com/r2/api/s3/api/)
 - [R2 error codes](https://developers.cloudflare.com/r2/api/error-codes/)
 - [Consistency model](https://developers.cloudflare.com/r2/reference/consistency/)
-- [Conditional header example](https://developers.cloudflare.com/r2/examples/aws/custom-header/)
-- [Upload and multipart ETags](https://developers.cloudflare.com/r2/objects/upload-objects/)
 
-## Live suite safety and execution
+## Live suite isolation
 
-The live suite is skipped unless `ARTFOLIO_RUN_R2_INTEGRATION` is exactly `1`.
-Credentials alone never enable it. Every run generates an independent UUID
-namespace:
+The suite is disabled unless `ARTFOLIO_RUN_R2_INTEGRATION=1` is set explicitly.
+It must use a dedicated **test** R2 bucket and test credentials. The test bucket
+name must differ from both the production media and durable-state bucket names. Each run creates an
+independent UUID namespace under `artfolio-integration-tests/`; all object
+operations and cleanup are guarded to that namespace. The application-level
+v2 test maps its fixed production key names into that namespace through a test
+client wrapper. The suite never accesses the production state keys.
 
-```text
-artfolio-integration-tests/<run_uuid>/
-```
-
-Every key and cleanup operation passes a fail-closed namespace guard. Fixture
-teardown lists and deletes only exact keys beneath that run UUID, verifies the
-listing is empty, and verifies every known key is absent. A teardown failure
-prints only the safe prefix and integration keys for manual recovery.
-
-Run normal offline tests first. Then, in an environment where the existing R2
-variables are configured, opt in explicitly:
+To run locally, configure the test account and bucket through
+`CLOUDFLARE_R2_ACCOUNT_ID`, `CLOUDFLARE_R2_ACCESS_KEY_ID`,
+`CLOUDFLARE_R2_SECRET_ACCESS_KEY`, and `CLOUDFLARE_R2_BUCKET_NAME`, then set
+`CLOUDFLARE_PRODUCTION_R2_BUCKET_NAME` and
+`CLOUDFLARE_PRODUCTION_STATE_R2_BUCKET_NAME` for separation checks. Run offline
+checks first. Only then opt in:
 
 ```bash
 ARTFOLIO_RUN_R2_INTEGRATION=1 python3 -m pytest -q -s tests/integration/test_r2_conditional_writes.py
 ```
 
-After the workflow is committed and pushed, it can instead be run against the
-repository's configured secrets from **Actions → R2 Integration Verification →
-Run workflow**. Enter `RUN_R2_INTEGRATION` in the
-`confirm_r2_integration` field. This dedicated workflow has only a
-`workflow_dispatch` trigger, runs the offline safety preflight before exposing
-the live opt-in, and never invokes production publication code.
+The manual GitHub workflow `R2 Integration Verification` requires the
+`RUN_R2_INTEGRATION` confirmation input and dedicated
+`CLOUDFLARE_R2_TEST_BUCKET_NAME`, `CLOUDFLARE_R2_TEST_ACCESS_KEY_ID`, and
+`CLOUDFLARE_R2_TEST_SECRET_ACCESS_KEY` secrets. It reads the two production bucket
+names only to reject accidental equality. The workflow has no schedule.
 
-The suite proves raw PUT/GET/HEAD behavior, real ETag shape, create-if-absent,
-matching and stale `If-Match`, deterministic two-writer CAS, missing-object and
-precondition exception classification, application-level lifecycle conflict
-reload/re-evaluation, reconciliation-shaped state, repeated complete JSON
-writes, and cleanup. It does not call Instagram or use production identifiers.
-
-## Remaining limitation
-
-History is a single object and therefore a same-key concurrency hotspot.
-Cloudflare documents rate limiting for repeated writes to one key. History
-operations have bounded SDK behavior but no application-level transient retry;
-they fail safely, and publication does not cross its durable boundary after a
-failed history write. The integration helper spaces repeated writes so a 429
-does not obscure the conditional-write property being tested.
+The live suite checks raw PUT/GET/HEAD, conditional creation, matching and stale
+ETag CAS, missing-object classification, complete repeated JSON writes, isolated
+object deletion semantics, and application-level v2 safety CAS. It does not call
+Instagram. Teardown deletes only exact keys in the run's UUID namespace and
+verifies that they are absent. This suite has **not** been run during local
+recovery implementation; running it is an operator decision after provisioning
+an isolated test bucket.

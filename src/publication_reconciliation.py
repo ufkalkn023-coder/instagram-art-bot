@@ -91,6 +91,7 @@ def _reconcile_unit(
             return None
         history_tracker.record_reconciliation_result(
             unit.artwork_ids,
+            expected_publication_id=unit.publication_id,
             target_status=history_tracker.PublicationStatus.EXPIRED,
             result=ReconciliationOutcome.CONFIRMED_NOT_PUBLISHED.value,
             evidence="pending_ttl_expired_before_publish_boundary",
@@ -114,6 +115,7 @@ def _reconcile_unit(
     if unit.publish_response_media_id:
         history_tracker.record_reconciliation_result(
             unit.artwork_ids,
+            expected_publication_id=unit.publication_id,
             target_status=history_tracker.PublicationStatus.PUBLISHED,
             result=ReconciliationOutcome.CONFIRMED_PUBLISHED.value,
             evidence="durable_media_publish_response_id",
@@ -131,6 +133,7 @@ def _reconcile_unit(
     if not unit.container_id:
         history_tracker.record_reconciliation_result(
             unit.artwork_ids,
+            expected_publication_id=unit.publication_id,
             target_status=history_tracker.PublicationStatus.AMBIGUOUS,
             result=ReconciliationOutcome.STILL_AMBIGUOUS.value,
             evidence="creation_container_id_missing",
@@ -151,6 +154,7 @@ def _reconcile_unit(
         evidence = f"container_status_error:{type(error).__name__}"
         history_tracker.record_reconciliation_result(
             unit.artwork_ids,
+            expected_publication_id=unit.publication_id,
             target_status=None,
             result=ReconciliationOutcome.RECONCILIATION_ERROR.value,
             evidence=evidence,
@@ -162,6 +166,7 @@ def _reconcile_unit(
     if container_status == "PUBLISHED":
         history_tracker.record_reconciliation_result(
             unit.artwork_ids,
+            expected_publication_id=unit.publication_id,
             target_status=history_tracker.PublicationStatus.AMBIGUOUS,
             result=ReconciliationOutcome.STILL_AMBIGUOUS.value,
             evidence="container_status:PUBLISHED_media_identity_missing",
@@ -174,24 +179,12 @@ def _reconcile_unit(
             "container_status:PUBLISHED_media_identity_missing",
         )
 
-    if container_status in {"ERROR", "EXPIRED"}:
-        evidence = f"container_status:{container_status}"
-        history_tracker.record_reconciliation_result(
-            unit.artwork_ids,
-            target_status=history_tracker.PublicationStatus.EXPIRED,
-            result=ReconciliationOutcome.CONFIRMED_NOT_PUBLISHED.value,
-            evidence=evidence,
-            authoritative=True,
-            expected_status=unit.status,
-            now=now,
-        )
-        return _result(
-            unit, ReconciliationOutcome.CONFIRMED_NOT_PUBLISHED, evidence
-        )
-
+    # Once media_publish may have been sent, the creation container's later
+    # status cannot establish that no media was published from that attempt.
     evidence = f"container_status:{container_status}"
     history_tracker.record_reconciliation_result(
         unit.artwork_ids,
+        expected_publication_id=unit.publication_id,
         target_status=history_tracker.PublicationStatus.AMBIGUOUS,
         result=ReconciliationOutcome.STILL_AMBIGUOUS.value,
         evidence=evidence,
@@ -276,6 +269,7 @@ def recover_publication_media_id(
 
     history_tracker.record_reconciliation_result(
         unit.artwork_ids,
+        expected_publication_id=unit.publication_id,
         target_status=history_tracker.PublicationStatus.PUBLISHED,
         result=ReconciliationOutcome.CONFIRMED_PUBLISHED.value,
         evidence="operator_supplied_media_id_verified",
@@ -288,6 +282,7 @@ def recover_publication_media_id(
         try:
             history_tracker.record_reconciliation_result(
                 unit.artwork_ids,
+                expected_publication_id=unit.publication_id,
                 target_status=history_tracker.PublicationStatus.PUBLISHED,
                 result=ReconciliationOutcome.CONFIRMED_PUBLISHED.value,
                 evidence="operator_supplied_media_id_verified",
@@ -318,6 +313,15 @@ def reconcile_publications(
     """Reconcile bounded units without allowing one failure to abort the scan."""
     if not access_token:
         raise ValueError("Instagram access token is required for reconciliation")
+    # A missing documentary receipt is repaired without another Meta publish.
+    from src import publication_state
+    import os
+    if os.environ.get("CLOUDFLARE_STATE_R2_BUCKET_NAME", "").strip():
+        state_store = publication_state.PublicationStateStore()
+        publication_state.validate_state_bucket_lifecycle(state_store)
+        state_store.load_safety()
+        state_store.load_receipts()
+        publication_state.replay_pending_receipts(state_store)
     reconciliation_time = now or datetime.now(timezone.utc)
     if reconciliation_time.tzinfo is None or reconciliation_time.utcoffset() is None:
         raise ValueError("Reconciliation time must be timezone-aware")

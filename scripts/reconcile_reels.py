@@ -17,6 +17,7 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from src.reel_reconciliation import reconcile_reel_publications  # noqa: E402
+from src.production_config import validate_reconciliation_configuration  # noqa: E402
 
 logger = logging.getLogger(__name__)
 
@@ -39,6 +40,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         return 1
 
     try:
+        validate_reconciliation_configuration()
         summary = reconcile_reel_publications(
             access_token=access_token, limit=args.limit
         )

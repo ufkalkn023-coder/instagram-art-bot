@@ -233,8 +233,8 @@ def test_only_successful_fallback_theme_is_reserved_in_history(monkeypatch):
         "upload_temp_media",
         lambda path, publication_id: _owned_upload(path, publication_id),
     )
-    monkeypatch.setattr(main.history_tracker, "start_publication_attempt", lambda *args: None)
-    monkeypatch.setattr(main.history_tracker, "record_publish_response", lambda *args: None)
+    monkeypatch.setattr(main.history_tracker, "start_publication_attempt", lambda *args, **kwargs: None)
+    monkeypatch.setattr(main.history_tracker, "record_publish_response", lambda *args, **kwargs: None)
 
     def publish(**kwargs):
         kwargs["before_publish"]("parent-1", tuple(f"child-{index}" for index in range(9)))
@@ -245,7 +245,7 @@ def test_only_successful_fallback_theme_is_reserved_in_history(monkeypatch):
         "post_carousel_to_instagram_graph_api",
         publish,
     )
-    monkeypatch.setattr(main.history_tracker, "confirm_carousel_publication", lambda *args: None)
+    monkeypatch.setattr(main.history_tracker, "confirm_carousel_publication", lambda *args, **kwargs: None)
 
     main.run_carousel_post(SimpleNamespace(dry_run=False, image_url=None, pinterest=False))
 

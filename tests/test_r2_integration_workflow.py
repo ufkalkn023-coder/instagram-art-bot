@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+import subprocess
 
 import yaml
 
@@ -19,6 +20,16 @@ R2_SECRET_NAMES = {
     "CLOUDFLARE_R2_ACCESS_KEY_ID",
     "CLOUDFLARE_R2_SECRET_ACCESS_KEY",
     "CLOUDFLARE_R2_BUCKET_NAME",
+    "CLOUDFLARE_PRODUCTION_R2_BUCKET_NAME",
+    "CLOUDFLARE_PRODUCTION_STATE_R2_BUCKET_NAME",
+}
+R2_SECRET_MAPPING = {
+    "CLOUDFLARE_R2_ACCOUNT_ID": "CLOUDFLARE_R2_ACCOUNT_ID",
+    "CLOUDFLARE_R2_ACCESS_KEY_ID": "CLOUDFLARE_R2_TEST_ACCESS_KEY_ID",
+    "CLOUDFLARE_R2_SECRET_ACCESS_KEY": "CLOUDFLARE_R2_TEST_SECRET_ACCESS_KEY",
+    "CLOUDFLARE_R2_BUCKET_NAME": "CLOUDFLARE_R2_TEST_BUCKET_NAME",
+    "CLOUDFLARE_PRODUCTION_R2_BUCKET_NAME": "CLOUDFLARE_R2_BUCKET_NAME",
+    "CLOUDFLARE_PRODUCTION_STATE_R2_BUCKET_NAME": "CLOUDFLARE_STATE_R2_BUCKET_NAME",
 }
 
 
@@ -81,11 +92,18 @@ def test_r2_workflow_gates_live_mutation_on_preflight_and_secret_presence():
         "python -m pytest -q tests/test_r2_integration_safety.py"
     )
     assert set(steps[secret_check_index]["env"]) == R2_SECRET_NAMES
-    for name in R2_SECRET_NAMES:
+    for name, secret in R2_SECRET_MAPPING.items():
         assert steps[secret_check_index]["env"][name] == (
-            f"${{{{ secrets.{name} }}}}"
+            f"${{{{ secrets.{secret} }}}}"
         )
     assert "exit 1" in steps[secret_check_index]["run"]
+    assert '"$CLOUDFLARE_R2_BUCKET_NAME" == "$CLOUDFLARE_PRODUCTION_R2_BUCKET_NAME"' in steps[secret_check_index]["run"]
+    assert '"$CLOUDFLARE_R2_BUCKET_NAME" == "$CLOUDFLARE_PRODUCTION_STATE_R2_BUCKET_NAME"' in steps[secret_check_index]["run"]
+    syntax = subprocess.run(
+        ["bash", "-n"], input=steps[secret_check_index]["run"],
+        text=True, capture_output=True, check=False,
+    )
+    assert syntax.returncode == 0, syntax.stderr
 
 
 def test_live_opt_in_and_secrets_are_scoped_to_the_intended_steps():
@@ -96,8 +114,8 @@ def test_live_opt_in_and_secrets_are_scoped_to_the_intended_steps():
     assert set(live["env"]) == R2_SECRET_NAMES | {
         "ARTFOLIO_RUN_R2_INTEGRATION"
     }
-    for name in R2_SECRET_NAMES:
-        assert live["env"][name] == f"${{{{ secrets.{name} }}}}"
+    for name, secret in R2_SECRET_MAPPING.items():
+        assert live["env"][name] == f"${{{{ secrets.{secret} }}}}"
     for step in steps:
         if step["name"] == live["name"]:
             continue

@@ -5,7 +5,7 @@ import ipaddress
 import os
 from urllib.parse import urlsplit
 
-from src import history_tracker, instagram_poster
+from src import history_tracker, instagram_poster, publication_state
 from src.rights_policy import RIGHTS_POLICY_ENV, RightsPolicyMode, resolve_rights_policy
 
 
@@ -17,6 +17,9 @@ REQUIRED_PRODUCTION_VARIABLES = (
     "CLOUDFLARE_R2_SECRET_ACCESS_KEY",
     "CLOUDFLARE_R2_BUCKET_NAME",
     "CLOUDFLARE_R2_PUBLIC_URL",
+    "CLOUDFLARE_STATE_R2_BUCKET_NAME",
+    "CLOUDFLARE_STATE_R2_ACCESS_KEY_ID",
+    "CLOUDFLARE_STATE_R2_SECRET_ACCESS_KEY",
 )
 
 REQUIRED_RECONCILIATION_VARIABLES = (
@@ -25,6 +28,9 @@ REQUIRED_RECONCILIATION_VARIABLES = (
     "CLOUDFLARE_R2_ACCESS_KEY_ID",
     "CLOUDFLARE_R2_SECRET_ACCESS_KEY",
     "CLOUDFLARE_R2_BUCKET_NAME",
+    "CLOUDFLARE_STATE_R2_BUCKET_NAME",
+    "CLOUDFLARE_STATE_R2_ACCESS_KEY_ID",
+    "CLOUDFLARE_STATE_R2_SECRET_ACCESS_KEY",
 )
 
 OPTIONAL_INTEGRATION_VARIABLES = {
@@ -53,6 +59,10 @@ def validate_production_configuration(
         raise ProductionConfigurationError(
             "Missing required production configuration: " + ", ".join(missing)
         )
+    try:
+        publication_state.StateConfiguration.from_environment(environment)
+    except publication_state.StateValidationError as error:
+        raise ProductionConfigurationError(str(error)) from error
 
     try:
         rights_policy = resolve_rights_policy(environment)
@@ -92,6 +102,10 @@ def validate_reconciliation_configuration(
         raise ProductionConfigurationError(
             "Missing required reconciliation configuration: " + ", ".join(missing)
         )
+    try:
+        publication_state.StateConfiguration.from_environment(environment)
+    except publication_state.StateValidationError as error:
+        raise ProductionConfigurationError(str(error)) from error
 
 
 def _validate_public_media_base_url(value: str) -> None:
@@ -141,14 +155,21 @@ def validate_carousel_production_preflight() -> dict[str, str]:
         os.environ.get("INSTAGRAM_ACCESS_TOKEN"),
     )
     _validate_public_media_base_url(os.environ["CLOUDFLARE_R2_PUBLIC_URL"].strip())
+    store = publication_state.PublicationStateStore()
+    publication_state.validate_state_bucket_lifecycle(store)
+    safety, _ = store.load_safety()
+    receipts, _ = store.load_receipts()
+    publication_state.validate_live_receipt_coverage(safety, receipts)
+    if any(item.get("status") in {"PUBLISHING", "AMBIGUOUS"}
+           for item in safety.active_publication_state.posted_artworks):
+        raise ProductionConfigurationError("Unresolved live feed publication boundary")
+    if any(item.get("status") in {"PUBLISHING", "AMBIGUOUS"}
+           for item in safety.active_publication_state.reel_reservations):
+        raise ProductionConfigurationError("Unresolved live Reel publication boundary")
     instagram_poster.validate_instagram_account_access(
-        account_id,
-        access_token,
+        account_id, access_token,
     )
-    history, etag = history_tracker.load_history_with_etag()
-    if etag is None:
-        raise ProductionConfigurationError(
-            "Authoritative R2 posted_history.json is missing; restore or explicitly initialize it before carousel production"
-        )
-    history_tracker.validate_carousel_history_for_production(history)
+    history_tracker.validate_carousel_history_for_production(
+        publication_state.history_view(safety)
+    )
     return optional_status

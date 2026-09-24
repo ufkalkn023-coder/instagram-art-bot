@@ -204,6 +204,9 @@ def _load_configuration(*, require_public_url: bool) -> _R2MediaConfiguration:
         required.append(public_url_base)
     if not all(required):
         raise ValueError("Missing one or more CLOUDFLARE_R2_* environment variables")
+    state_bucket = os.environ.get("CLOUDFLARE_STATE_R2_BUCKET_NAME", "").strip()
+    if state_bucket and bucket_name == state_bucket:
+        raise ValueError("Temporary media bucket must differ from durable state bucket")
     return _R2MediaConfiguration(
         account_id=account_id,
         access_key=access_key,
@@ -305,6 +308,13 @@ def _delete_owned_object(
     key_validator=validate_owned_object_key,
 ) -> bool:
     key_validator(object_key, publication_id)
+    state_bucket = os.environ.get("CLOUDFLARE_STATE_R2_BUCKET_NAME", "").strip()
+    if not state_bucket or bucket_name == state_bucket:
+        logger.error(
+            "r2_temp_media_cleanup_refused publication_id=%s reason=state_bucket_isolation_unverified",
+            publication_id,
+        )
+        return False
     for attempt in range(1, MEDIA_OPERATION_ATTEMPTS + 1):
         try:
             client.delete_object(Bucket=bucket_name, Key=object_key)

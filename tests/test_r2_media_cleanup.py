@@ -37,6 +37,7 @@ def _configure(monkeypatch):
     ):
         monkeypatch.setenv(name, "configured")
     monkeypatch.setenv("CLOUDFLARE_R2_PUBLIC_URL", "https://media.example")
+    monkeypatch.setenv("CLOUDFLARE_STATE_R2_BUCKET_NAME", "durable-state")
     monkeypatch.setattr(r2_media.time, "sleep", lambda _seconds: None)
 
 
@@ -47,6 +48,31 @@ def _client_error(code, status, operation="DeleteObject"):
             "ResponseMetadata": {"HTTPStatusCode": status},
         },
         operation,
+    )
+
+
+def test_media_cleanup_never_uses_the_durable_state_bucket(monkeypatch):
+    _configure(monkeypatch)
+    monkeypatch.setenv("CLOUDFLARE_STATE_R2_BUCKET_NAME", "configured")
+    monkeypatch.setattr(
+        r2_media, "_get_s3_client",
+        lambda *_: pytest.fail("same-bucket cleanup reached R2"),
+    )
+    assert not r2_media.cleanup_publication_media(PUBLICATION_A, reason="test").complete
+    assert not r2_media.cleanup_publication_reels(PUBLICATION_A, reason="test").complete
+
+
+def test_media_shaped_key_cannot_be_deleted_without_state_bucket_isolation(monkeypatch):
+    _configure(monkeypatch)
+    monkeypatch.delenv("CLOUDFLARE_STATE_R2_BUCKET_NAME")
+
+    class Client:
+        def delete_object(self, **_kwargs):
+            pytest.fail("unverified bucket reached DeleteObject")
+
+    assert not r2_media._delete_owned_object(
+        Client(), "unknown-bucket", object_key=_key(),
+        publication_id=PUBLICATION_A, reason="test",
     )
 
 

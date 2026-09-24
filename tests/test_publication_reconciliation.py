@@ -169,7 +169,7 @@ def test_child_finished_status_is_never_used_as_publication_evidence(
 
 
 @pytest.mark.parametrize("container_status", ["ERROR", "EXPIRED"])
-def test_authoritative_non_publication_status_releases_whole_unit(
+def test_container_failure_after_publish_boundary_keeps_whole_unit_ambiguous(
     monkeypatch, container_status
 ):
     records = _carousel("AMBIGUOUS")
@@ -184,19 +184,23 @@ def test_authoritative_non_publication_status_releases_whole_unit(
         access_token="token", now=NOW
     )
 
-    assert {record["status"] for record in records} == {"EXPIRED"}
-    assert summary.confirmed_not_published == 1
+    assert {record["status"] for record in records} == {"AMBIGUOUS"}
+    assert {record["reconciliation_evidence"] for record in records} == {
+        f"container_status:{container_status}"
+    }
+    assert summary.still_ambiguous == 1
+    assert summary.confirmed_not_published == 0
 
 
 def test_confirmed_not_published_cleans_only_after_expired_cas_persists(
     monkeypatch,
 ):
-    record = _single("AMBIGUOUS")
+    record = _single("PENDING", container_id=None, started_at=None)
     history, uploads = _backend(monkeypatch, [record])
     monkeypatch.setattr(
         publication_reconciliation.instagram_poster,
         "get_container_status",
-        lambda *args: "ERROR",
+        lambda *args: pytest.fail("PENDING must not query Instagram"),
     )
     cleanup_observations = []
 
@@ -283,7 +287,7 @@ def test_reconciliation_status_only_published_ambiguous_and_error_outcomes_retai
 
 
 def test_failed_expired_history_cas_never_reaches_media_cleanup(monkeypatch):
-    record = _single("AMBIGUOUS")
+    record = _single("PENDING", container_id=None, started_at=None)
     history = {"posted_artworks": [record]}
     monkeypatch.setattr(
         history_tracker, "load_history_with_etag", lambda: (history, "etag")
@@ -296,7 +300,7 @@ def test_failed_expired_history_cas_never_reaches_media_cleanup(monkeypatch):
     monkeypatch.setattr(
         publication_reconciliation.instagram_poster,
         "get_container_status",
-        lambda *args: "ERROR",
+        lambda *args: pytest.fail("PENDING must not query Instagram"),
     )
     monkeypatch.setattr(
         publication_reconciliation.r2_media,
@@ -308,7 +312,7 @@ def test_failed_expired_history_cas_never_reaches_media_cleanup(monkeypatch):
         access_token="token", now=NOW
     )
 
-    assert record["status"] == "AMBIGUOUS"
+    assert record["status"] == "PENDING"
     assert history.get(history_tracker.STAGING_MEDIA_CLEANUP_QUEUE_KEY, []) == []
     assert summary.errors == 1
     assert summary.cleanup_inspected == 0

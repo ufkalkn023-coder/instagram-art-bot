@@ -19,6 +19,8 @@ from src.rights_policy import RIGHTS_POLICY_ENV, RightsPolicyMode
 def _set_required_environment(monkeypatch):
     for name in REQUIRED_PRODUCTION_VARIABLES:
         monkeypatch.setenv(name, "configured")
+    monkeypatch.setenv("CLOUDFLARE_STATE_R2_BUCKET_NAME", "state-bucket")
+    monkeypatch.setenv("CLOUDFLARE_STATE_R2_ACCESS_KEY_ID", "state-key")
     monkeypatch.setenv(
         RIGHTS_POLICY_ENV,
         RightsPolicyMode.STRICT_PUBLIC_DOMAIN.value,
@@ -37,6 +39,8 @@ def _clear_environment(monkeypatch):
 def _production_environment() -> dict[str, str]:
     return {
         **{name: "configured" for name in REQUIRED_PRODUCTION_VARIABLES},
+        "CLOUDFLARE_STATE_R2_BUCKET_NAME": "state-bucket",
+        "CLOUDFLARE_STATE_R2_ACCESS_KEY_ID": "state-key",
         RIGHTS_POLICY_ENV: RightsPolicyMode.STRICT_PUBLIC_DOMAIN.value,
     }
 

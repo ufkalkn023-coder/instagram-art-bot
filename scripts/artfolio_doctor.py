@@ -62,6 +62,7 @@ from src.production_config import (  # noqa: E402
     ProductionConfigurationError,
     validate_production_configuration,
 )
+from src import publication_state  # noqa: E402
 from src.publication_reconciliation import (  # noqa: E402
     PUBLISHING_RECONCILIATION_GRACE,
 )
@@ -75,6 +76,11 @@ R2_VARIABLES = (
     "CLOUDFLARE_R2_ACCESS_KEY_ID",
     "CLOUDFLARE_R2_SECRET_ACCESS_KEY",
     "CLOUDFLARE_R2_BUCKET_NAME",
+)
+STATE_R2_VARIABLES = (
+    "CLOUDFLARE_STATE_R2_BUCKET_NAME",
+    "CLOUDFLARE_STATE_R2_ACCESS_KEY_ID",
+    "CLOUDFLARE_STATE_R2_SECRET_ACCESS_KEY",
 )
 INSTAGRAM_VARIABLES = ("INSTAGRAM_ACCOUNT_ID", "INSTAGRAM_ACCESS_TOKEN")
 LOW_LEARNING_CONFIDENCE = 0.10
@@ -353,7 +359,7 @@ def check_production_configuration(environment: Mapping[str, str]) -> CheckResul
 
 @contextmanager
 def _selected_environment(environment: Mapping[str, str]) -> Iterator[None]:
-    names = set(R2_VARIABLES) | set(INSTAGRAM_VARIABLES)
+    names = set(R2_VARIABLES) | set(STATE_R2_VARIABLES) | set(INSTAGRAM_VARIABLES)
     previous = {name: os.environ.get(name) for name in names}
     try:
         for name in names:
@@ -427,9 +433,13 @@ def check_instagram(credentials: CredentialContext) -> CheckResult:
 def check_r2(credentials: CredentialContext) -> tuple[CheckResult, ProductionData]:
     name = "r2"
     collector_complete = all(
-        credentials.collector_status.get(item) for item in R2_VARIABLES
+        credentials.collector_status.get(item)
+        for item in (*R2_VARIABLES, *STATE_R2_VARIABLES)
     )
-    audit_complete = all(credentials.audit_status.get(item) for item in R2_VARIABLES)
+    audit_complete = all(
+        credentials.audit_status.get(item)
+        for item in (*R2_VARIABLES, *STATE_R2_VARIABLES)
+    )
     details: dict[str, Any] = {
         "collector_profile_complete": collector_complete,
         "audit_profile_complete": audit_complete,
@@ -482,9 +492,12 @@ def check_r2(credentials: CredentialContext) -> tuple[CheckResult, ProductionDat
             Status.CRITICAL, "credential profiles invalid", details, issues
         ), ProductionData()
 
+    collector_history = None
     try:
         with _selected_environment(credentials.collector_environment):
-            InsightsStorage().load_history()
+            state_store = publication_state.PublicationStateStore()
+            publication_state.validate_state_bucket_lifecycle(state_store)
+            collector_history = InsightsStorage().load_history()
     except Exception:
         details["collector_read_access"] = "INACCESSIBLE"
         issues.append(
@@ -497,6 +510,17 @@ def check_r2(credentials: CredentialContext) -> tuple[CheckResult, ProductionDat
         )
     else:
         details["collector_read_access"] = "OK"
+        raw_safety = collector_history.get("_safety_state", {})
+        details["durable_state_bucket_configured"] = True
+        details["protection_count"] = raw_safety.get(
+            "published_artwork_protection", {}
+        ).get("entry_count")
+        details["quarantine_count"] = len(raw_safety.get(
+            "recovery_quarantine", {}
+        ).get("candidate_artwork_ids", []))
+        details["receipt_sync_pending"] = len(raw_safety.get(
+            "active_publication_state", {}
+        ).get("receipt_sync_pending", []))
 
     data = ProductionData()
     try:

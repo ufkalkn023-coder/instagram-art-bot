@@ -195,6 +195,14 @@ def recover_reel_media_id(*, publication_id: str, media_id: str, access_token: s
 def reconcile_reel_publications(*, access_token: str, limit: int = STARTUP_RECONCILIATION_LIMIT, max_age: timedelta | None = STARTUP_RECONCILIATION_MAX_AGE, now: datetime | None = None) -> ReelReconciliationSummary:
     if not access_token:
         raise ValueError("Instagram access token is required for reconciliation")
+    from src import publication_state
+    import os
+    if os.environ.get("CLOUDFLARE_STATE_R2_BUCKET_NAME", "").strip():
+        state_store = publication_state.PublicationStateStore()
+        publication_state.validate_state_bucket_lifecycle(state_store)
+        state_store.load_safety()
+        state_store.load_receipts()
+        publication_state.replay_pending_receipts(state_store)
     reconciliation_time = now or datetime.now(timezone.utc)
     if reconciliation_time.tzinfo is None or reconciliation_time.utcoffset() is None:
         raise ValueError("Reconciliation time must be timezone-aware")

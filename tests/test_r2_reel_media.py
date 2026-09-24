@@ -40,6 +40,7 @@ def _configure(monkeypatch):
     ):
         monkeypatch.setenv(name, "configured")
     monkeypatch.setenv("CLOUDFLARE_R2_PUBLIC_URL", "https://media.example")
+    monkeypatch.setenv("CLOUDFLARE_STATE_R2_BUCKET_NAME", "durable-state")
     monkeypatch.setattr(r2_media.time, "sleep", lambda _seconds: None)
 
 
