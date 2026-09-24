@@ -39,11 +39,14 @@ def test_insights_workflow_uses_separate_state_secrets_and_no_keychain():
     assert set(collector["env"]) == EXPECTED_INSIGHTS_SECRETS
     assert all(
         value == "${{ secrets." + (
-            "INSTAGRAM_ACCESS_TOKEN_V2" if variable == "INSTAGRAM_ACCESS_TOKEN" else variable
+            "INSTAGRAM_INSIGHTS_ACCESS_TOKEN" if variable == "INSTAGRAM_ACCESS_TOKEN" else variable
         ) + " }}"
         for variable, value in collector["env"].items()
     )
     assert "${{ secrets.INSTAGRAM_ACCESS_TOKEN }}" not in Path(
+        ".github/workflows/instagram_insights.yml"
+    ).read_text()
+    assert "${{ secrets.INSTAGRAM_ACCESS_TOKEN_V2 }}" not in Path(
         ".github/workflows/instagram_insights.yml"
     ).read_text()
     assert "keychain" not in collector["run"].lower()
