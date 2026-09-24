@@ -125,7 +125,7 @@ def test_read_only_grid_tone_never_writes_history(monkeypatch):
 
 def test_main_skips_publication_reconciliation_only_for_dry_run(monkeypatch):
     calls = []
-    monkeypatch.setattr(main, "validate_production_configuration", lambda: {})
+    monkeypatch.setattr(main, "validate_carousel_production_preflight", lambda: {})
     monkeypatch.setattr(
         main.publication_reconciliation,
         "reconcile_publications",

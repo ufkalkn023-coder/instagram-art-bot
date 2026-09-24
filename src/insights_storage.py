@@ -245,11 +245,22 @@ def _validated_analytics_object(data: Any) -> dict[str, Any]:
 
 class InsightsStorage:
     def __init__(self, s3_client=None, bucket_name: str | None = None):
+        self._injected_storage = s3_client is not None or bucket_name is not None
         self._s3 = s3_client if s3_client is not None else _get_r2_client()
         self._bucket = bucket_name if bucket_name is not None else _get_bucket_name()
         self.last_snapshot_load_diagnostics = SnapshotLoadDiagnostics()
 
     def load_history(self) -> dict[str, Any]:
+        from src import publication_state
+        if os.environ.get("CLOUDFLARE_STATE_R2_BUCKET_NAME", "").strip():
+            state_store = publication_state.PublicationStateStore()
+            state, _ = state_store.load_safety()
+            state_store.load_receipts()
+            return publication_state.history_view(state)
+        if not self._injected_storage:
+            raise InsightsStorageError(
+                "Durable-state configuration is required to read publication history"
+            )
         try:
             response = self._s3.get_object(Bucket=self._bucket, Key=HISTORY_OBJECT_KEY)
             data = json.loads(response["Body"].read().decode("utf-8"))

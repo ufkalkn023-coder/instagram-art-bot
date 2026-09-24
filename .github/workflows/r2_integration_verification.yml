@@ -37,9 +37,11 @@ jobs:
         shell: bash
         env:
           CLOUDFLARE_R2_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_R2_ACCOUNT_ID }}
-          CLOUDFLARE_R2_ACCESS_KEY_ID: ${{ secrets.CLOUDFLARE_R2_ACCESS_KEY_ID }}
-          CLOUDFLARE_R2_SECRET_ACCESS_KEY: ${{ secrets.CLOUDFLARE_R2_SECRET_ACCESS_KEY }}
-          CLOUDFLARE_R2_BUCKET_NAME: ${{ secrets.CLOUDFLARE_R2_BUCKET_NAME }}
+          CLOUDFLARE_R2_ACCESS_KEY_ID: ${{ secrets.CLOUDFLARE_R2_TEST_ACCESS_KEY_ID }}
+          CLOUDFLARE_R2_SECRET_ACCESS_KEY: ${{ secrets.CLOUDFLARE_R2_TEST_SECRET_ACCESS_KEY }}
+          CLOUDFLARE_R2_BUCKET_NAME: ${{ secrets.CLOUDFLARE_R2_TEST_BUCKET_NAME }}
+          CLOUDFLARE_PRODUCTION_R2_BUCKET_NAME: ${{ secrets.CLOUDFLARE_R2_BUCKET_NAME }}
+          CLOUDFLARE_PRODUCTION_STATE_R2_BUCKET_NAME: ${{ secrets.CLOUDFLARE_STATE_R2_BUCKET_NAME }}
         run: |
           set -euo pipefail
           missing=0
@@ -47,7 +49,9 @@ jobs:
             CLOUDFLARE_R2_ACCOUNT_ID \
             CLOUDFLARE_R2_ACCESS_KEY_ID \
             CLOUDFLARE_R2_SECRET_ACCESS_KEY \
-            CLOUDFLARE_R2_BUCKET_NAME
+            CLOUDFLARE_R2_BUCKET_NAME \
+            CLOUDFLARE_PRODUCTION_R2_BUCKET_NAME \
+            CLOUDFLARE_PRODUCTION_STATE_R2_BUCKET_NAME
           do
             if [[ -n "${!name:-}" ]]; then
               echo "$name: configured"
@@ -60,12 +64,26 @@ jobs:
             echo "Live R2 verification stopped before object creation." >&2
             exit 1
           fi
+          if [[ "$CLOUDFLARE_R2_BUCKET_NAME" == "instagram-art-bot" ]]; then
+            echo "Live R2 test bucket must not be the known production media bucket." >&2
+            exit 1
+          fi
+          if [[ "$CLOUDFLARE_R2_BUCKET_NAME" == "$CLOUDFLARE_PRODUCTION_R2_BUCKET_NAME" ]]; then
+            echo "Live R2 test bucket must differ from the production media bucket." >&2
+            exit 1
+          fi
+          if [[ "$CLOUDFLARE_R2_BUCKET_NAME" == "$CLOUDFLARE_PRODUCTION_STATE_R2_BUCKET_NAME" ]]; then
+            echo "Live R2 test bucket must differ from the production state bucket." >&2
+            exit 1
+          fi
 
       - name: Run live R2 conditional-write integration suite
         env:
           ARTFOLIO_RUN_R2_INTEGRATION: "1"
           CLOUDFLARE_R2_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_R2_ACCOUNT_ID }}
-          CLOUDFLARE_R2_ACCESS_KEY_ID: ${{ secrets.CLOUDFLARE_R2_ACCESS_KEY_ID }}
-          CLOUDFLARE_R2_SECRET_ACCESS_KEY: ${{ secrets.CLOUDFLARE_R2_SECRET_ACCESS_KEY }}
-          CLOUDFLARE_R2_BUCKET_NAME: ${{ secrets.CLOUDFLARE_R2_BUCKET_NAME }}
+          CLOUDFLARE_R2_ACCESS_KEY_ID: ${{ secrets.CLOUDFLARE_R2_TEST_ACCESS_KEY_ID }}
+          CLOUDFLARE_R2_SECRET_ACCESS_KEY: ${{ secrets.CLOUDFLARE_R2_TEST_SECRET_ACCESS_KEY }}
+          CLOUDFLARE_R2_BUCKET_NAME: ${{ secrets.CLOUDFLARE_R2_TEST_BUCKET_NAME }}
+          CLOUDFLARE_PRODUCTION_R2_BUCKET_NAME: ${{ secrets.CLOUDFLARE_R2_BUCKET_NAME }}
+          CLOUDFLARE_PRODUCTION_STATE_R2_BUCKET_NAME: ${{ secrets.CLOUDFLARE_STATE_R2_BUCKET_NAME }}
         run: python -m pytest -q -s tests/integration/test_r2_conditional_writes.py

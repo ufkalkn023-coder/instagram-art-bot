@@ -18,6 +18,7 @@ from src.reel_production import (  # noqa: E402
     ReelReleaseVerificationError,
     produce_and_publish_reel,
 )
+from src.production_config import validate_carousel_production_preflight  # noqa: E402
 
 logger = logging.getLogger(__name__)
 
@@ -50,6 +51,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         return 1
 
     try:
+        validate_carousel_production_preflight()
         outcome = produce_and_publish_reel(
             reels_repository=args.artfolio_reels_root,
             account_id=account_id,

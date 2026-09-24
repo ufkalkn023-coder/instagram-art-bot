@@ -12,6 +12,8 @@ from src.insights_storage import (
     parse_aware_timestamp,
     partition_key,
 )
+from src import publication_state
+from tests.test_publication_state import safety_candidate
 
 
 def _client_error(code):
@@ -64,6 +66,25 @@ class FakeS3:
             "Contents": [{"Key": key} for key in sorted(self.objects)],
             "IsTruncated": False,
         }
+
+
+def test_insights_history_reads_v2_state_and_keeps_analytics_media_storage(monkeypatch):
+    state = publication_state.validate_safety_state(safety_candidate())
+    calls = []
+    class Store:
+        def load_safety(self):
+            calls.append("safety")
+            return state, '"etag"'
+        def load_receipts(self):
+            calls.append("receipts")
+            return object(), '"receipt-etag"'
+    monkeypatch.setenv("CLOUDFLARE_STATE_R2_BUCKET_NAME", "state")
+    monkeypatch.setattr(publication_state, "PublicationStateStore", Store)
+    fake_media = FakeS3()
+    storage = InsightsStorage(fake_media, "media")
+    assert storage.load_history()["posted_artworks"] == []
+    assert calls == ["safety", "receipts"]
+    assert fake_media.put_calls == []
 
 
 def test_missing_partition_initializes_and_uses_if_none_match():

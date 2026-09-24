@@ -3,7 +3,7 @@ from pathlib import Path
 import pytest
 from PIL import Image, ImageOps
 
-from src import carousel_cover
+from src import carousel_cover, history_tracker
 from src.art_fetcher import SelectionRunSeed
 from src.carousel_plan import CoverAsset, CoverMode, CoverScoreBreakdown
 from src.models import NormalizedArtwork
@@ -122,6 +122,20 @@ def test_invalid_cover_image_is_rejected_and_next_ranked_candidate_is_used(monke
 
     assert attempted[:2] == ["first", "second"]
     assert cover.canonical_id == second.canonical_id
+
+
+def test_cover_selection_preserves_source_embargo_membership(monkeypatch, tmp_path):
+    _install_adapter(monkeypatch, [_candidate("embargoed")])
+    attempted = _install_downloads(monkeypatch, tmp_path)
+    with pytest.raises(carousel_cover.EditorialCoverSelectionError):
+        carousel_cover.select_editorial_cover(
+            posted_ids=history_tracker.ProtectedArtworkIds(set(), {"aic"}),
+            featured_artworks=_featured(),
+            theme="winter",
+            color_tone="cool",
+            selection_run_seed=SelectionRunSeed("fixed", "test"),
+        )
+    assert attempted == []
 
 
 def test_no_safe_cover_raises_explicit_error_and_adapter_failures_are_isolated(monkeypatch, tmp_path):

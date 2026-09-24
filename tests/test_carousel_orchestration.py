@@ -141,9 +141,9 @@ def test_carousel_finalizes_successful_publish_when_permalink_is_available_or_mi
     monkeypatch.setattr(
         main.history_tracker,
         "start_publication_attempt",
-        lambda ids, *args: protected.extend(ids) or 9,
+        lambda ids, *args, **kwargs: protected.extend(ids) or 9,
     )
-    monkeypatch.setattr(main.history_tracker, "record_publish_response", lambda *args: 9)
+    monkeypatch.setattr(main.history_tracker, "record_publish_response", lambda *args, **kwargs: 9)
     def get_permalink(media_id, access_token):
         permalink_lookup_media_ids.append(media_id)
         if isinstance(permalink_result, Exception):
@@ -205,7 +205,8 @@ def test_carousel_finalizes_successful_publish_when_permalink_is_available_or_mi
     assert confirmed == [
         (
             (cover.canonical_id, tuple(art["id"] for art in featured), "media-1"),
-            ({"permalink": expected_permalink} if expected_permalink is not None else {}),
+            ({"publication_id": "publication-1", "permalink": expected_permalink}
+             if expected_permalink is not None else {"publication_id": "publication-1"}),
         )
     ]
 
@@ -314,8 +315,8 @@ def test_final_sequence_controls_artifacts_caption_reservation_and_history_posit
         "upload_temp_media",
         lambda path, publication_id: _owned_upload(path, publication_id),
     )
-    monkeypatch.setattr(main.history_tracker, "start_publication_attempt", lambda *args: 9)
-    monkeypatch.setattr(main.history_tracker, "record_publish_response", lambda *args: 9)
+    monkeypatch.setattr(main.history_tracker, "start_publication_attempt", lambda *args, **kwargs: 9)
+    monkeypatch.setattr(main.history_tracker, "record_publish_response", lambda *args, **kwargs: 9)
 
     def publish(**kwargs):
         kwargs["before_publish"]("parent-1", tuple(f"child-{index}" for index in range(9)))
@@ -330,7 +331,7 @@ def test_final_sequence_controls_artifacts_caption_reservation_and_history_posit
     monkeypatch.setattr(
         main.history_tracker,
         "confirm_carousel_publication",
-        lambda cover_id, featured_ids, publication_id: confirmed.append(featured_ids),
+        lambda cover_id, featured_ids, media_id, **kwargs: confirmed.append(featured_ids),
     )
 
     main.run_carousel_post(SimpleNamespace(dry_run=False, image_url=None, pinterest=False))
@@ -456,7 +457,7 @@ def test_definite_publish_failure_expires_all_nine_ids(monkeypatch):
     monkeypatch.setattr(
         main.history_tracker,
         "start_publication_attempt",
-        lambda ids, *args: publishing.extend(ids) or 9,
+        lambda ids, *args, **kwargs: publishing.extend(ids) or 9,
     )
     monkeypatch.setattr(
         main.history_tracker,

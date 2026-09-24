@@ -23,6 +23,11 @@ R2_CREDENTIALS = (
     "CLOUDFLARE_R2_SECRET_ACCESS_KEY",
     "CLOUDFLARE_R2_BUCKET_NAME",
 )
+STATE_R2_CREDENTIALS = (
+    "CLOUDFLARE_STATE_R2_BUCKET_NAME",
+    "CLOUDFLARE_STATE_R2_ACCESS_KEY_ID",
+    "CLOUDFLARE_STATE_R2_SECRET_ACCESS_KEY",
+)
 
 
 def test_collector_profile_service_name_mapping():
@@ -47,9 +52,14 @@ def test_profile_allowlists_are_exact_and_audit_excludes_instagram():
         "INSTAGRAM_ACCOUNT_ID",
         "INSTAGRAM_ACCESS_TOKEN",
         *R2_CREDENTIALS,
+        *STATE_R2_CREDENTIALS,
     )
-    assert credential_variables(ENGAGEMENT_AUDIT_PROFILE) == R2_CREDENTIALS
-    assert ENGAGEMENT_AUDIT_CREDENTIALS == R2_CREDENTIALS
+    assert credential_variables(ENGAGEMENT_AUDIT_PROFILE) == (
+        *R2_CREDENTIALS, *STATE_R2_CREDENTIALS
+    )
+    assert ENGAGEMENT_AUDIT_CREDENTIALS == (
+        *R2_CREDENTIALS, *STATE_R2_CREDENTIALS
+    )
     assert not {"INSTAGRAM_ACCOUNT_ID", "INSTAGRAM_ACCESS_TOKEN"}.intersection(
         ENGAGEMENT_AUDIT_CREDENTIALS
     )
@@ -128,7 +138,10 @@ def test_missing_credentials_remain_missing_and_are_not_added_to_environment():
 
 
 def test_status_output_never_contains_values():
-    secrets = {variable: f"secret-{index}" for index, variable in enumerate(R2_CREDENTIALS)}
+    secrets = {
+        variable: f"secret-{index}"
+        for index, variable in enumerate(ENGAGEMENT_AUDIT_CREDENTIALS)
+    }
     environment = {}
     status = load_keychain_credentials(
         ENGAGEMENT_AUDIT_PROFILE,
@@ -139,7 +152,8 @@ def test_status_output_never_contains_values():
     output = format_credential_status(ENGAGEMENT_AUDIT_PROFILE, status)
 
     assert set(output.splitlines()) == {
-        f"[engagement-audit] {variable}=AVAILABLE" for variable in R2_CREDENTIALS
+        f"[engagement-audit] {variable}=AVAILABLE"
+        for variable in ENGAGEMENT_AUDIT_CREDENTIALS
     }
     assert all(secret not in output for secret in secrets.values())
 

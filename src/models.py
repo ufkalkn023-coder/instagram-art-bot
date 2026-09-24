@@ -1,7 +1,7 @@
 from dataclasses import dataclass
 from datetime import datetime
 from enum import Enum
-from typing import Literal, Optional
+from typing import Any, Literal, Optional
 from urllib.parse import urlsplit
 from uuid import UUID
 
@@ -50,6 +50,23 @@ def normalize_artwork_id(artwork_id: str) -> str:
         if artwork_id.startswith(legacy_prefix):
             return canonical_prefix + artwork_id[len(legacy_prefix):]
     return artwork_id
+
+
+CANONICAL_ARTWORK_SOURCES = (
+    "aic", "cleveland", "met", "rijksmuseum", "smithsonian", "europeana"
+)
+
+
+def require_canonical_artwork_id(value: str) -> str:
+    """Reject aliases and guessed/unknown source identities at state boundaries."""
+    if not isinstance(value, str) or not value or value != value.strip():
+        raise ValueError("artwork ID must be a nonempty trimmed string")
+    if normalize_artwork_id(value) != value or any(character.isspace() for character in value):
+        raise ValueError("artwork ID must be canonical")
+    if not any(value.startswith(f"{source}_") and len(value) > len(source) + 1
+               for source in CANONICAL_ARTWORK_SOURCES):
+        raise ValueError("artwork ID has an unknown source prefix")
+    return value
 
 
 def normalize_image_dimensions(width: object, height: object) -> tuple[int | None, int | None]:
@@ -155,6 +172,250 @@ class PublicationRecord(BaseModel):
             raise ValueError("single publications require exactly one artwork")
         if self.type == "carousel" and len(self.artwork_ids) < 2:
             raise ValueError("carousel publications require at least two artworks")
+        return self
+
+
+class _StrictStateModel(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+
+class ProtectionReference(_StrictStateModel):
+    publication_id: str | None = None
+    instagram_media_id: str | None = None
+
+
+class ProtectionEntry(_StrictStateModel):
+    canonical_artwork_id: str
+    classification: Literal["PROVEN", "STRONGLY_SUPPORTED"]
+    provenance_refs: list[str] = Field(min_length=1)
+    first_known_publication_reference: ProtectionReference | None = None
+    historical_reuse_publication_ids: list[str] = Field(default_factory=list)
+    origin: Literal["RECOVERED", "NEW"]
+
+    @field_validator("canonical_artwork_id")
+    @classmethod
+    def canonical_id(cls, value: str) -> str:
+        return require_canonical_artwork_id(value)
+
+    @model_validator(mode="after")
+    def valid_reuse(self):
+        if self.historical_reuse_publication_ids and (
+            len(self.historical_reuse_publication_ids) < 2
+            or len(self.historical_reuse_publication_ids)
+            != len(set(self.historical_reuse_publication_ids))
+        ):
+            raise ValueError("historical reuse needs distinct publication references")
+        return self
+
+
+class PublishedArtworkProtection(_StrictStateModel):
+    schema_version: Literal[1]
+    import_batch_id: str
+    source_artifact: str
+    source_sha256: str
+    entry_count: int = Field(ge=0)
+    entries: dict[str, ProtectionEntry]
+    payload_sha256: str
+
+    @model_validator(mode="after")
+    def validate_entries(self):
+        if self.entry_count != len(self.entries):
+            raise ValueError("protection entry_count mismatch")
+        for key, entry in self.entries.items():
+            if require_canonical_artwork_id(key) != entry.canonical_artwork_id:
+                raise ValueError("protection entry key mismatch")
+        return self
+
+
+class QuarantineCandidate(_StrictStateModel):
+    canonical_artwork_id: str
+    classification: Literal["UNVERIFIED"]
+    evidence_ref: str
+
+    @field_validator("canonical_artwork_id")
+    @classmethod
+    def canonical_id(cls, value: str) -> str:
+        return require_canonical_artwork_id(value)
+
+
+class UnresolvedHistoricPosition(_StrictStateModel):
+    publication_id: str
+    position: int = Field(ge=1)
+    instagram_child_media_id: str | None
+    caption_label: str | None
+    evidence_ref: str
+
+
+class RecoveryQuarantine(_StrictStateModel):
+    schema_version: Literal[1]
+    candidate_artwork_ids: list[QuarantineCandidate]
+    inferred_catalog_candidates: list[str]
+    unresolved_historic_position_count: int = Field(ge=0)
+    unresolved_positions: list[UnresolvedHistoricPosition]
+    blocked_sources: list[str]
+
+    @model_validator(mode="after")
+    def validate_candidates(self):
+        candidate_ids = [item.canonical_artwork_id for item in self.candidate_artwork_ids]
+        if len(candidate_ids) != len(set(candidate_ids)):
+            raise ValueError("duplicate quarantine candidate")
+        if len(self.inferred_catalog_candidates) != len(set(self.inferred_catalog_candidates)):
+            raise ValueError("duplicate inferred candidate")
+        for value in self.inferred_catalog_candidates:
+            require_canonical_artwork_id(value)
+        if len(self.unresolved_positions) != self.unresolved_historic_position_count:
+            raise ValueError("unresolved position count mismatch")
+        if len({(item.publication_id, item.position) for item in self.unresolved_positions}) != len(
+            self.unresolved_positions
+        ):
+            raise ValueError("duplicate unresolved position")
+        if self.unresolved_historic_position_count and not {"met", "smithsonian"}.issubset(
+            self.blocked_sources
+        ):
+            raise ValueError("unresolved historic positions require source embargo")
+        return self
+
+
+class ActivePublicationState(_StrictStateModel):
+    schema_version: Literal[1]
+    posted_artworks: list[dict[str, Any]]
+    reel_reservations: list[dict[str, Any]]
+    reel_publications: list[dict[str, Any]]
+    reel_publication_count: int = Field(ge=0)
+    staging_media_cleanup_queue: list[dict[str, Any]]
+    reel_staging_cleanup_queue: list[dict[str, Any]]
+    receipt_sync_pending: list[str]
+
+
+class OperationalProjection(_StrictStateModel):
+    publications: list[dict[str, Any]]
+    grid_publication_count: int = Field(ge=0)
+    grid_counter_epoch: str
+    active_color_tone: str
+
+
+class PublicationSafetyState(_StrictStateModel):
+    schema_version: Literal[2]
+    state_epoch: str
+    generation: int = Field(ge=1)
+    published_artwork_protection: PublishedArtworkProtection
+    recovery_quarantine: RecoveryQuarantine
+    active_publication_state: ActivePublicationState
+    operational_projection: OperationalProjection
+    payload_sha256: str
+
+    @model_validator(mode="after")
+    def validate_epoch(self):
+        if not self.state_epoch or self.state_epoch == "EXAMPLE_DO_NOT_UPLOAD":
+            raise ValueError("state epoch must identify a real bootstrap")
+        if self.operational_projection.grid_counter_epoch != self.state_epoch:
+            raise ValueError("grid counter epoch mismatch")
+        return self
+
+
+class ReceiptPosition(_StrictStateModel):
+    position: int = Field(ge=1)
+    canonical_artwork_id: str | None
+    instagram_child_media_id: str | None
+    caption_label: str | None
+
+    @field_validator("canonical_artwork_id")
+    @classmethod
+    def canonical_id(cls, value: str | None) -> str | None:
+        return require_canonical_artwork_id(value) if value is not None else None
+
+
+class PublicationReceipt(_StrictStateModel):
+    publication_id: str
+    instagram_media_id: str
+    publication_type: Literal["single", "carousel", "reel"]
+    historical_state: Literal["PUBLISHED_CONFIRMED"] | None = None
+    current_durable_lifecycle_state: Literal["UNKNOWN"] | None = None
+    record_origin: Literal["RECOVERED", "NEW"]
+    identity_completeness: Literal["COMPLETE", "INCOMPLETE"]
+    occurred_at: str | None
+    permalink: str | None
+    workflow_run_id: int | None
+    artwork_positions: list[ReceiptPosition] = Field(min_length=1)
+    evidence_ref: str
+
+    @field_validator("publication_id", "instagram_media_id", "evidence_ref")
+    @classmethod
+    def required_trimmed_identity(cls, value: str) -> str:
+        if not value or value != value.strip():
+            raise ValueError("receipt identity/evidence must be nonempty and trimmed")
+        return value
+
+    @field_validator("occurred_at")
+    @classmethod
+    def aware_occurrence(cls, value: str | None) -> str | None:
+        if value is not None:
+            try:
+                timestamp = datetime.fromisoformat(value.replace("Z", "+00:00"))
+            except ValueError as error:
+                raise ValueError("receipt occurrence must be an ISO-8601 timestamp") from error
+            if timestamp.tzinfo is None or timestamp.utcoffset() is None:
+                raise ValueError("receipt occurrence must include a timezone")
+        return value
+
+    @field_validator("permalink")
+    @classmethod
+    def https_permalink(cls, value: str | None) -> str | None:
+        if value is not None and (
+            value != value.strip() or urlsplit(value).scheme != "https"
+            or not urlsplit(value).netloc
+        ):
+            raise ValueError("receipt permalink must be an HTTPS URL")
+        return value
+
+    @model_validator(mode="after")
+    def validate_identity(self):
+        positions = [position.position for position in self.artwork_positions]
+        if positions != list(range(1, len(positions) + 1)):
+            raise ValueError("receipt positions must be contiguous and ordered")
+        ids = [position.canonical_artwork_id for position in self.artwork_positions]
+        if self.record_origin == "NEW":
+            if self.identity_completeness != "COMPLETE" or any(value is None for value in ids):
+                raise ValueError("new receipts require complete canonical membership")
+            if self.historical_state is not None or self.current_durable_lifecycle_state is not None:
+                raise ValueError("new receipts cannot carry recovered lifecycle claims")
+        elif (
+            self.current_durable_lifecycle_state != "UNKNOWN"
+            or self.historical_state != "PUBLISHED_CONFIRMED"
+        ):
+            raise ValueError("recovered receipt requires confirmed historical state, not live state")
+        if self.identity_completeness == "COMPLETE" and any(value is None for value in ids):
+            raise ValueError("complete receipt has unknown positions")
+        if self.identity_completeness == "INCOMPLETE" and all(value is not None for value in ids):
+            raise ValueError("incomplete receipt has no unknown positions")
+        if len([value for value in ids if value is not None]) != len(
+            {value for value in ids if value is not None}
+        ):
+            raise ValueError("duplicate artwork within one receipt")
+        if self.publication_type in {"single", "reel"} and len(ids) != 1:
+            raise ValueError("single/reel receipts require one artwork")
+        if self.publication_type == "carousel" and len(ids) < 2:
+            raise ValueError("carousel receipts require multiple positions")
+        return self
+
+
+class PublicationReceipts(_StrictStateModel):
+    schema_version: Literal[2]
+    generation: int = Field(ge=1)
+    source_artifact: str
+    source_sha256: str
+    record_count: int = Field(ge=0)
+    records: list[PublicationReceipt]
+    payload_sha256: str
+
+    @model_validator(mode="after")
+    def validate_records(self):
+        if self.record_count != len(self.records):
+            raise ValueError("receipt record_count mismatch")
+        ids = [record.publication_id for record in self.records]
+        media_ids = [record.instagram_media_id for record in self.records]
+        if len(ids) != len(set(ids)) or len(media_ids) != len(set(media_ids)):
+            raise ValueError("duplicate receipt publication or media ID")
         return self
 
 

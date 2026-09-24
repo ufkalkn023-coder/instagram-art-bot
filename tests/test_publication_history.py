@@ -3,10 +3,10 @@ from datetime import datetime, timedelta, timezone
 from unittest.mock import Mock
 
 import pytest
-from botocore.exceptions import ClientError
 from pydantic import ValidationError
 
-from src import content_diversity, history_tracker
+from src import content_diversity, history_tracker, publication_state
+from tests.test_publication_state import safety_candidate
 
 
 POSTED_AT = "2026-08-24T10:00:00Z"
@@ -594,21 +594,20 @@ def test_post_publish_history_failure_keeps_every_artwork_publishing(monkeypatch
 def test_conditional_upload_translates_r2_precondition_failure(monkeypatch):
     calls = []
 
-    class FakeS3:
-        def put_object(self, **kwargs):
-            calls.append(kwargs)
-            raise ClientError(
-                {"Error": {"Code": "PreconditionFailed", "Message": "stale ETag"}},
-                "PutObject",
-            )
+    class FakeStore:
+        def update_safety(self, payload, etag):
+            calls.append((payload, etag))
+            raise publication_state.StateConflictError("stale ETag")
 
-    monkeypatch.setattr(history_tracker, "_get_s3_client", lambda: FakeS3())
-    monkeypatch.setattr(history_tracker, "_get_bucket_name", lambda: "bucket")
+    monkeypatch.setattr(publication_state, "PublicationStateStore", FakeStore)
+    history = publication_state.history_view(
+        publication_state.validate_safety_state(safety_candidate())
+    )
 
     with pytest.raises(history_tracker.ConcurrentWriteError):
-        history_tracker._upload_history({"posted_artworks": []}, '"etag-1"')
+        history_tracker._upload_history(history, '"etag-1"')
 
-    assert calls[0]["IfMatch"] == '"etag-1"'
+    assert calls[0][1] == '"etag-1"'
 
 
 def test_single_publication_history_contains_its_artwork_exactly_once(monkeypatch):

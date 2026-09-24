@@ -20,6 +20,8 @@ REQUIRED_R2_ENVIRONMENT = (
     "CLOUDFLARE_R2_ACCESS_KEY_ID",
     "CLOUDFLARE_R2_SECRET_ACCESS_KEY",
     "CLOUDFLARE_R2_BUCKET_NAME",
+    "CLOUDFLARE_PRODUCTION_R2_BUCKET_NAME",
+    "CLOUDFLARE_PRODUCTION_STATE_R2_BUCKET_NAME",
 )
 _RUN_PREFIX_PATTERN = re.compile(
     rf"\A{re.escape(R2_INTEGRATION_ROOT)}/"
@@ -41,6 +43,20 @@ def missing_r2_configuration(
         for name in REQUIRED_R2_ENVIRONMENT
         if not environment.get(name, "").strip()
     )
+
+
+def assert_isolated_test_bucket(environment: Mapping[str, str] | None = None) -> None:
+    environment = os.environ if environment is None else environment
+    missing = missing_r2_configuration(environment)
+    if missing:
+        raise ValueError("Missing isolated R2 configuration: " + ", ".join(missing))
+    test_bucket = environment["CLOUDFLARE_R2_BUCKET_NAME"].strip()
+    if test_bucket == "instagram-art-bot":
+        raise ValueError("Live R2 test bucket overlaps a known production bucket")
+    for name in ("CLOUDFLARE_PRODUCTION_R2_BUCKET_NAME",
+                 "CLOUDFLARE_PRODUCTION_STATE_R2_BUCKET_NAME"):
+        if test_bucket == environment[name].strip():
+            raise ValueError("Live R2 test bucket overlaps a production bucket")
 
 
 def make_run_prefix(run_id: uuid.UUID | None = None) -> str:

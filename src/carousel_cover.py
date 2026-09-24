@@ -217,8 +217,7 @@ def select_editorial_cover(
         )
     museum_weights = getattr(config, "MUSEUM_SOURCE_WEIGHTS", DEFAULT_WEIGHTS)
     min_score = getattr(config, "MIN_QUALITY_SCORE", 50)
-    excluded_ids = set(posted_ids)
-    excluded_ids.update(str(artwork["id"]) for artwork in featured_artworks)
+    featured_ids = {str(artwork["id"]) for artwork in featured_artworks}
     candidates_by_id = {}
     attempted_ids: set[str] = set()
     rejection_counts: dict[str, int] = {}
@@ -251,7 +250,7 @@ def select_editorial_cover(
 
             for candidate in fetched:
                 candidate_id = candidate.canonical_id
-                if candidate_id in excluded_ids:
+                if candidate_id in posted_ids or candidate_id in featured_ids:
                     reject("excluded_or_duplicate")
                     continue
                 if not is_rights_eligible(candidate):
@@ -382,8 +381,7 @@ def _select_editorial_cover_from_acquisition(
         )
     museum_weights = getattr(config, "MUSEUM_SOURCE_WEIGHTS", DEFAULT_WEIGHTS)
     min_quality = getattr(config, "MIN_QUALITY_SCORE", 50)
-    excluded_ids = set(posted_ids)
-    excluded_ids.update(str(artwork["id"]) for artwork in featured_artworks)
+    featured_ids = {str(artwork["id"]) for artwork in featured_artworks}
     attempted = 0
     rejection_counts: dict[str, int] = {}
 
@@ -402,7 +400,8 @@ def _select_editorial_cover_from_acquisition(
         (
             (candidate, preliminary(candidate))
             for candidate in acquisition.candidates
-            if candidate.artwork.canonical_id not in excluded_ids
+            if candidate.artwork.canonical_id not in posted_ids
+            and candidate.artwork.canonical_id not in featured_ids
             and (
                 not acquisition.policy.require_theme_relevance
                 or candidate.evidence.theme_relevance_score
@@ -519,8 +518,7 @@ def _select_validated_hybrid_cover(
     run_seed: SelectionRunSeed,
 ) -> CoverAsset:
     """Choose the distinct cover from already validated, final-relevant hybrid images."""
-    excluded_ids = set(posted_ids)
-    excluded_ids.update(str(artwork["id"]) for artwork in featured_artworks)
+    featured_ids = {str(artwork["id"]) for artwork in featured_artworks}
     candidates_by_id = {
         candidate.artwork.canonical_id: candidate for candidate in acquisition.candidates
     }
@@ -528,7 +526,7 @@ def _select_validated_hybrid_cover(
     for artwork in acquisition.validated_artworks:
         candidate_id = str(artwork["id"])
         themed_candidate = candidates_by_id.get(candidate_id)
-        if candidate_id in excluded_ids or themed_candidate is None:
+        if candidate_id in posted_ids or candidate_id in featured_ids or themed_candidate is None:
             continue
         relevance = float(artwork.get("theme_relevance_score") or 0.0)
         if relevance < acquisition.policy.minimum_relevance:

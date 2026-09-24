@@ -86,7 +86,8 @@ _TRANSIENT_R2_EXCEPTIONS = (
     EndpointConnectionError,
     ReadTimeoutError,
 )
-_MISSING_R2_ERROR_CODES = {"NoSuchKey", "NotFound", "404"}
+_MISSING_R2_ERROR_CODES = {"NoSuchKey"}
+_SAFE_R2_ERROR_CODE = re.compile(r"[A-Za-z0-9_.-]{1,64}")
 
 
 @dataclass(frozen=True)
@@ -203,6 +204,9 @@ def _load_configuration(*, require_public_url: bool) -> _R2MediaConfiguration:
         required.append(public_url_base)
     if not all(required):
         raise ValueError("Missing one or more CLOUDFLARE_R2_* environment variables")
+    state_bucket = os.environ.get("CLOUDFLARE_STATE_R2_BUCKET_NAME", "").strip()
+    if state_bucket and bucket_name == state_bucket:
+        raise ValueError("Temporary media bucket must differ from durable state bucket")
     return _R2MediaConfiguration(
         account_id=account_id,
         access_key=access_key,
@@ -250,9 +254,26 @@ def _is_missing_r2_object(error: BaseException) -> bool:
     if not isinstance(error, ClientError):
         return False
     response = error.response
-    status = response.get("ResponseMetadata", {}).get("HTTPStatusCode")
     code = str(response.get("Error", {}).get("Code", ""))
-    return status == 404 or code in _MISSING_R2_ERROR_CODES
+    return code in _MISSING_R2_ERROR_CODES
+
+
+def r2_failure_context(
+    operation: str, bucket: str, object_key: str, error: BaseException
+) -> str:
+    """Describe an R2 failure without provider messages or signed request data."""
+    parts = [f"operation={operation}", f"bucket={bucket}", f"key={object_key}"]
+    if isinstance(error, ClientError):
+        response = error.response
+        code = response.get("Error", {}).get("Code")
+        status = response.get("ResponseMetadata", {}).get("HTTPStatusCode")
+        parts.append(
+            f"code={code if isinstance(code, str) and _SAFE_R2_ERROR_CODE.fullmatch(code) else 'unknown'}"
+        )
+        parts.append(f"http_status={status if isinstance(status, int) else 'unknown'}")
+    else:
+        parts.append(f"error_type={type(error).__name__}")
+    return "R2 failure " + " ".join(parts)
 
 
 def _new_owned_object_key(publication_id: str, file_suffix: str) -> str:
@@ -287,6 +308,13 @@ def _delete_owned_object(
     key_validator=validate_owned_object_key,
 ) -> bool:
     key_validator(object_key, publication_id)
+    state_bucket = os.environ.get("CLOUDFLARE_STATE_R2_BUCKET_NAME", "").strip()
+    if not state_bucket or bucket_name == state_bucket:
+        logger.error(
+            "r2_temp_media_cleanup_refused publication_id=%s reason=state_bucket_isolation_unverified",
+            publication_id,
+        )
+        return False
     for attempt in range(1, MEDIA_OPERATION_ATTEMPTS + 1):
         try:
             client.delete_object(Bucket=bucket_name, Key=object_key)
@@ -309,25 +337,28 @@ def _delete_owned_object(
                 )
                 return True
             retryable = _is_transient_r2_error(error)
+            diagnostic = r2_failure_context(
+                "DeleteObject", bucket_name, object_key, error
+            )
             if retryable and attempt < MEDIA_OPERATION_ATTEMPTS:
                 logger.warning(
                     "r2_temp_media_cleanup_failed publication_id=%s reason=%s "
-                    "attempt=%s retryable=true error=%s",
+                    "attempt=%s retryable=true %s",
                     publication_id,
                     reason,
                     attempt,
-                    type(error).__name__,
+                    diagnostic,
                 )
                 time.sleep(2 ** (attempt - 1))
                 continue
             logger.error(
                 "r2_temp_media_cleanup_failed publication_id=%s reason=%s "
-                "attempt=%s retryable=%s error=%s",
+                "attempt=%s retryable=%s %s",
                 publication_id,
                 reason,
                 attempt,
                 retryable,
-                type(error).__name__,
+                diagnostic,
             )
             return False
     raise AssertionError("unreachable")
@@ -460,23 +491,26 @@ def _list_owned_publication_objects(
                 break
             except Exception as error:
                 retryable = _is_transient_r2_error(error)
+                diagnostic = r2_failure_context(
+                    "ListObjectsV2", bucket_name, prefix, error
+                )
                 if retryable and attempt < MEDIA_OPERATION_ATTEMPTS:
                     logger.warning(
                         "r2_temp_media_cleanup_failed publication_id=%s "
-                        "reason=list attempt=%s retryable=true error=%s",
+                        "reason=list attempt=%s retryable=true %s",
                         publication_id,
                         attempt,
-                        type(error).__name__,
+                        diagnostic,
                     )
                     time.sleep(2 ** (attempt - 1))
                     continue
                 logger.error(
                     "r2_temp_media_cleanup_failed publication_id=%s reason=list "
-                    "attempt=%s retryable=%s error=%s",
+                    "attempt=%s retryable=%s %s",
                     publication_id,
                     attempt,
                     retryable,
-                    type(error).__name__,
+                    diagnostic,
                 )
                 return None
 
@@ -693,10 +727,18 @@ def stage_temp_media(
     """Upload and publicly validate one publication-owned staging object."""
     normalized = validate_publication_id(publication_id)
     configuration = _load_configuration(require_public_url=True)
-    client = _get_s3_client(configuration)
     object_key = _new_owned_object_key(normalized, file_suffix)
+    try:
+        client = _get_s3_client(configuration)
+    except Exception as error:
+        raise RuntimeError(
+            r2_failure_context(
+                "CreateClient", configuration.bucket_name, object_key, error
+            )
+        ) from None
 
     upload_success = False
+    last_upload_failure = None
     for attempt in range(1, MEDIA_OPERATION_ATTEMPTS + 1):
         try:
             client.upload_file(
@@ -715,51 +757,73 @@ def stage_temp_media(
             break
         except Exception as error:
             retryable = _is_transient_r2_error(error)
+            last_upload_failure = r2_failure_context(
+                "UploadFile", configuration.bucket_name, object_key, error
+            )
             logger.warning(
-                "R2 upload failed attempt=%s/%s error=%s retryable=%s",
+                "R2 upload failed attempt=%s/%s retryable=%s %s",
                 attempt,
                 MEDIA_OPERATION_ATTEMPTS,
-                type(error).__name__,
                 retryable,
+                last_upload_failure,
             )
             if retryable and attempt < MEDIA_OPERATION_ATTEMPTS:
                 time.sleep(2 ** (attempt - 1))
                 continue
             break
     if not upload_success:
-        raise RuntimeError("Failed to upload media to Cloudflare R2 after 3 attempts.")
+        raise RuntimeError(
+            f"Failed to upload media to Cloudflare R2 after {attempt} attempt(s): "
+            f"{last_upload_failure}"
+        )
 
     if configuration.public_url_base is None:
         raise RuntimeError("R2 public URL configuration unexpectedly missing")
     public_url = f"{configuration.public_url_base}/{object_key}"
     upload = TempMediaUpload(object_key, public_url, normalized)
     for _attempt in range(1, PUBLIC_HEALTH_CHECK_ATTEMPTS + 1):
+        head_status = None
         try:
-            response = requests.head(
+            head_status = requests.head(
                 public_url, allow_redirects=True, timeout=10
+            ).status_code
+        except requests.RequestException as error:
+            logger.warning(
+                "R2 public HEAD check failed publication_id=%s attempt=%s error=%s",
+                normalized,
+                _attempt,
+                type(error).__name__,
             )
-            if response.status_code == 200:
-                response_content_type = (
-                    response.headers.get("Content-Type", "")
+        try:
+            # Meta uses anonymous GET, which remains authoritative even when
+            # a public edge does not support HEAD for this object.
+            get_response = requests.get(
+                public_url, allow_redirects=True, timeout=10, stream=True
+            )
+            try:
+                get_content_type = (
+                    get_response.headers.get("Content-Type", "")
                     .split(";", 1)[0]
                     .strip()
                     .casefold()
                 )
-                try:
-                    response_content_length = int(
-                        response.headers.get("Content-Length", 0)
-                    )
-                except (TypeError, ValueError):
-                    response_content_length = 0
+                final_url = getattr(get_response, "url", public_url)
                 if (
-                    response_content_length > 0
-                    and response_content_type == content_type
+                    get_response.status_code == 200
+                    and get_content_type == content_type
+                    and urlsplit(final_url).scheme == "https"
+                    and next(get_response.iter_content(chunk_size=1), b"")
                 ):
                     return upload
+            finally:
+                get_response.close()
             logger.warning(
-                "R2 public health check failed publication_id=%s attempt=%s",
+                "R2 public health check failed publication_id=%s attempt=%s "
+                "head_status=%s get_status=%s",
                 normalized,
                 _attempt,
+                head_status,
+                get_response.status_code,
             )
         except Exception as error:
             logger.warning(
