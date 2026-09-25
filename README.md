@@ -83,6 +83,8 @@ dependency install
 
 Compile adımı `main.py`, `src`, `scripts` ve `tests` kapsamını; test adımı hızlı olan full `pytest -q` suite’ini çalıştırır. Install, compile, test veya preflight başarısız olursa production adımı çalışmaz. Production secret’ları yalnız preflight ve publish adımlarına verilir; compile ve test adımları secret almaz. Preflight strict rights/config ve public HTTPS URL biçimini, ayrı durable-state bucket yapılandırmasını, `publication_safety_state.v2.json` ve `publication_receipts.v2.json` nesnelerinin varlığını, şemalarını ve GET yanıtlarındaki expiration metadata'sını doğrular; Instagram hesap kimliğini GET ile okur. Eksik veya bozuk v2 state production'ı durdurur; eski `posted_history.json` otomatik fallback değildir. Bucket lifecycle kuralları deployment sırasında ayrıca denetlenir; scoped runtime credential ile bucket konfigürasyonu okunmaz. Yeni içerik üretmeden önce aynı read-only preflight tekrar çalışır. Preflight R2 write veya Instagram publish yetkisini kanıtlamaz.
 
+Receipt `occurred_at` alanı boş (`null`) olabilir; mevcut olduğunda timezone zorunludur. Kabul edilen biçim `YYYY-MM-DDTHH:MM:SS` (isteğe bağlı 1–6 haneli kesir) ve ardından `Z`, `+HH:MM`/`-HH:MM` veya recovery ledger'daki `+HHMM`/`-HHMM` offset'idir. Geçersiz tarih/saat, hatalı offset, timezone'suz değer ve sonda ek veri reddedilir. Orijinal receipt metni ve digest değiştirilmez. CI'daki Python 3.10 testleri, production preflight'in bu legacy offset'i okumasını ayrıca doğrular.
+
 ### Reel candidate, portfolio ve handoff katmanı
 
 Reel üretimi Instagram feed publisher'ından ayrıdır. `reel_candidate_acquisition`, altı
