@@ -1,6 +1,7 @@
 from dataclasses import dataclass
 from datetime import datetime
 from enum import Enum
+import re
 from typing import Any, Literal, Optional
 from urllib.parse import urlsplit
 from uuid import UUID
@@ -19,6 +20,31 @@ CONFIRMED_RIGHTS_STATUSES = {
     "CONFIRMED_OPEN_ACCESS",
 }
 MAX_IMAGE_DIMENSION = 100_000
+_RECEIPT_TIMESTAMP = re.compile(
+    r"[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}"
+    r"(?:\.[0-9]{1,6})?(?P<offset>Z|[+-](?:[01][0-9]|2[0-3]):?[0-5][0-9])"
+)
+
+
+def parse_receipt_occurrence(value: str) -> datetime:
+    """Parse the receipt's aware ISO timestamp, including recovered +HHMM offsets."""
+    match = _RECEIPT_TIMESTAMP.fullmatch(value)
+    if match is None:
+        raise ValueError("receipt occurrence must be an ISO-8601 timestamp with timezone")
+    offset = match.group("offset")
+    if offset == "Z":
+        normalized = value[:-1] + "+00:00"
+    elif ":" not in offset:
+        normalized = value[:-5] + offset[:3] + ":" + offset[3:]
+    else:
+        normalized = value
+    try:
+        timestamp = datetime.fromisoformat(normalized)
+    except ValueError as error:
+        raise ValueError("receipt occurrence must be an ISO-8601 timestamp") from error
+    if timestamp.tzinfo is None or timestamp.utcoffset() is None:
+        raise ValueError("receipt occurrence must include a timezone")
+    return timestamp
 
 
 class CarouselExperimentMetadata(BaseModel):
@@ -350,12 +376,7 @@ class PublicationReceipt(_StrictStateModel):
     @classmethod
     def aware_occurrence(cls, value: str | None) -> str | None:
         if value is not None:
-            try:
-                timestamp = datetime.fromisoformat(value.replace("Z", "+00:00"))
-            except ValueError as error:
-                raise ValueError("receipt occurrence must be an ISO-8601 timestamp") from error
-            if timestamp.tzinfo is None or timestamp.utcoffset() is None:
-                raise ValueError("receipt occurrence must include a timezone")
+            parse_receipt_occurrence(value)
         return value
 
     @field_validator("permalink")

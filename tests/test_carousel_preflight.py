@@ -1,13 +1,16 @@
 """Read-only production gates for the versioned durable publication state."""
 
 from types import SimpleNamespace
+from pathlib import Path
 
 import pytest
 
 import main
+from scripts.bootstrap_publication_recovery import build_candidate
 from src import history_tracker, instagram_poster, production_config, publication_state
 from src.production_config import ProductionConfigurationError
-from tests.test_publication_state import safety_candidate
+from tests.test_publication_state import safety_candidate, store_for
+from tests.test_receipt_timestamp_compat import recovered_receipt
 
 
 def _configure(monkeypatch, *, public_url="https://media.example"):
@@ -60,6 +63,32 @@ def test_preflight_reads_both_durable_objects_without_mutation(monkeypatch):
     monkeypatch.setattr(history_tracker, "_upload_history", lambda *_: pytest.fail("preflight wrote state"))
     assert production_config.validate_carousel_production_preflight() == {"gemini": "disabled"}
     assert calls == ["safety-read", "receipts-read"]
+
+
+def test_preflight_accepts_recovered_compact_offset_receipt_without_mutation(monkeypatch):
+    _configure(monkeypatch)
+    receipts = publication_state.seal({
+        "schema_version": 2, "generation": 1, "source_artifact": "test-recovery",
+        "source_sha256": "a" * 64, "record_count": 1,
+        "records": [recovered_receipt("2026-08-24T14:39:56+0000")],
+    })
+    store, client = store_for(safety_candidate(), receipts)
+    monkeypatch.setattr(publication_state, "PublicationStateStore", lambda: store)
+    assert production_config.validate_carousel_production_preflight() == {"gemini": "disabled"}
+    assert client.puts == 0
+
+
+def test_preflight_accepts_all_authoritative_recovered_receipts(monkeypatch):
+    evidence = Path.home() / "Documents/UfukOS/900-Archive/Agent-Logs/Codex/carousel-history-recovery"
+    if not evidence.exists():
+        pytest.skip("external forensic artifacts unavailable")
+    safety, receipts, report = build_candidate(evidence)
+    assert report["publication_receipts"] == 68
+    _configure(monkeypatch)
+    store, client = store_for(safety, receipts)
+    monkeypatch.setattr(publication_state, "PublicationStateStore", lambda: store)
+    assert production_config.validate_carousel_production_preflight() == {"gemini": "disabled"}
+    assert client.puts == 0
 
 
 def test_preflight_reports_unbootstrapped_state_before_instagram_or_mutation(monkeypatch):

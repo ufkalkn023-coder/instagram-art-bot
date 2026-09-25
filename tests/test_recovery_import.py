@@ -41,6 +41,9 @@ def test_recovery_candidate_is_deterministic_and_preserves_uncertainty():
     assert all(len(publications) == 2 for publications in reused.values())
     assert all(key in safety["published_artwork_protection"]["entries"] for key in reused)
     assert len({item["publication_id"] for item in ledger["records"]}) == 68
+    assert sum(item["occurred_at"] is None for item in ledger["records"]) == 1
+    assert sum(item["occurred_at"] is not None and item["occurred_at"].endswith("+0000")
+               for item in ledger["records"]) == 67
 
 
 def test_recovery_import_rejects_modified_evidence(tmp_path):
