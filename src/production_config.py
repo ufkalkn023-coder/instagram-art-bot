@@ -1,6 +1,7 @@
 """Fail-fast validation for configuration required by production publishing."""
 
 from collections.abc import Mapping
+from datetime import datetime, timezone
 import ipaddress
 import os
 from urllib.parse import urlsplit
@@ -158,13 +159,7 @@ def validate_carousel_production_preflight() -> dict[str, str]:
     store = publication_state.PublicationStateStore()
     safety, _ = store.load_safety()
     receipts, _ = store.load_receipts()
-    publication_state.validate_live_receipt_coverage(safety, receipts)
-    if any(item.get("status") in {"PUBLISHING", "AMBIGUOUS"}
-           for item in safety.active_publication_state.posted_artworks):
-        raise ProductionConfigurationError("Unresolved live feed publication boundary")
-    if any(item.get("status") in {"PUBLISHING", "AMBIGUOUS"}
-           for item in safety.active_publication_state.reel_reservations):
-        raise ProductionConfigurationError("Unresolved live Reel publication boundary")
+    require_clear_publication_state(safety, receipts)
     instagram_poster.validate_instagram_account_access(
         account_id, access_token,
     )
@@ -172,3 +167,48 @@ def validate_carousel_production_preflight() -> dict[str, str]:
         publication_state.history_view(safety)
     )
     return optional_status
+
+
+def require_clear_publication_state(
+    safety: publication_state.PublicationSafetyState,
+    receipts: publication_state.PublicationReceipts,
+    *,
+    owned_feed_ids: set[str] | None = None,
+    owned_reel_ids: set[str] | None = None,
+    now: datetime | None = None,
+) -> None:
+    """Fail closed on unresolved lifecycle and owned-media cleanup evidence."""
+    publication_state.validate_live_receipt_coverage(safety, receipts)
+    now = now or datetime.now(timezone.utc)
+    active = safety.active_publication_state
+    for row in (*active.posted_artworks, *active.reel_reservations):
+        status = row.get("status")
+        if status == "PENDING":
+            reserved_at = history_tracker._parse_reserved_at(row.get("reserved_at"))
+            detail = "stale_pending_requires_reconciliation" if (
+                reserved_at is None or now - reserved_at >= history_tracker.PENDING_RESERVATION_TTL
+            ) else "live_pending"
+            raise ProductionConfigurationError(f"STOP_AUTOMATED_PRODUCTION: {detail}")
+        if status in {"PUBLISHING", "AMBIGUOUS"}:
+            raise ProductionConfigurationError(
+                f"STOP_AUTOMATED_PRODUCTION: unresolved_{status.lower()}"
+            )
+    if active.staging_media_cleanup_queue or active.reel_staging_cleanup_queue:
+        raise ProductionConfigurationError("STOP_AUTOMATED_PRODUCTION: cleanup_queue_unresolved")
+
+    for owned_ids, rows, publication_field in (
+        (owned_feed_ids, active.posted_artworks, "publication_id"),
+        (owned_reel_ids, active.reel_reservations, "publication_id"),
+    ):
+        if owned_ids is None:
+            continue
+        status_by_id: dict[str, set[str]] = {}
+        for row in rows:
+            status_by_id.setdefault(row[publication_field], set()).add(row["status"])
+        for publication_id in owned_ids:
+            # PUBLISHED media may still be within its one-day lifecycle, or may
+            # have expired naturally. Neither state needs cleanup investigation.
+            if status_by_id.get(publication_id) != {"PUBLISHED"}:
+                raise ProductionConfigurationError(
+                    "STOP_AUTOMATED_PRODUCTION: owned_media_lifecycle_anomaly"
+                )

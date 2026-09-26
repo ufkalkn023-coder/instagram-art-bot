@@ -311,6 +311,7 @@ class ActivePublicationState(_StrictStateModel):
     staging_media_cleanup_queue: list[dict[str, Any]]
     reel_staging_cleanup_queue: list[dict[str, Any]]
     receipt_sync_pending: list[str]
+    consumed_authorizations: list[dict[str, Any]] = Field(default_factory=list)
 
 
 class OperationalProjection(_StrictStateModel):

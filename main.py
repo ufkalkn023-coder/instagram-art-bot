@@ -21,6 +21,7 @@ from src import (
     r2_media,
 )
 from src.carousel_caption import format_carousel_caption
+from src.production_authorization import ProductionAuthorization, load_workflow_authorization
 from src.carousel_featured import (
     derive_carousel_featured_presentation,
     render_carousel_featured_artwork,
@@ -358,7 +359,7 @@ def _preceding_post_distance_minutes(now: datetime) -> float | None:
     return max(0.0, (now - posted_at.astimezone(timezone.utc)).total_seconds() / 60)
 
 
-def run_carousel_post(args):
+def run_carousel_post(args, authorization: ProductionAuthorization | None = None):
     logger.info("Running carousel post logic...")
     posted_ids = history_tracker.get_posted_ids()
     color_tone = _get_grid_color_tone_for_run(args.dry_run)
@@ -791,6 +792,7 @@ def run_carousel_post(args):
         editorial_intro=editorial_intro,
         hashtags=hashtags,
         featured_artworks=artworks,
+        cover_artwork=cover.artwork,
     )
 
     plan = CarouselPlan.build(
@@ -933,6 +935,7 @@ def run_carousel_post(args):
         theme_family=plan.theme.family.value,
         carousel_format=plan.theme.format.value,
         publication_metadata=publication_metadata,
+        authorization=authorization,
     )
     logger.info("reservation_complete mode=carousel count=%s", len(plan.publication_ids))
     media_uploads: list[r2_media.TempMediaUpload] = []
@@ -1087,6 +1090,7 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
 
     existing_artifacts: set[Path] | None = None
+    authorization: ProductionAuthorization | None = None
     try:
         if args.validate_production_config:
             optional_status = validate_production_configuration()
@@ -1186,6 +1190,7 @@ def main(argv: list[str] | None = None) -> int:
         if not args.dry_run:
             logger.info("production_start mode=%s", mode.value)
             optional_status = validate_carousel_production_preflight()
+            authorization = load_workflow_authorization()
             logger.info(
                 "validation_complete config_only=false optional_integrations=%s",
                 ",".join(
@@ -1214,13 +1219,15 @@ def main(argv: list[str] | None = None) -> int:
                 getattr(summary, "cleanup_deleted", 0),
                 getattr(summary, "cleanup_failures", 0),
             )
-            if summary.errors:
+            if summary.errors or getattr(summary, "cleanup_failures", 0):
                 raise RuntimeError(
-                    "Publication reconciliation reported errors; resolve the locked "
-                    "history units before starting a new carousel"
+                    "STOP_AUTOMATED_PRODUCTION: reconciliation or cleanup incomplete"
                 )
 
-        run_carousel_post(args)
+        if args.dry_run:
+            run_carousel_post(args)
+        else:
+            run_carousel_post(args, authorization)
 
         if not args.dry_run:
             logger.info("production_success mode=%s", mode.value)

@@ -3,13 +3,15 @@
 import copy
 import io
 import json
+from datetime import datetime, timezone
 from pathlib import Path
 
 import pytest
 from botocore.exceptions import ClientError, EndpointConnectionError
 from pydantic import ValidationError
 
-from src import history_tracker, publication_state
+from src import history_tracker, publication_state, r2_media
+from src.production_authorization import ProductionAuthorization
 from src.models import PublicationReceipt, normalize_artwork_id
 from src.models import REEL_RELEASE_FILE_HASH_KEYS, ReelReleaseIdentity
 
@@ -530,6 +532,7 @@ def test_reel_reservation_cannot_bypass_permanent_protection(monkeypatch):
     store, client = store_for(safety_candidate())
     monkeypatch.setenv("CLOUDFLARE_STATE_R2_BUCKET_NAME", "state")
     monkeypatch.setattr(publication_state, "PublicationStateStore", lambda: store)
+    monkeypatch.setattr(r2_media, "list_owned_publication_ids", lambda **_: set())
     artwork_id = FIXTURE["A_PROVEN_PUBLISHED_ARTWORK_IDS"][0]
     release = ReelReleaseIdentity(
         version="artfolio-release-v1", reel_id=artwork_id,
@@ -537,7 +540,12 @@ def test_reel_reservation_cannot_bypass_permanent_protection(monkeypatch):
         files_sha256={key: "b" * 64 for key in REEL_RELEASE_FILE_HASH_KEYS},
     )
     with pytest.raises(RuntimeError, match="already protected"):
-        history_tracker.reserve_reel(artwork_id, release)
+        history_tracker.reserve_reel(
+            artwork_id, release,
+            authorization=ProductionAuthorization(
+                "manual:test-protection", 101, datetime.now(timezone.utc)
+            ),
+        )
     assert client.puts == 0
 
 
@@ -545,6 +553,7 @@ def test_feed_and_reel_pending_locks_block_each_other(monkeypatch):
     store, client = store_for(safety_candidate())
     monkeypatch.setenv("CLOUDFLARE_STATE_R2_BUCKET_NAME", "state")
     monkeypatch.setattr(publication_state, "PublicationStateStore", lambda: store)
+    monkeypatch.setattr(r2_media, "list_owned_publication_ids", lambda **_: set())
 
     def release(artwork_id):
         return ReelReleaseIdentity(
@@ -555,14 +564,31 @@ def test_feed_and_reel_pending_locks_block_each_other(monkeypatch):
 
     feed_artwork = {"id": "aic_999987", "title": "Feed", "artist": "Artist", "museum": "Museum"}
     history_tracker.reserve_artworks([feed_artwork], "single", "feed-first")
-    with pytest.raises(RuntimeError, match="already protected"):
-        history_tracker.reserve_reel(feed_artwork["id"], release(feed_artwork["id"]))
+    with pytest.raises(RuntimeError, match="STOP_AUTOMATED_PRODUCTION"):
+        history_tracker.reserve_reel(
+            feed_artwork["id"], release(feed_artwork["id"]),
+            authorization=ProductionAuthorization(
+                "manual:40e70ed5-ad60-479c-939b-4683398259ca", 102, datetime.now(timezone.utc)
+            ),
+        )
 
+    reel_client = FakeS3(safety_candidate(), client.objects[publication_state.RECEIPTS_KEY])
+    store = type(store)(
+        publication_state.StateConfiguration("account", "state", "state-key", "secret"),
+        reel_client,
+    )
+    monkeypatch.setattr(publication_state, "PublicationStateStore", lambda: store)
     reel_artwork = {"id": "aic_999986", "title": "Reel", "artist": "Artist", "museum": "Museum"}
-    history_tracker.reserve_reel(reel_artwork["id"], release(reel_artwork["id"]))
+    history_tracker.reserve_reel(
+        reel_artwork["id"], release(reel_artwork["id"]),
+        authorization=ProductionAuthorization(
+            "manual:5dcb0207-74d8-45e1-9499-256e9cc673d4", 103, datetime.now(timezone.utc)
+        ),
+    )
     with pytest.raises(RuntimeError, match="already protected"):
         history_tracker.reserve_artworks([reel_artwork], "single", "feed-second")
-    assert client.puts == 2
+    assert client.puts == 1
+    assert reel_client.puts == 1
 
 
 def test_receipt_failure_leaves_published_protection_and_replay_marker(monkeypatch):

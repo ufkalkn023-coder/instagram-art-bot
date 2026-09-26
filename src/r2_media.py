@@ -584,6 +584,45 @@ def _list_owned_publication_objects(
             return None
 
 
+def list_owned_publication_ids(*, reel: bool = False) -> set[str]:
+    """Read the bounded owned-media prefix inventory without touching objects."""
+    configuration = _load_configuration(require_public_url=False)
+    client = _get_s3_client(configuration)
+    root = REEL_OWNED_MEDIA_ROOT if reel else OWNED_MEDIA_ROOT
+    prefix = f"{root}/"
+    found: set[str] = set()
+    continuation_token: str | None = None
+    for _ in range(20):
+        request = {"Bucket": configuration.bucket_name, "Prefix": prefix,
+                   "Delimiter": "/", "MaxKeys": 1000}
+        if continuation_token is not None:
+            request["ContinuationToken"] = continuation_token
+        try:
+            response = client.list_objects_v2(**request)
+        except Exception as error:
+            raise RuntimeError("STOP_AUTOMATED_PRODUCTION: owned-media inventory unreadable") from error
+        if not isinstance(response, dict) or response.get("Contents"):
+            raise RuntimeError("STOP_AUTOMATED_PRODUCTION: malformed owned-media inventory")
+        groups = response.get("CommonPrefixes", [])
+        if not isinstance(groups, list):
+            raise RuntimeError("STOP_AUTOMATED_PRODUCTION: malformed owned-media inventory")
+        for group in groups:
+            group_prefix = group.get("Prefix") if isinstance(group, dict) else None
+            if (not isinstance(group_prefix, str) or not group_prefix.startswith(prefix)
+                    or not group_prefix.endswith("/")):
+                raise RuntimeError("STOP_AUTOMATED_PRODUCTION: malformed owned-media prefix")
+            publication_id = group_prefix[len(prefix):-1]
+            if not is_valid_publication_id(publication_id) or "/" in publication_id:
+                raise RuntimeError("STOP_AUTOMATED_PRODUCTION: malformed owned-media prefix")
+            found.add(publication_id)
+        if response.get("IsTruncated") is False:
+            return found
+        continuation_token = response.get("NextContinuationToken")
+        if response.get("IsTruncated") is not True or not continuation_token:
+            raise RuntimeError("STOP_AUTOMATED_PRODUCTION: malformed owned-media inventory")
+    raise RuntimeError("STOP_AUTOMATED_PRODUCTION: owned-media inventory bound exceeded")
+
+
 def cleanup_publication_media(
     publication_id: str, *, reason: str
 ) -> MediaCleanupSummary:

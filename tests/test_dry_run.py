@@ -125,6 +125,7 @@ def test_read_only_grid_tone_never_writes_history(monkeypatch):
 
 def test_main_skips_publication_reconciliation_only_for_dry_run(monkeypatch):
     calls = []
+    monkeypatch.setattr(main, "load_workflow_authorization", lambda: object())
     monkeypatch.setattr(main, "validate_carousel_production_preflight", lambda: {})
     monkeypatch.setattr(
         main.publication_reconciliation,
@@ -138,7 +139,7 @@ def test_main_skips_publication_reconciliation_only_for_dry_run(monkeypatch):
             errors=0,
         ),
     )
-    monkeypatch.setattr(main, "run_carousel_post", lambda args: calls.append(("carousel", args.dry_run)))
+    monkeypatch.setattr(main, "run_carousel_post", lambda args, authorization=None: calls.append(("carousel", args.dry_run)))
 
     monkeypatch.setattr(main.sys, "argv", ["main.py", "--dry-run"])
     main.main()

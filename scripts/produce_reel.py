@@ -19,6 +19,7 @@ from src.reel_production import (  # noqa: E402
     produce_and_publish_reel,
 )
 from src.production_config import validate_carousel_production_preflight  # noqa: E402
+from src.production_authorization import load_workflow_authorization  # noqa: E402
 
 logger = logging.getLogger(__name__)
 
@@ -52,10 +53,12 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     try:
         validate_carousel_production_preflight()
+        authorization = load_workflow_authorization(publication_kind="reel")
         outcome = produce_and_publish_reel(
             reels_repository=args.artfolio_reels_root,
             account_id=account_id,
             access_token=access_token,
+            authorization=authorization,
         )
     except _MESSAGE_SAFE_ERRORS as error:
         logger.error("Reel production failed: %s: %s", type(error).__name__, error)
