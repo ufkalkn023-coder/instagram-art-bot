@@ -13,6 +13,7 @@ from src.production_config import (
     REQUIRED_PRODUCTION_VARIABLES,
     validate_production_configuration,
 )
+from src.production_authorization import ProductionAuthorizationError
 from src.rights_policy import RIGHTS_POLICY_ENV, RightsPolicyMode
 
 
@@ -46,6 +47,7 @@ def _production_environment() -> dict[str, str]:
 
 
 def _mock_reconciliation(monkeypatch, calls=None):
+    monkeypatch.setattr(main, "load_workflow_authorization", lambda: object())
     monkeypatch.setattr(
         main,
         "validate_carousel_production_preflight",
@@ -124,7 +126,7 @@ def test_missing_required_configuration_fails_before_production_path(
     monkeypatch.setattr(
         main,
         "run_carousel_post",
-        lambda args: calls.append("carousel"),
+        lambda args, authorization=None: calls.append("carousel"),
     )
     caplog.set_level(logging.INFO, logger=main.__name__)
 
@@ -144,11 +146,31 @@ def test_optional_integrations_do_not_fail_production_startup(monkeypatch):
     monkeypatch.setattr(
         main,
         "run_carousel_post",
-        lambda args: calls.append("carousel"),
+        lambda args, authorization=None: calls.append("carousel"),
     )
 
     assert main.main(["--mode", "carousel"]) == 0
     assert calls == ["reconcile", "carousel"]
+
+
+def test_invalid_authorization_stops_before_reconciliation_or_acquisition(monkeypatch):
+    _set_required_environment(monkeypatch)
+    monkeypatch.setattr(main, "validate_carousel_production_preflight", lambda: {})
+    monkeypatch.setattr(
+        main, "load_workflow_authorization",
+        lambda: (_ for _ in ()).throw(
+            ProductionAuthorizationError("PRODUCTION_RERUN_PUBLICATION_BLOCKED")
+        ),
+    )
+    monkeypatch.setattr(
+        main.publication_reconciliation, "reconcile_publications",
+        lambda **_: pytest.fail("unauthorized run mutated reconciliation state"),
+    )
+    monkeypatch.setattr(
+        main, "run_carousel_post",
+        lambda *_: pytest.fail("unauthorized run acquired candidates"),
+    )
+    assert main.main(["--mode", "carousel"]) == 1
 
 
 def test_config_only_gate_exits_before_history_or_acquisition(monkeypatch):
@@ -173,7 +195,7 @@ def test_carousel_selection_failure_returns_failure_status(monkeypatch, caplog):
     monkeypatch.setattr(
         main,
         "run_carousel_post",
-        lambda args: (_ for _ in ()).throw(RuntimeError("insufficient candidates")),
+        lambda args, authorization=None: (_ for _ in ()).throw(RuntimeError("insufficient candidates")),
     )
     caplog.set_level(logging.INFO, logger=main.__name__)
 
@@ -187,7 +209,7 @@ def test_publish_failure_returns_failure_status(monkeypatch):
     monkeypatch.setattr(
         main,
         "run_carousel_post",
-        lambda args: (_ for _ in ()).throw(
+        lambda args, authorization=None: (_ for _ in ()).throw(
             instagram_poster.InstagramAPIError("publish rejected")
         ),
     )

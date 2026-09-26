@@ -33,6 +33,7 @@ from src.models import (
     normalize_artwork_id,
 )
 from src import r2_media, publication_state
+from src.production_authorization import ProductionAuthorization, ProductionAuthorizationError
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -1249,6 +1250,7 @@ def reserve_reel(
     artwork_id: str,
     release_identity: ReelReleaseIdentity,
     publication_id: str | None = None,
+    authorization: ProductionAuthorization | None = None,
 ) -> str:
     """Atomically reserve one Reel while protecting the shared artwork pool."""
     if not isinstance(artwork_id, str) or not artwork_id.strip():
@@ -1270,6 +1272,7 @@ def reserve_reel(
         original_history = copy.deepcopy(history)
         now = datetime.now(timezone.utc)
         try:
+            _require_production_authorization(history, authorization, now)
             reel_history = _validated_reel_history(history)
             existing = next(
                 (
@@ -1301,6 +1304,13 @@ def reserve_reel(
                     "release_identity": release_identity.model_dump(mode="json"),
                 }
             )
+            if authorization is not None:
+                history["consumed_authorizations"].append({
+                    "key": authorization.key,
+                    "run_id": authorization.run_id,
+                    "publication_id": stable_publication_id,
+                    "consumed_at": _utc_timestamp(now),
+                })
         except Exception:
             _restore_history_snapshot_in_place(history, original_history)
             raise
@@ -2034,6 +2044,33 @@ def acknowledge_reel_staging_cleanup(publication_id: str) -> bool:
     raise AssertionError("unreachable")
 
 
+def _require_production_authorization(
+    history: Dict[str, Any],
+    authorization: ProductionAuthorization | None,
+    now: datetime,
+) -> None:
+    """Check current state and authorization on the exact reservation snapshot."""
+    if "_safety_state" not in history:
+        if authorization is not None:
+            raise ProductionAuthorizationError("PRODUCTION_AUTHORIZATION_INVALID")
+        return
+    if authorization is None:
+        raise ProductionAuthorizationError("PRODUCTION_AUTHORIZATION_INVALID")
+    authorization.require_fresh(now)
+    from src.production_config import require_clear_publication_state
+    safety = publication_state.validate_safety_state(history["_safety_state"])
+    if any(item["key"] == authorization.key or item["run_id"] == authorization.run_id
+           for item in history["consumed_authorizations"]):
+        raise ProductionAuthorizationError("PRODUCTION_AUTHORIZATION_ALREADY_CONSUMED")
+    receipts, _ = publication_state.PublicationStateStore().load_receipts()
+    require_clear_publication_state(
+        safety, receipts,
+        owned_feed_ids=r2_media.list_owned_publication_ids(),
+        owned_reel_ids=r2_media.list_owned_publication_ids(reel=True),
+        now=now,
+    )
+
+
 def reserve_carousel(
     cover_artwork: Dict[str, Any],
     featured_artworks: Sequence[Dict[str, Any]],
@@ -2042,6 +2079,7 @@ def reserve_carousel(
     theme_family: str | None = None,
     carousel_format: str | None = None,
     publication_metadata: Mapping[str, Any] | None = None,
+    authorization: ProductionAuthorization | None = None,
 ) -> str:
     """Atomically reserve one cover and 5–8 featured works with explicit roles."""
     if not MIN_FEATURED_WORKS <= len(featured_artworks) <= MAX_FEATURED_WORKS:
@@ -2083,6 +2121,7 @@ def reserve_carousel(
 
     history, etag = load_history_with_etag()
     now = datetime.now(timezone.utc)
+    _require_production_authorization(history, authorization, now)
     collisions = {item for item in publication_ids
                   if artwork_is_globally_protected(history, item, now=now)}
     if collisions:
@@ -2102,6 +2141,13 @@ def reserve_carousel(
         or normalize_artwork_id(item["id"]) not in publication_id_set
     ]
     publication_id = str(uuid.uuid4())
+    if authorization is not None:
+        history["consumed_authorizations"].append({
+            "key": authorization.key,
+            "run_id": authorization.run_id,
+            "publication_id": publication_id,
+            "consumed_at": _utc_timestamp(now),
+        })
     cover_payload = dict(cover_artwork)
     cover_payload["content_type"] = "CAROUSEL_COVER"
     history["posted_artworks"].append(

@@ -25,6 +25,12 @@ def test_workflow_has_dispatch_with_explicit_confirmation_phrase():
     assert "confirm_publish:" in text
     assert "PUBLISH_REEL_TO_INSTAGRAM" in text
     assert "required: true" in text
+    assert "authorization_id:" in text
+    assert "PRODUCTION_RERUN_PUBLICATION_BLOCKED" in text
+    assert "Authorize Reel run before reconciliation" in text
+    assert text.index("Authorize Reel run before reconciliation") < text.index(
+        "scripts/reconcile_reels.py"
+    )
 
 
 def test_workflow_schedule_cron_is_gated_by_repository_variable():
@@ -76,7 +82,7 @@ def test_workflow_requires_all_publication_secrets():
     text = _workflow_text()
     for secret in (
         "INSTAGRAM_ACCOUNT_ID",
-        "INSTAGRAM_ACCESS_TOKEN_V2",
+        "INSTAGRAM_PUBLICATION_ACCESS_TOKEN",
         "CLOUDFLARE_R2_ACCOUNT_ID",
         "CLOUDFLARE_R2_ACCESS_KEY_ID",
         "CLOUDFLARE_R2_SECRET_ACCESS_KEY",
@@ -127,6 +133,7 @@ def _set_production_credentials(monkeypatch):
     monkeypatch.setenv("INSTAGRAM_ACCOUNT_ID", "account")
     monkeypatch.setenv("INSTAGRAM_ACCESS_TOKEN", "token")
     monkeypatch.setattr(produce_reel, "validate_carousel_production_preflight", lambda: {})
+    monkeypatch.setattr(produce_reel, "load_workflow_authorization", lambda **_: object())
 
 
 def test_produce_reel_cli_delegates_once_and_reports_success(monkeypatch, caplog):

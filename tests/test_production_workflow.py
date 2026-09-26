@@ -48,7 +48,7 @@ def _normalized(expression: str) -> str:
 
 def test_manual_dispatch_is_carousel_only_and_requires_exact_confirmation():
     dispatch = _workflow()["on"]["workflow_dispatch"]
-    assert set(dispatch["inputs"]) == {"confirm_publish"}
+    assert set(dispatch["inputs"]) == {"confirm_publish", "authorization_id"}
 
     confirmation = dispatch["inputs"]["confirm_publish"]
     assert confirmation["required"] is True
@@ -56,6 +56,8 @@ def test_manual_dispatch_is_carousel_only_and_requires_exact_confirmation():
     assert CONFIRMATION in confirmation["description"]
     assert "REAL Instagram carousel" in confirmation["description"]
     assert "default" not in confirmation
+    assert dispatch["inputs"]["authorization_id"]["required"] is True
+    assert "default" not in dispatch["inputs"]["authorization_id"]
 
 
 def test_job_condition_independently_gates_schedule_and_manual_publishing():
@@ -101,12 +103,15 @@ def test_production_workflow_retains_operational_safety_gates():
     job = _job()
     steps = _steps_by_name()
 
-    assert workflow["permissions"] == {"contents": "read"}
+    assert workflow["permissions"] == {"contents": "read", "actions": "read"}
     assert workflow["concurrency"] == {
         "group": "instagram-bot",
         "cancel-in-progress": False,
     }
     assert job["timeout-minutes"] == 45
+    assert "PRODUCTION_RERUN_PUBLICATION_BLOCKED" in steps[
+        "Block publication on GitHub reruns"
+    ]["run"]
     assert steps["Install dependencies"]["run"] == (
         "python -m pip install --require-hashes -r requirements-dev.lock"
     )
@@ -135,8 +140,15 @@ def test_production_workflow_sets_strict_rights_policy_and_fences_legacy_token()
     assert EXPECTED_PRODUCTION_SECRET_NAMES.issubset(publish_environment)
     assert validation_environment[RIGHTS_POLICY_VARIABLE] == PRODUCTION_RIGHTS_POLICY
     assert publish_environment[RIGHTS_POLICY_VARIABLE] == PRODUCTION_RIGHTS_POLICY
+    assert publish_environment["GITHUB_TOKEN"] == "${{ secrets.GITHUB_TOKEN }}"
+    assert publish_environment["ARTFOLIO_MANUAL_AUTHORIZATION_ID"] == (
+        "${{ vars.ARTFOLIO_MANUAL_AUTHORIZATION_ID }}"
+    )
+    assert publish_environment["ARTFOLIO_MANUAL_AUTHORIZATION_ISSUED_AT"] == (
+        "${{ vars.ARTFOLIO_MANUAL_AUTHORIZATION_ISSUED_AT }}"
+    )
     for variable in EXPECTED_PRODUCTION_SECRET_NAMES:
-        secret = "INSTAGRAM_ACCESS_TOKEN_V2" if variable == "INSTAGRAM_ACCESS_TOKEN" else variable
+        secret = "INSTAGRAM_PUBLICATION_ACCESS_TOKEN" if variable == "INSTAGRAM_ACCESS_TOKEN" else variable
         expected = "${{ secrets." + secret + " }}"
         assert validation_environment[variable] == expected
         assert publish_environment[variable] == expected

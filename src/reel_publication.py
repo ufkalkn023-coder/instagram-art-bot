@@ -6,6 +6,7 @@ from urllib.parse import urlsplit
 
 from src import history_tracker, instagram_poster, r2_media, reel_release
 from src.models import ReelPublicationRecord, ReelPublicationStatus
+from src.production_authorization import ProductionAuthorization
 
 
 logger = logging.getLogger(__name__)
@@ -29,19 +30,24 @@ def publish_verified_reel(
     reels_repository: str | Path,
     account_id: str,
     access_token: str,
+    authorization: ProductionAuthorization | None = None,
 ) -> ReelPublicationRecord:
     """Publish exactly one deeply verified release package as an Instagram Reel."""
     with reel_release.verified_reel_release_snapshot(
         release, reels_repository=reels_repository
     ) as verified:
+        authorization_kwargs = {"authorization": authorization} if authorization else {}
         return _publish_verified_snapshot(
-            verified, account_id=account_id, access_token=access_token
+            verified, account_id=account_id, access_token=access_token,
+            **authorization_kwargs,
         )
 
 
-def _publish_verified_snapshot(verified, *, account_id: str, access_token: str):
+def _publish_verified_snapshot(verified, *, account_id: str, access_token: str,
+                               authorization: ProductionAuthorization | None = None):
+    authorization_kwargs = {"authorization": authorization} if authorization else {}
     publication_id = history_tracker.reserve_reel(
-        verified.artwork_id, verified.release_identity
+        verified.artwork_id, verified.release_identity, **authorization_kwargs
     )
     try:
         upload = r2_media.stage_reel_mp4(str(verified.video_path), publication_id)

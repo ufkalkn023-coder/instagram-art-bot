@@ -153,7 +153,7 @@ def test_preflight_rejects_unresolved_live_ambiguity(monkeypatch):
         "reserved_at": "2026-09-23T12:00:00Z", "ambiguity_reason": "unknown",
     })
     _fake_store(monkeypatch, safety=publication_state.seal(state))
-    with pytest.raises(ProductionConfigurationError, match="Unresolved live feed"):
+    with pytest.raises(ProductionConfigurationError, match="STOP_AUTOMATED_PRODUCTION: unresolved_ambiguous"):
         production_config.validate_carousel_production_preflight()
 
 

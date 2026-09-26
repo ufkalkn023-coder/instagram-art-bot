@@ -16,7 +16,8 @@ from src.production_config import (
 WORKFLOWS = Path(__file__).resolve().parents[1] / ".github" / "workflows"
 PUBLICATION_WORKFLOWS = ("instagram_bot.yml", "instagram_reels.yml")
 LEGACY_SECRET = "${{ secrets.INSTAGRAM_ACCESS_TOKEN }}"
-PUBLICATION_SECRET = "${{ secrets.INSTAGRAM_ACCESS_TOKEN_V2 }}"
+RETIRED_V2_SECRET = "${{ secrets.INSTAGRAM_ACCESS_TOKEN_V2 }}"
+PUBLICATION_SECRET = "${{ secrets.INSTAGRAM_PUBLICATION_ACCESS_TOKEN }}"
 INSIGHTS_SECRET = "${{ secrets.INSTAGRAM_INSIGHTS_ACCESS_TOKEN }}"
 
 
@@ -30,7 +31,7 @@ def test_no_workflow_consumes_the_legacy_repository_secret():
 
 
 @pytest.mark.parametrize("name", PUBLICATION_WORKFLOWS)
-def test_every_publication_token_mapping_uses_v2_without_legacy_fallback(name: str):
+def test_every_publication_token_mapping_uses_new_namespace_without_fallback(name: str):
     workflow = _workflow(name)
     mappings = [
         step["env"]["INSTAGRAM_ACCESS_TOKEN"]
@@ -41,8 +42,15 @@ def test_every_publication_token_mapping_uses_v2_without_legacy_fallback(name: s
 
     assert mappings
     assert set(mappings) == {PUBLICATION_SECRET}
-    assert LEGACY_SECRET not in (WORKFLOWS / name).read_text(encoding="utf-8")
+    text = (WORKFLOWS / name).read_text(encoding="utf-8")
+    assert LEGACY_SECRET not in text
+    assert RETIRED_V2_SECRET not in text
     assert "INSTAGRAM_ACCESS_TOKEN" not in workflow.get("env", {})
+
+
+def test_no_current_workflow_uses_retired_v2_publication_secret():
+    for path in (*WORKFLOWS.glob("*.yml"), *WORKFLOWS.glob("*.yaml")):
+        assert RETIRED_V2_SECRET not in path.read_text(encoding="utf-8"), path.name
 
 
 def test_insights_token_mapping_is_separate_from_publication_and_legacy():
@@ -55,9 +63,10 @@ def test_insights_token_mapping_is_separate_from_publication_and_legacy():
     text = (WORKFLOWS / "instagram_insights.yml").read_text(encoding="utf-8")
     assert LEGACY_SECRET not in text
     assert PUBLICATION_SECRET not in text
+    assert RETIRED_V2_SECRET not in text
 
 
-def test_missing_v2_token_fails_publication_configuration_even_with_legacy_name():
+def test_missing_new_publication_token_fails_configuration_without_fallback():
     # A missing GitHub secret becomes an empty step environment value.
     environment = {"INSTAGRAM_ACCESS_TOKEN": ""}
     with pytest.raises(ProductionConfigurationError, match="INSTAGRAM_ACCESS_TOKEN"):

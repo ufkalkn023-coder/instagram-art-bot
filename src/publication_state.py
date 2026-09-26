@@ -8,6 +8,7 @@ import json
 import os
 from dataclasses import dataclass
 from typing import Any, Mapping
+from uuid import UUID
 
 import boto3
 from botocore.config import Config
@@ -122,6 +123,39 @@ def validate_safety_state(value: Any) -> PublicationSafetyState:
             model.active_publication_state.receipt_sync_pending
         )):
             raise StateValidationError("Duplicate pending receipt synchronization")
+        consumed_keys: set[str] = set()
+        for record in model.active_publication_state.consumed_authorizations:
+            if (not isinstance(record, dict)
+                    or set(record) != {"key", "run_id", "publication_id", "consumed_at"}
+                    or not isinstance(record["key"], str)
+                    or not record["key"].startswith(("manual:", "schedule:"))
+                    or not isinstance(record["run_id"], int)
+                    or isinstance(record["run_id"], bool)
+                    or record["run_id"] < 1
+                    or not isinstance(record["publication_id"], str)
+                    or not record["publication_id"]
+                    or not isinstance(record["consumed_at"], str)):
+                raise StateValidationError("Malformed consumed production authorization")
+            if record["key"].startswith("manual:"):
+                identifier = record["key"].removeprefix("manual:")
+                try:
+                    valid_key = str(UUID(identifier, version=4)) == identifier
+                except ValueError:
+                    valid_key = False
+            else:
+                valid_key = record["key"] == f"schedule:{record['run_id']}"
+            if not valid_key:
+                raise StateValidationError("Malformed consumed production authorization key")
+            try:
+                valid_publication_id = str(UUID(record["publication_id"])) == record["publication_id"]
+            except ValueError:
+                valid_publication_id = False
+            if not valid_publication_id:
+                raise StateValidationError("Malformed consumed production publication ID")
+            from src.history_tracker import _parse_reserved_at
+            if record["key"] in consumed_keys or _parse_reserved_at(record["consumed_at"]) is None:
+                raise StateValidationError("Duplicate or malformed consumed production authorization")
+            consumed_keys.add(record["key"])
         # Reuse the strict live validator. Reconstructed historical receipts never enter it.
         from src.history_tracker import validate_carousel_history_for_production
         validate_carousel_history_for_production(history_view(model))
@@ -240,10 +274,13 @@ def history_view(state: PublicationSafetyState) -> dict[str, Any]:
         "reel_publication_count": active.reel_publication_count,
         "staging_media_cleanup_queue": copy.deepcopy(active.staging_media_cleanup_queue),
         "reel_staging_cleanup_queue": copy.deepcopy(active.reel_staging_cleanup_queue),
+        "consumed_authorizations": copy.deepcopy(active.consumed_authorizations),
         "publications": copy.deepcopy(projection.publications),
         "grid_publication_count": projection.grid_publication_count,
         "active_color_tone": projection.active_color_tone,
-        "_safety_state": state.model_dump(mode="json"),
+        # The model may supply additive defaults absent from an older sealed
+        # payload. Re-seal this in-memory view before deriving the next CAS.
+        "_safety_state": seal(state.model_dump(mode="json")),
     }
 
 
@@ -300,6 +337,7 @@ def state_from_history(history: Mapping[str, Any]) -> dict[str, Any]:
                 "reel_publication_count", "staging_media_cleanup_queue",
                 "reel_staging_cleanup_queue"):
         active[key] = copy.deepcopy(history[key])
+    active["consumed_authorizations"] = copy.deepcopy(history.get("consumed_authorizations", []))
     for key in ("publications", "grid_publication_count", "active_color_tone"):
         projection[key] = copy.deepcopy(history[key])
     entries = value["published_artwork_protection"]["entries"]
@@ -490,6 +528,10 @@ class PublicationStateStore:
                 raise StateValidationError("Existing protection evidence is immutable")
         if candidate.recovery_quarantine != current.recovery_quarantine:
             raise StateValidationError("Recovery quarantine requires a reviewed migration")
+        old_authorizations = current.active_publication_state.consumed_authorizations
+        new_authorizations = candidate.active_publication_state.consumed_authorizations
+        if new_authorizations[:len(old_authorizations)] != old_authorizations:
+            raise StateValidationError("Consumed production authorizations are append-only")
         old_reservation_pairs = {
             (row["publication_id"], row["id"])
             for row in current.active_publication_state.posted_artworks

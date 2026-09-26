@@ -199,7 +199,9 @@ def test_carousel_finalizes_successful_publish_when_permalink_is_available_or_mi
     assert caption.count("Featured Title") == 8
     assert "1. Featured Title 1" in caption
     assert "8. Featured Title 8" in caption
-    assert "COVER IDENTITY" not in caption
+    assert "Cover Artwork\n\nCOVER IDENTITY TITLE — COVER IDENTITY ARTIST, 1499" in caption
+    assert "COVER IDENTITY MUSEUM" in caption
+    assert "1. COVER IDENTITY" not in caption
     assert caption.startswith("Women Reading\n")
     assert permalink_lookup_media_ids == ["media-1"]
     assert confirmed == [

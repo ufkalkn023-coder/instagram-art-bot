@@ -844,6 +844,7 @@ def test_reconcile_only_cli_reports_cleanup_failure_separately(monkeypatch):
 
 def test_startup_reconciliation_runs_before_new_acquisition(monkeypatch):
     events = []
+    monkeypatch.setattr(main, "load_workflow_authorization", lambda: object())
     monkeypatch.setattr(main, "validate_carousel_production_preflight", lambda: {})
     monkeypatch.setattr(
         main.publication_reconciliation,
@@ -860,7 +861,7 @@ def test_startup_reconciliation_runs_before_new_acquisition(monkeypatch):
     monkeypatch.setattr(
         main,
         "run_carousel_post",
-        lambda args: events.append("acquire"),
+        lambda args, authorization=None: events.append("acquire"),
     )
 
     assert main.main(["--mode", "carousel"]) == 0

@@ -51,6 +51,37 @@ def _client_error(code, status, operation="DeleteObject"):
     )
 
 
+def test_owned_prefix_inventory_is_read_only_and_bounded(monkeypatch):
+    _configure(monkeypatch)
+    calls = []
+
+    class Client:
+        def list_objects_v2(self, **kwargs):
+            calls.append(kwargs)
+            return {"CommonPrefixes": [
+                {"Prefix": "images/publications/publication-a/"},
+            ], "Contents": [], "IsTruncated": False}
+
+    monkeypatch.setattr(r2_media, "_get_s3_client", lambda *_: Client())
+    assert r2_media.list_owned_publication_ids() == {"publication-a"}
+    assert calls[0]["Prefix"] == "images/publications/"
+    assert calls[0]["Delimiter"] == "/"
+    assert len(calls) == 1
+
+
+def test_owned_prefix_inventory_refuses_orphans_and_failed_reads(monkeypatch):
+    _configure(monkeypatch)
+
+    class MalformedClient:
+        def list_objects_v2(self, **_kwargs):
+            return {"CommonPrefixes": [{"Prefix": "images/publications/bad/path/"}],
+                    "Contents": [], "IsTruncated": False}
+
+    monkeypatch.setattr(r2_media, "_get_s3_client", lambda *_: MalformedClient())
+    with pytest.raises(RuntimeError, match="STOP_AUTOMATED_PRODUCTION"):
+        r2_media.list_owned_publication_ids()
+
+
 def test_media_cleanup_never_uses_the_durable_state_bucket(monkeypatch):
     _configure(monkeypatch)
     monkeypatch.setenv("CLOUDFLARE_STATE_R2_BUCKET_NAME", "configured")

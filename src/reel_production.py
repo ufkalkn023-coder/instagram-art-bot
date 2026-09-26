@@ -17,6 +17,7 @@ from typing import Any, Callable, Mapping, Sequence
 
 from src import reel_batch_candidates, reel_candidate_acquisition, reel_publication
 from src.models import ReelPublicationRecord
+from src.production_authorization import ProductionAuthorization
 
 logger = logging.getLogger(__name__)
 
@@ -292,6 +293,7 @@ def produce_and_publish_reel(
     selection_target: int | str | None = None,
     environment: Mapping[str, str] | None = None,
     command_runner: Callable[..., Any] | None = None,
+    authorization: ProductionAuthorization | None = None,
 ) -> ReelPublicationOutcome:
     """Produce exactly one verified Reel and publish it once.
 
@@ -318,11 +320,13 @@ def produce_and_publish_reel(
         reels_repository=reels_repository,
         command_runner=command_runner,
     )
+    publication_kwargs = {"authorization": authorization} if authorization else {}
     publication = reel_publication.publish_verified_reel(
         release=stage.release_directory,
         reels_repository=reels_repository,
         account_id=account_id,
         access_token=access_token,
+        **publication_kwargs,
     )
     return ReelPublicationOutcome(
         canonical_id=stage.reel_id,

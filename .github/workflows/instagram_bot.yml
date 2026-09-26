@@ -9,9 +9,14 @@ name: Instagram Art Bot Scheduler
         description: "Type PUBLISH_TO_INSTAGRAM to create a REAL Instagram carousel"
         required: true
         type: string
+      authorization_id:
+        description: "Fresh operator-issued UUID matching ARTFOLIO_MANUAL_AUTHORIZATION_ID"
+        required: true
+        type: string
 
 permissions:
   contents: read
+  actions: read
 
 concurrency:
   group: instagram-bot
@@ -29,6 +34,13 @@ jobs:
     timeout-minutes: 45
 
     steps:
+      - name: Block publication on GitHub reruns
+        run: |
+          if [ "$GITHUB_RUN_ATTEMPT" != "1" ]; then
+            echo 'PRODUCTION_RERUN_PUBLICATION_BLOCKED' >&2
+            exit 1
+          fi
+
       - name: Checkout repository
         uses: actions/checkout@v5
         with:
@@ -59,7 +71,7 @@ jobs:
         env:
           ARTFOLIO_RIGHTS_POLICY: strict_public_domain
           INSTAGRAM_ACCOUNT_ID: ${{ secrets.INSTAGRAM_ACCOUNT_ID }}
-          INSTAGRAM_ACCESS_TOKEN: ${{ secrets.INSTAGRAM_ACCESS_TOKEN_V2 }}
+          INSTAGRAM_ACCESS_TOKEN: ${{ secrets.INSTAGRAM_PUBLICATION_ACCESS_TOKEN }}
           CLOUDFLARE_R2_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_R2_ACCOUNT_ID }}
           CLOUDFLARE_R2_ACCESS_KEY_ID: ${{ secrets.CLOUDFLARE_R2_ACCESS_KEY_ID }}
           CLOUDFLARE_R2_SECRET_ACCESS_KEY: ${{ secrets.CLOUDFLARE_R2_SECRET_ACCESS_KEY }}
@@ -72,9 +84,15 @@ jobs:
 
       - name: Fetch artwork, process image, and post to Instagram
         env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          ARTFOLIO_PRODUCTION_SCHEDULE_ENABLED: ${{ vars.ARTFOLIO_PRODUCTION_SCHEDULE_ENABLED }}
+          ARTFOLIO_CONFIRM_PUBLISH: ${{ inputs.confirm_publish }}
+          ARTFOLIO_AUTHORIZATION_ID: ${{ inputs.authorization_id }}
+          ARTFOLIO_MANUAL_AUTHORIZATION_ID: ${{ vars.ARTFOLIO_MANUAL_AUTHORIZATION_ID }}
+          ARTFOLIO_MANUAL_AUTHORIZATION_ISSUED_AT: ${{ vars.ARTFOLIO_MANUAL_AUTHORIZATION_ISSUED_AT }}
           ARTFOLIO_RIGHTS_POLICY: strict_public_domain
           INSTAGRAM_ACCOUNT_ID: ${{ secrets.INSTAGRAM_ACCOUNT_ID }}
-          INSTAGRAM_ACCESS_TOKEN: ${{ secrets.INSTAGRAM_ACCESS_TOKEN_V2 }}
+          INSTAGRAM_ACCESS_TOKEN: ${{ secrets.INSTAGRAM_PUBLICATION_ACCESS_TOKEN }}
           GOOGLE_GEMINI_API_KEY: ${{ secrets.GOOGLE_GEMINI_API_KEY }}
           SMITHSONIAN_API_KEY: ${{ secrets.SMITHSONIAN_API_KEY }}
           EUROPEANA_API_KEY: ${{ secrets.EUROPEANA_API_KEY }}
