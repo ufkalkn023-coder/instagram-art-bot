@@ -148,7 +148,7 @@ def test_production_workflow_sets_strict_rights_policy_and_fences_legacy_token()
         "${{ vars.ARTFOLIO_MANUAL_AUTHORIZATION_ISSUED_AT }}"
     )
     for variable in EXPECTED_PRODUCTION_SECRET_NAMES:
-        secret = "INSTAGRAM_ACCESS_TOKEN_V2" if variable == "INSTAGRAM_ACCESS_TOKEN" else variable
+        secret = "INSTAGRAM_PUBLICATION_ACCESS_TOKEN" if variable == "INSTAGRAM_ACCESS_TOKEN" else variable
         expected = "${{ secrets." + secret + " }}"
         assert validation_environment[variable] == expected
         assert publish_environment[variable] == expected

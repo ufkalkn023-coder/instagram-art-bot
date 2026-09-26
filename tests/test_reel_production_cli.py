@@ -82,7 +82,7 @@ def test_workflow_requires_all_publication_secrets():
     text = _workflow_text()
     for secret in (
         "INSTAGRAM_ACCOUNT_ID",
-        "INSTAGRAM_ACCESS_TOKEN_V2",
+        "INSTAGRAM_PUBLICATION_ACCESS_TOKEN",
         "CLOUDFLARE_R2_ACCOUNT_ID",
         "CLOUDFLARE_R2_ACCESS_KEY_ID",
         "CLOUDFLARE_R2_SECRET_ACCESS_KEY",

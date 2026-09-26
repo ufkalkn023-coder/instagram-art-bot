@@ -49,4 +49,7 @@ def test_insights_workflow_uses_separate_state_secrets_and_no_keychain():
     assert "${{ secrets.INSTAGRAM_ACCESS_TOKEN_V2 }}" not in Path(
         ".github/workflows/instagram_insights.yml"
     ).read_text()
+    assert "${{ secrets.INSTAGRAM_PUBLICATION_ACCESS_TOKEN }}" not in Path(
+        ".github/workflows/instagram_insights.yml"
+    ).read_text()
     assert "keychain" not in collector["run"].lower()
