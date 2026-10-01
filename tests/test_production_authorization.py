@@ -30,6 +30,7 @@ def _environment(event="workflow_dispatch", attempt="1"):
         "GITHUB_REPOSITORY": "ufkalkn023-coder/instagram-art-bot",
         "GITHUB_SHA": "a" * 40,
         "GITHUB_REF": "refs/heads/main",
+        "GITHUB_WORKFLOW_REF": "ufkalkn023-coder/instagram-art-bot/.github/workflows/instagram_bot.yml@refs/heads/main",
         "ARTFOLIO_CONFIRM_PUBLISH": "PUBLISH_TO_INSTAGRAM",
         "ARTFOLIO_AUTHORIZATION_ID": AUTH_ID,
         "ARTFOLIO_MANUAL_AUTHORIZATION_ID": AUTH_ID,
@@ -42,7 +43,7 @@ def _run(event="workflow_dispatch", attempt=1, created="2026-09-26T11:50:00Z"):
     return {
         "id": 987654, "run_attempt": attempt, "event": event,
         "head_sha": "a" * 40, "created_at": created,
-        "head_branch": "main",
+        "head_branch": "main", "path": ".github/workflows/instagram_bot.yml",
         "repository": {"full_name": "ufkalkn023-coder/instagram-art-bot"},
     }
 
@@ -216,3 +217,38 @@ def test_owned_success_retention_is_allowed_but_expired_or_orphan_media_blocks(m
             require_clear_publication_state(
                 _state(rows=[published, expired]), object(), owned_feed_ids=owned
             )
+
+
+@pytest.mark.parametrize(
+    "field,value",
+    [
+        ("event", "push"),
+        ("head_branch", "other"),
+        ("head_sha", "b" * 40),
+        ("path", ".github/workflows/instagram_reels.yml"),
+        ("run_attempt", True),
+    ],
+)
+def test_scheduled_feed_requires_immutable_workflow_identity(field, value):
+    run = _run("schedule")
+    run[field] = value
+    with pytest.raises(ProductionAuthorizationError):
+        validate_run(_environment("schedule"), run, now=NOW)
+
+
+def test_scheduled_feed_requires_exact_workflow_ref():
+    environment = _environment("schedule")
+    environment["GITHUB_WORKFLOW_REF"] = (
+        "ufkalkn023-coder/instagram-art-bot/.github/workflows/instagram_bot.yml@refs/heads/other"
+    )
+    with pytest.raises(ProductionAuthorizationError):
+        validate_run(environment, _run("schedule"), now=NOW)
+
+
+def test_boolean_github_run_id_is_not_an_authenticated_identity():
+    run = _run("schedule")
+    run["id"] = True
+    environment = _environment("schedule")
+    environment["GITHUB_RUN_ID"] = "1"
+    with pytest.raises(ProductionAuthorizationError):
+        validate_run(environment, run, now=NOW)

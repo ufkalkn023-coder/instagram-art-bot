@@ -39,6 +39,15 @@ class ProductionAuthorization:
     run_id: int
     created_at: datetime
     issued_at: datetime | None = None
+    head_sha: str | None = None
+    repository: str | None = None
+    workflow_path: str | None = None
+    run_attempt: int = 1
+    publication_kind: str = "carousel"
+
+    @property
+    def is_scheduled_feed(self) -> bool:
+        return self.key.startswith("schedule:") and self.publication_kind == "carousel"
 
     def require_fresh(self, now: datetime | None = None) -> None:
         now = now or datetime.now(timezone.utc)
@@ -68,9 +77,9 @@ def validate_run(
         run_id = int(environment.get("GITHUB_RUN_ID", ""))
     except ValueError as error:
         raise ProductionAuthorizationError("PRODUCTION_AUTHORIZATION_INVALID") from error
-    if attempt != 1 or run.get("run_attempt") != 1:
+    if attempt != 1 or type(run.get("run_attempt")) is not int or run.get("run_attempt") != 1:
         raise ProductionAuthorizationError("PRODUCTION_RERUN_PUBLICATION_BLOCKED")
-    if run_id < 1 or run.get("id") != run_id or run.get("event") != event:
+    if run_id < 1 or type(run.get("id")) is not int or run.get("id") != run_id or run.get("event") != event:
         raise ProductionAuthorizationError("PRODUCTION_AUTHORIZATION_INVALID")
     if run.get("head_sha") != environment.get("GITHUB_SHA"):
         raise ProductionAuthorizationError("PRODUCTION_AUTHORIZATION_INVALID")
@@ -93,7 +102,20 @@ def validate_run(
         )
         if environment.get(schedule_flag) != "true":
             raise ProductionAuthorizationError("PRODUCTION_AUTHORIZATION_INVALID")
-        authorization = ProductionAuthorization(f"schedule:{run_id}", run_id, created_at)
+        if publication_kind == "carousel":
+            from src.feed_schedule import FEED_REPOSITORY, FEED_WORKFLOW
+            if (repository != FEED_REPOSITORY or run.get("path") != FEED_WORKFLOW
+                    or environment.get("GITHUB_WORKFLOW_REF") != (
+                        f"{repository}/{FEED_WORKFLOW}@refs/heads/main"
+                    ) or not re.fullmatch(r"[0-9a-f]{40}", environment.get("GITHUB_SHA", ""))):
+                raise ProductionAuthorizationError("PRODUCTION_AUTHORIZATION_INVALID")
+        workflow_path = run.get("path")
+        authorization = ProductionAuthorization(
+            f"schedule:{run_id}", run_id, created_at, head_sha=environment.get("GITHUB_SHA"),
+            repository=repository,
+            workflow_path=workflow_path if isinstance(workflow_path, str) else None,
+            run_attempt=attempt, publication_kind=publication_kind,
+        )
     else:
         confirmation = (
             "PUBLISH_TO_INSTAGRAM" if publication_kind == "carousel"

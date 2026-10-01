@@ -22,6 +22,7 @@ from src import (
 )
 from src.carousel_caption import format_carousel_caption
 from src.production_authorization import ProductionAuthorization, load_workflow_authorization
+from src import feed_schedule
 from src.carousel_featured import (
     derive_carousel_featured_presentation,
     render_carousel_featured_artwork,
@@ -962,6 +963,8 @@ def run_carousel_post(args, authorization: ProductionAuthorization | None = None
         history_tracker.start_publication_attempt(
             plan.publication_ids, container_id, child_container_ids,
             expected_publication_id=publication_id,
+            **({"authorization": authorization} if authorization is not None
+               and authorization.is_scheduled_feed else {}),
         )
         publish_attempt_started = True
 
@@ -1091,6 +1094,9 @@ def main(argv: list[str] | None = None) -> int:
 
     existing_artifacts: set[Path] | None = None
     authorization: ProductionAuthorization | None = None
+    admitted_schedule = False
+    schedule_interrupted: str | None = None
+    result = 1
     try:
         if args.validate_production_config:
             optional_status = validate_production_configuration()
@@ -1191,6 +1197,9 @@ def main(argv: list[str] | None = None) -> int:
             logger.info("production_start mode=%s", mode.value)
             optional_status = validate_carousel_production_preflight()
             authorization = load_workflow_authorization()
+            if isinstance(authorization, ProductionAuthorization) and authorization.is_scheduled_feed:
+                feed_schedule.FeedScheduleManager().admit(authorization)
+                admitted_schedule = True
             logger.info(
                 "validation_complete config_only=false optional_integrations=%s",
                 ",".join(
@@ -1231,13 +1240,27 @@ def main(argv: list[str] | None = None) -> int:
 
         if not args.dry_run:
             logger.info("production_success mode=%s", mode.value)
-        return 0
+        result = 0
+    except (KeyboardInterrupt, SystemExit) as error:
+        schedule_interrupted = "CANCELLED"
+        logger.error("production_interrupted error=%s", type(error).__name__)
+        result = 1
     except Exception as error:
         logger.exception("production_failure error=%s", type(error).__name__)
-        return 1
+        result = 1
     finally:
+        if admitted_schedule:
+            try:
+                feed_schedule.FeedScheduleManager().record_outcome(
+                    authorization, interrupted=schedule_interrupted,
+                )
+            except Exception:
+                logger.exception("schedule_outcome_persistence_failed scheduling_remains_paused")
+                result = 1
         if existing_artifacts is not None:
             _cleanup_new_generated_artifacts(existing_artifacts)
+
+    return result
 
 if __name__ == "__main__":
     sys.exit(main())

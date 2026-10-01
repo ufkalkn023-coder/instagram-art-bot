@@ -57,15 +57,15 @@ Format policy, temanın istediği bilinçli benzerliği istenmeyen tekrardan ay�
 
 ## Zamanlama ve GitHub Actions
 
-Workflow her gün dört UTC slotunda carousel çalıştırır:
+Workflow her gün 17:17 UTC’de tek bir Feed uygunluk olayı oluşturur:
 
 ```text
-carousel: 0 5,10,15,20 * * *
+carousel: 17 17 * * *
 ```
 
-GitHub Actions cron ifadeleri UTC’dir. Slotlar `slot_1=05:00`, `slot_2=10:00`, `slot_3=15:00`, `slot_4=20:00` olarak experiment metadata'sına yazılır.
+GitHub Actions cron ifadeleri UTC’dir. Experiment metadata’sındaki dört legacy zaman bucket’ı korunur; bunlar publication izni veya cron sıklığı değildir.
 
-Scheduled invocation açıkça `python main.py --mode carousel` çalıştırır. Scheduled production varsayılan olarak kapalıdır; yalnız repository Actions variable `ARTFOLIO_PRODUCTION_SCHEDULE_ENABLED` tam olarak `true` olduğunda publish job’ı çalışır. Değişkenin eksik olması veya farklı bir değer taşıması fail-closed davranır.
+Scheduled invocation açıkça `python main.py --mode carousel` çalıştırır. Scheduled production varsayılan olarak kapalıdır; repository Actions variable `ARTFOLIO_PRODUCTION_SCHEDULE_ENABLED` tam olarak `true` olduğunda publish job’ı çalışabilir. Feed publication ayrıca tek slotluk durable Stage B permit ve 48 saatlik completion gate gerektirir. Değişkenin eksik olması veya farklı bir değer taşıması fail-closed davranır.
 
 Workflow manuel olarak da **Actions → Instagram Art Bot Scheduler → Run workflow** üzerinden başlatılabilir. Manuel yol da yalnız carousel yayınlar; `confirm_publish` alanı tam olarak `PUBLISH_TO_INSTAGRAM` olmalıdır. Operatör her yeni publication izni için rastgele bir UUIDv4 üretir, repository Actions variable `ARTFOLIO_MANUAL_AUTHORIZATION_ID` olarak ayarlar, aynı anda `ARTFOLIO_MANUAL_AUTHORIZATION_ISSUED_AT` değerini UTC ISO-8601 zaman damgası olarak ayarlar ve UUID'yi `authorization_id` dispatch alanına girer. Reel manuel dispatch'i aynı iki variable'ı ve kendi `PUBLISH_REEL_TO_INSTAGRAM` onayını kullanır. Tek bir UUID, Feed veya Reel tarafında yalnız bir reservation CAS yazısında tüketilebilir; ikinci dispatch aynı UUID'yi yeniden kullanamaz. İzin verildikten sonra iki variable yeniden güncellenmeden başka manuel publication yapılamaz.
 
@@ -433,3 +433,19 @@ Insights lane: owned media GET → association → append-only R2 snapshots
 ├── pytest.ini                           # Pytest import-path configuration
 └── README.md
 ```
+
+## Stage B scheduled Feed hardening
+
+Stage A is complete; Stage B remains disabled. Feed has one daily eligibility event
+at 17:17 UTC (`17 17 * * *`). Publication additionally requires a finite, operator-armed
+durable permit for the exact main SHA and one original scheduled run. Successful Feed
+completions must be at least 48 hours apart. Admission immediately pauses scheduling;
+every outcome requires operator review and a separate new permit. There is no catch-up,
+automatic rearm or replacement after failure. Manual Feed authorization and Reel remain
+compatible. Legacy state loads normally, but missing Stage B control blocks scheduled Feed.
+
+See [Stage B control and operator procedures](docs/STAGE-B-SCHEDULE.md) for the CAS
+operator tool, future separately authorized PAUSED migration and emergency stop.
+Turning the scheduler variable off does **not** stop a job already running. No production
+migration, scheduler enablement, workflow enablement or Instagram publication is
+authorized by this change.
