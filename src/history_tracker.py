@@ -575,6 +575,7 @@ def _conditional_publication_update(
     ]
     | None = None,
     expected_publication_id: str | None = None,
+    before_mutation: Callable[[Dict[str, Any], str, list[Dict[str, Any]]], None] | None = None,
 ) -> _MutationResult:
     """Reload and re-evaluate bounded lifecycle writes after an ETag conflict."""
     canonical_ids = tuple(normalize_artwork_id(value) for value in artwork_ids)
@@ -589,6 +590,8 @@ def _conditional_publication_update(
         if expected_publication_id is not None and publication_id != expected_publication_id:
             raise RuntimeError("Publication reservation was replaced")
         try:
+            if before_mutation is not None:
+                before_mutation(history, publication_id, records)
             result, changed = mutation(publication_id, records)
             if changed and history_mutation is not None:
                 history_mutation(history, publication_id, records)
@@ -2063,6 +2066,10 @@ def _require_production_authorization(
            for item in history["consumed_authorizations"]):
         raise ProductionAuthorizationError("PRODUCTION_AUTHORIZATION_ALREADY_CONSUMED")
     receipts, _ = publication_state.PublicationStateStore().load_receipts()
+    if authorization.is_scheduled_feed:
+        from src.feed_schedule import require_owner, require_cooldown
+        require_owner(safety, authorization, status="ADMITTED", now=now)
+        require_cooldown(safety, receipts, now)
     require_clear_publication_state(
         safety, receipts,
         owned_feed_ids=r2_media.list_owned_publication_ids(),
@@ -2184,6 +2191,9 @@ def reserve_carousel(
             )
         )
 
+    if authorization is not None and authorization.is_scheduled_feed:
+        from src.feed_schedule import reserve_in_history
+        reserve_in_history(history, authorization, publication_id, now)
     _upload_history(history, etag)
     logger.info(
         "Reserved carousel publication=%s cover=%s featured=%s in one R2 write.",
@@ -2200,6 +2210,7 @@ def start_publication_attempt(
     child_container_ids: Sequence[str] = (),
     *,
     expected_publication_id: str | None = None,
+    authorization: ProductionAuthorization | None = None,
 ) -> int:
     """Persist the irreversible boundary and its container evidence atomically."""
     if not isinstance(container_id, str) or not container_id:
@@ -2212,6 +2223,8 @@ def start_publication_attempt(
     def mutation(publication_id, records):
         existing_status = _uniform_status(records)
         if existing_status is PublicationStatus.PUBLISHING:
+            if authorization is not None and authorization.is_scheduled_feed:
+                raise ProductionAuthorizationError("SCHEDULE_PUBLISH_BOUNDARY_ALREADY_CONSUMED")
             existing_containers = {record.get("container_id") for record in records}
             existing_children = {
                 tuple(record.get("child_container_ids", ())) for record in records
@@ -2236,8 +2249,13 @@ def start_publication_attempt(
         )
         return len(records), True
 
+    def schedule_boundary(history, publication_id, records):
+        from src.feed_schedule import before_publish_in_history
+        before_publish_in_history(history, publication_id, authorization, datetime.now(timezone.utc))
+
     return _conditional_publication_update(
-        artwork_ids, mutation, expected_publication_id=expected_publication_id
+        artwork_ids, mutation, expected_publication_id=expected_publication_id,
+        before_mutation=schedule_boundary,
     )
 
 

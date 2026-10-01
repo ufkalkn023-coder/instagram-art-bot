@@ -1,5 +1,5 @@
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timedelta
 from enum import Enum
 import re
 from typing import Any, Literal, Optional
@@ -321,6 +321,231 @@ class OperationalProjection(_StrictStateModel):
     active_color_tone: str
 
 
+class FeedScheduleOutcome(_StrictStateModel):
+    classification: Literal[
+        "SUCCESS", "DEFINITIVE_FAILURE", "AMBIGUOUS", "CANCELLED", "INCOMPLETE"
+    ]
+    recorded_at: str
+    safety_generation: int = Field(ge=1)
+    receipt_generation: int = Field(ge=1)
+    publication_id: str | None
+    instagram_media_id: str | None
+    cleanup_pending: bool
+    reconciliation_pending: bool
+
+    @field_validator("recorded_at")
+    @classmethod
+    def utc_timestamp(cls, value: str) -> str:
+        if not value.endswith("Z"):
+            raise ValueError("schedule timestamps require UTC Z")
+        parse_receipt_occurrence(value)
+        return value
+
+
+GITHUB_TERMINAL_CONCLUSIONS = frozenset(
+    {
+        "action_required",
+        "cancelled",
+        "failure",
+        "neutral",
+        "skipped",
+        "stale",
+        "success",
+        "timed_out",
+    }
+)
+
+
+class FeedScheduleReview(_StrictStateModel):
+    reviewed_at: str
+    evidence_ref: str = Field(min_length=1)
+    # Complete authenticated GitHub slot audit, including pre-admission failures.
+    run_ids: list[int]
+    conclusions: list[str]
+
+    @model_validator(mode="after")
+    def valid_review(self):
+        FeedScheduleOutcome.utc_timestamp(self.reviewed_at)
+        if (
+            len(self.run_ids) != len(set(self.run_ids))
+            or any(run_id < 1 for run_id in self.run_ids)
+            or len(self.run_ids) != len(self.conclusions)
+            or any(item not in GITHUB_TERMINAL_CONCLUSIONS for item in self.conclusions)
+        ):
+            raise ValueError("invalid schedule review evidence")
+        return self
+
+
+class FeedSchedulePermit(_StrictStateModel):
+    permit_id: str
+    slot_at: str
+    expires_at: str
+    approved_sha: str = Field(pattern=r"^[0-9a-f]{40}$")
+    created_at: str
+    approval_ref: str = Field(min_length=1)
+    status: Literal[
+        "ARMED",
+        "ADMITTED",
+        "RESERVED",
+        "PUBLISHING",
+        "SUCCESS",
+        "DEFINITIVE_FAILURE",
+        "AMBIGUOUS",
+        "CANCELLED",
+        "INCOMPLETE",
+        "EXPIRED",
+        "REVOKED",
+    ]
+    revoked_at: str | None = None
+    owner_run_id: int | None = Field(default=None, ge=1)
+    owner_run_attempt: int | None = None
+    authorization_key: str | None = None
+    admitted_at: str | None = None
+    publication_id: str | None = None
+    reservation_generation: int | None = Field(default=None, ge=1)
+    outcome: FeedScheduleOutcome | None = None
+    acknowledgement: FeedScheduleReview | None = None
+
+    @model_validator(mode="after")
+    def consistent_permit(self):
+        if str(UUID(self.permit_id, version=4)) != self.permit_id:
+            raise ValueError("permit ID requires UUIDv4")
+        for value in (
+            self.slot_at,
+            self.expires_at,
+            self.created_at,
+            self.admitted_at,
+            self.revoked_at,
+        ):
+            if value is not None:
+                FeedScheduleOutcome.utc_timestamp(value)
+        slot = parse_receipt_occurrence(self.slot_at)
+        expiry = parse_receipt_occurrence(self.expires_at)
+        created = parse_receipt_occurrence(self.created_at)
+        if (slot.hour, slot.minute, slot.second, slot.microsecond) != (
+            17,
+            17,
+            0,
+            0,
+        ) or not created < slot < expiry <= slot + timedelta(minutes=60):
+            raise ValueError("permit requires one finite future daily UTC slot")
+        owned = self.owner_run_id is not None
+        if owned:
+            if (
+                self.owner_run_attempt != 1
+                or type(self.owner_run_attempt) is not int
+                or self.authorization_key != f"schedule:{self.owner_run_id}"
+                or self.admitted_at is None
+                or not slot <= parse_receipt_occurrence(self.admitted_at) < expiry
+            ):
+                raise ValueError("invalid admitted schedule ownership")
+        elif any(
+            value is not None
+            for value in (
+                self.owner_run_attempt,
+                self.authorization_key,
+                self.admitted_at,
+                self.publication_id,
+                self.reservation_generation,
+                self.outcome,
+            )
+        ):
+            raise ValueError("unowned permit carries attempt evidence")
+        if self.status in {"ARMED", "EXPIRED", "REVOKED"} and owned:
+            raise ValueError("unconsumed status carries owner")
+        if self.status not in {"ARMED", "EXPIRED", "REVOKED"} and not owned:
+            raise ValueError("attempt status requires owner")
+        if (self.publication_id is None) != (self.reservation_generation is None):
+            raise ValueError("reservation evidence is incomplete")
+        if (
+            self.publication_id is not None
+            and str(UUID(self.publication_id)) != self.publication_id
+        ):
+            raise ValueError("invalid scheduled publication ID")
+        if (
+            self.status in {"RESERVED", "PUBLISHING", "SUCCESS", "AMBIGUOUS"}
+            and self.publication_id is None
+        ):
+            raise ValueError("scheduled lifecycle requires reservation")
+        terminal = self.status in {
+            "SUCCESS",
+            "DEFINITIVE_FAILURE",
+            "AMBIGUOUS",
+            "CANCELLED",
+            "INCOMPLETE",
+        }
+        if terminal != (self.outcome is not None):
+            raise ValueError("terminal scheduled status requires outcome")
+        if self.outcome is not None and (
+            self.outcome.classification != self.status
+            or self.outcome.publication_id != self.publication_id
+            or parse_receipt_occurrence(self.outcome.recorded_at)
+            < parse_receipt_occurrence(self.admitted_at)
+        ):
+            raise ValueError("scheduled outcome differs from owner lifecycle")
+        if self.status == "SUCCESS" and (
+            self.outcome.instagram_media_id is None
+            or self.outcome.reconciliation_pending
+        ):
+            raise ValueError("success requires completion evidence")
+        if self.acknowledgement is not None and (
+            self.status in {"ARMED", "ADMITTED", "RESERVED", "PUBLISHING"}
+            or parse_receipt_occurrence(self.acknowledgement.reviewed_at) < expiry
+        ):
+            raise ValueError("review requires a closed slot and terminal outcome")
+        return self
+
+
+class FeedScheduleControl(_StrictStateModel):
+    schema_version: Literal[1]
+    paused: bool
+    pause_reason: str = Field(min_length=1)
+    latest_successful_feed_at: str
+    latest_successful_feed_id: str = Field(min_length=1)
+    next_eligible_at: str
+    permits: list[FeedSchedulePermit] = Field(default_factory=list)
+
+    @model_validator(mode="before")
+    @classmethod
+    def strict_version(cls, value):
+        if isinstance(value, dict) and type(value.get("schema_version")) is not int:
+            raise ValueError("schedule version must be an integer")
+        return value
+
+    @model_validator(mode="after")
+    def consistent_control(self):
+        FeedScheduleOutcome.utc_timestamp(self.latest_successful_feed_at)
+        FeedScheduleOutcome.utc_timestamp(self.next_eligible_at)
+        if parse_receipt_occurrence(self.next_eligible_at) != (
+            parse_receipt_occurrence(self.latest_successful_feed_at)
+            + timedelta(hours=48)
+        ):
+            raise ValueError("next eligibility must follow completion by 48 hours")
+        if len({p.permit_id for p in self.permits}) != len(self.permits):
+            raise ValueError("duplicate permit ID")
+        owners = [p.owner_run_id for p in self.permits if p.owner_run_id is not None]
+        if len(owners) != len(set(owners)):
+            raise ValueError("scheduled run reuse")
+        for prior, following in zip(self.permits, self.permits[1:]):
+            if (
+                prior.acknowledgement is None
+                or parse_receipt_occurrence(following.created_at)
+                < parse_receipt_occurrence(prior.acknowledgement.reviewed_at)
+                or parse_receipt_occurrence(following.slot_at)
+                <= parse_receipt_occurrence(prior.expires_at)
+            ):
+                raise ValueError(
+                    "new permit requires review of the previous closed slot"
+                )
+        if not self.paused and (
+            not self.permits
+            or self.permits[-1].status != "ARMED"
+            or self.permits[-1].revoked_at is not None
+        ):
+            raise ValueError("only an armed permit may unpause admission")
+        return self
+
+
 class PublicationSafetyState(_StrictStateModel):
     schema_version: Literal[2]
     state_epoch: str
@@ -330,6 +555,7 @@ class PublicationSafetyState(_StrictStateModel):
     active_publication_state: ActivePublicationState
     operational_projection: OperationalProjection
     payload_sha256: str
+    feed_schedule_control: FeedScheduleControl | None = None
 
     @model_validator(mode="after")
     def validate_epoch(self):

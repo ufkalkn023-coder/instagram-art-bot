@@ -10,7 +10,7 @@ WORKFLOW_PATH = REPOSITORY_ROOT / ".github" / "workflows" / "instagram_bot.yml"
 JOB_NAME = "post-to-instagram"
 SCHEDULE_FLAG = "ARTFOLIO_PRODUCTION_SCHEDULE_ENABLED"
 CONFIRMATION = "PUBLISH_TO_INSTAGRAM"
-CAROUSEL_CRON = "0 5,10,15,20 * * *"
+CAROUSEL_CRON = "17 17 * * *"
 EXPECTED_PRODUCTION_SECRET_NAMES = {
     "INSTAGRAM_ACCOUNT_ID",
     "INSTAGRAM_ACCESS_TOKEN",
@@ -81,10 +81,10 @@ def test_job_condition_independently_gates_schedule_and_manual_publishing():
     assert "schedule" not in manual_branch
 
 
-def test_schedule_has_exactly_four_daily_utc_carousel_runs():
+def test_schedule_has_one_daily_utc_eligibility_event():
     schedules = _workflow()["on"]["schedule"]
     assert schedules == [{"cron": CAROUSEL_CRON}]
-    assert CAROUSEL_CRON.split()[1].split(",") == ["5", "10", "15", "20"]
+    assert CAROUSEL_CRON.split() == ["17", "17", "*", "*", "*"]
 
     publish = _steps_by_name()["Fetch artwork, process image, and post to Instagram"]
     assert publish["run"] == "python main.py --mode carousel"

@@ -2,7 +2,7 @@ name: Instagram Art Bot Scheduler
 
 "on":
   schedule:
-    - cron: "0 5,10,15,20 * * *"
+    - cron: "17 17 * * *"
   workflow_dispatch: # Allows manual trigger from GitHub Actions tab
     inputs:
       confirm_publish:

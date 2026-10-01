@@ -156,6 +156,26 @@ def validate_safety_state(value: Any) -> PublicationSafetyState:
             if record["key"] in consumed_keys or _parse_reserved_at(record["consumed_at"]) is None:
                 raise StateValidationError("Duplicate or malformed consumed production authorization")
             consumed_keys.add(record["key"])
+        control = model.feed_schedule_control
+        if control is not None:
+            for permit in control.permits:
+                if permit.outcome is not None and permit.outcome.safety_generation > model.generation:
+                    raise StateValidationError("Scheduled outcome references a future state generation")
+                if permit.status == "SUCCESS":
+                    event = next((p for p in model.operational_projection.publications
+                                  if p["id"] == permit.publication_id), None)
+                    rows = [r for r in model.active_publication_state.posted_artworks
+                            if r["publication_id"] == permit.publication_id]
+                    if (event is None or event["media_id"] != permit.outcome.instagram_media_id
+                            or not rows or {r["status"] for r in rows} != {"PUBLISHED"}):
+                        raise StateValidationError("Scheduled success lacks exact finalized publication")
+                if permit.publication_id is not None:
+                    authorization = next((a for a in model.active_publication_state.consumed_authorizations
+                                          if a["publication_id"] == permit.publication_id), None)
+                    if (authorization is None or authorization["key"] != permit.authorization_key
+                            or authorization["run_id"] != permit.owner_run_id
+                            or permit.reservation_generation > model.generation):
+                        raise StateValidationError("Scheduled reservation lacks exact consumed authorization")
         # Reuse the strict live validator. Reconstructed historical receipts never enter it.
         from src.history_tracker import validate_carousel_history_for_production
         validate_carousel_history_for_production(history_view(model))
@@ -275,6 +295,7 @@ def history_view(state: PublicationSafetyState) -> dict[str, Any]:
         "staging_media_cleanup_queue": copy.deepcopy(active.staging_media_cleanup_queue),
         "reel_staging_cleanup_queue": copy.deepcopy(active.reel_staging_cleanup_queue),
         "consumed_authorizations": copy.deepcopy(active.consumed_authorizations),
+        "feed_schedule_control": state.feed_schedule_control.model_dump(mode="json") if state.feed_schedule_control else None,
         "publications": copy.deepcopy(projection.publications),
         "grid_publication_count": projection.grid_publication_count,
         "active_color_tone": projection.active_color_tone,
@@ -333,6 +354,8 @@ def state_from_history(history: Mapping[str, Any]) -> dict[str, Any]:
     value = prior.model_dump(mode="json")
     active = value["active_publication_state"]
     projection = value["operational_projection"]
+    if "feed_schedule_control" in history:
+        value["feed_schedule_control"] = copy.deepcopy(history["feed_schedule_control"])
     for key in ("posted_artworks", "reel_reservations", "reel_publications",
                 "reel_publication_count", "staging_media_cleanup_queue",
                 "reel_staging_cleanup_queue"):
@@ -375,6 +398,16 @@ def state_from_history(history: Mapping[str, Any]) -> dict[str, Any]:
     active["receipt_sync_pending"] = sorted(
         set(active["receipt_sync_pending"]) | (new_published - old_published)
     )
+    control = value.get("feed_schedule_control")
+    if control is not None:
+        from src.feed_schedule import COOLDOWN, stamp
+        from src.models import parse_receipt_occurrence
+        for event in projection["publications"]:
+            completed = parse_receipt_occurrence(event["posted_at"])
+            if completed > parse_receipt_occurrence(control["latest_successful_feed_at"]):
+                control["latest_successful_feed_at"] = stamp(completed)
+                control["latest_successful_feed_id"] = event["id"]
+                control["next_eligible_at"] = stamp(completed + COOLDOWN)
     value["generation"] += 1
     result = seal(value)
     validate_safety_state(result)
@@ -528,6 +561,23 @@ class PublicationStateStore:
                 raise StateValidationError("Existing protection evidence is immutable")
         if candidate.recovery_quarantine != current.recovery_quarantine:
             raise StateValidationError("Recovery quarantine requires a reviewed migration")
+        from src.feed_schedule import require_control_update, initial_control
+        require_control_update(current.feed_schedule_control, candidate.feed_schedule_control)
+        if current.feed_schedule_control is None and candidate.feed_schedule_control is not None:
+            ledger, _ = self.load_receipts()
+            if candidate.feed_schedule_control != initial_control(current, ledger):
+                raise StateValidationError("Schedule initialization requires exact completion evidence")
+        old_control, new_control = current.feed_schedule_control, candidate.feed_schedule_control
+        if old_control is not None and new_control is not None and (
+            old_control.latest_successful_feed_at != new_control.latest_successful_feed_at
+            or old_control.latest_successful_feed_id != new_control.latest_successful_feed_id
+        ):
+            from src.models import parse_receipt_occurrence
+            event = next((p for p in candidate.operational_projection.publications
+                          if p["id"] == new_control.latest_successful_feed_id), None)
+            if (event is None or parse_receipt_occurrence(event["posted_at"])
+                    != parse_receipt_occurrence(new_control.latest_successful_feed_at)):
+                raise StateValidationError("Successful Feed clock requires exact finalized completion")
         old_authorizations = current.active_publication_state.consumed_authorizations
         new_authorizations = candidate.active_publication_state.consumed_authorizations
         if new_authorizations[:len(old_authorizations)] != old_authorizations:
