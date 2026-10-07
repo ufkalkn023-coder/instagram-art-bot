@@ -429,6 +429,8 @@ def iter_single_post_candidates(
     *,
     max_candidates: int,
     selection_run_seed: SelectionRunSeed | None = None,
+    engagement_model: "EngagementModel | None" = None,
+    engagement_context: Mapping[str, object] | None = None,
 ) -> Iterator[Dict[str, Any]]:
     """
     Yield securely validated single-post candidates in deterministic score order.
@@ -449,6 +451,9 @@ def iter_single_post_candidates(
     museum_weights = getattr(config, "MUSEUM_SOURCE_WEIGHTS", DEFAULT_WEIGHTS)
     min_score = getattr(config, "MIN_QUALITY_SCORE", 50)
     selection_run_seed = selection_run_seed or resolve_selection_run_seed()
+    exploration_selected = (engagement_model.exploration_selected(selection_run_seed.value)
+                            if engagement_model is not None else False)
+    learning_components = {}
     logger.info(
         "selection_seed source=%s fingerprint=%s",
         selection_run_seed.source,
@@ -721,6 +726,24 @@ def iter_single_post_candidates(
                 validation_result.reason,
             )
 
+    if engagement_model is not None and engagement_model.can_influence_selection(
+        exploration_selected=exploration_selected
+    ):
+        for candidate, _, published_features in validated_finalists:
+            features = {
+                "id": candidate.canonical_id, "artist": candidate.artist_name,
+                "museum": candidate.museum_name, "source": candidate.source,
+                "region": normalize_region(candidate.region),
+                "period": getattr(candidate, "_diversity_features", {}).get("period"),
+                **single_diversity_history_metadata(published_features),
+            }
+            prediction = engagement_model.score_candidate(features, engagement_context or {})
+            components = engagement_model.blend_candidate_score(
+                quality_editorial_score=candidate.selection_score,
+                prediction=prediction, exploration_selected=exploration_selected,
+            )
+            candidate.selection_score = components.final_score
+            learning_components[candidate.canonical_id] = components
     validated_finalists.sort(
         key=lambda item: (-item[0].selection_score, item[0].canonical_id)
     )
@@ -779,6 +802,10 @@ def iter_single_post_candidates(
                 "date": best_candidate.creation_date,
                 "museum": best_candidate.museum_name,
                 "image_url": best_candidate.image_url,
+                "source": best_candidate.source,
+                "is_public_domain": best_candidate.is_public_domain,
+                "rights_status": best_candidate.rights_status,
+                "license": best_candidate.license,
                 "local_image_path": config.OUTPUT_RAW_IMAGE_PATH, # Pass the local path down
                 "image_width": best_candidate.image_width,
                 "image_height": best_candidate.image_height,
@@ -796,6 +823,15 @@ def iter_single_post_candidates(
                 "period": features.get("period", "unknown"),
                 "region": normalize_region(best_candidate.region),
                 **single_diversity_history_metadata(published_features),
+                **({
+                    "engagement_applied": True,
+                    "learned_score": learning_components[best_candidate.canonical_id].learned_score,
+                    "engagement_confidence": learning_components[best_candidate.canonical_id].engagement_confidence,
+                    "quality_component": learning_components[best_candidate.canonical_id].quality_component,
+                    "engagement_component": learning_components[best_candidate.canonical_id].engagement_component,
+                    "exploration_component": learning_components[best_candidate.canonical_id].exploration_component,
+                    "exploration_selected": exploration_selected,
+                } if best_candidate.canonical_id in learning_components else {}),
             }
             if observability.selected >= max_candidates:
                 return

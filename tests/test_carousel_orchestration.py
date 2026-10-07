@@ -396,7 +396,7 @@ def test_registry_title_and_explicit_query_flow_through_carousel_boundaries(monk
 
 
 def test_main_no_longer_owns_a_hardcoded_random_theme_list():
-    source = inspect.getsource(main.run_carousel_post)
+    source = inspect.getsource(main.prepare_carousel_content)
 
     assert "random.choice" not in source
     assert "themes =" not in source

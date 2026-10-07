@@ -27,6 +27,22 @@ def _check(status: Status) -> CheckResult:
     return CheckResult(status, status.value.lower())
 
 
+def test_single_only_learning_is_operational_and_reports_format_confidence(monkeypatch):
+    from tests.test_feed_learning import dataset, NOW
+    from src.engagement_learning import analyze_engagement_learning
+
+    history, snapshots = dataset()
+    history["publications"] = history["publications"][-1:]
+    monkeypatch.setattr(doctor, "analyze_engagement_learning",
+                        lambda history, snapshots: analyze_engagement_learning(history, snapshots, now=NOW))
+    result = doctor.check_engagement_learning(doctor.ProductionData(history=history, snapshots=tuple(snapshots[-1:])))
+    assert result.details["usable_publications"] == 1
+    assert "operational" in result.summary
+    assert all(issue.code != "ENGAGEMENT_PIPELINE_BROKEN" for issue in result.issues)
+    assert result.details["by_format"]["single"]["usable_publications"] == 1
+    assert result.details["by_format"]["carousel"]["global_confidence"] == 0
+
+
 def _credential_context(*, role_collision: bool = False) -> CredentialContext:
     collector_status = {
         variable: True for variable in credential_variables(COLLECTOR_PROFILE)

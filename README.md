@@ -174,6 +174,8 @@ Mevcut günlük Insights workflow'u 03:00 UTC cron’unda çalışır. Analytics
 
 Feed koşusu R2 history ile bütün `insights/YYYY-MM.json` partition'larını best-effort okur. Aynı publication için sırasıyla 72h, 168h ve 24h snapshot'ı seçilir; 1h/6h yalnız telemetry'dir. Share/save/comment/like oranları ve reach signal, account baseline'ına göre winsorize edilmiş bounded log normalization'dan geçer. Düşük reach, eksik metrik, 24h provisional maturity ve 180 günlük recency half-life effective weight'i azaltır. Artist, artist group, region, style/period, semantic family, museum/source, visual özellik, theme/format/count, cover/hook, slot/weekday ve preceding-post distance feature'ları global ortalamaya sample-size-aware shrink edilir. Model confidence sıfırdan kademeli büyür; cold start mevcut quality/editorial sıralamasını korur. Yaklaşık %10 seeded exploration yalnız normal teknik/kalite gate'lerinden geçmiş novelty adaylarına ayrılır.
 
+`engagement_rates_v3`, carousel ve tekli gönderiler için ayrı modeller kurar. Her format kendi observation, normalization ve confidence değerlerini kullanır; tekli gönderi sonucu carousel sıralamasını değiştirmez. `publication_format` özelliği carousel'in editoryal `carousel_format` alanından ayrıdır. Audit ve doctor toplam kullanılabilir Feed verisini ve format bazında confidence/etkiyi gösterir; toplam confidence yalnız tanı amaçlıdır. Mevcut temporal backtest carousel kapsamını korur; tekli gönderilere özel temporal değerlendirme henüz eklenmedi.
+
 Learning funnel'ını Instagram veya R2 verisini değiştirmeden incelemek için:
 
 ```console
@@ -188,6 +190,33 @@ python3 scripts/audit_engagement_learning.py --verbose
 Komut publication/media identity eşleşmelerini, 24h/72h/168h coverage'ını, exclusion nedenlerini, seçilen slotları, reach dağılımını, maturity durumunu, effective observation toplamını ve global confidence'ı raporlar. `--verbose` publication kimliklerini hash'leyerek her observation weight faktörünü gösterir. Production R2’den okurken audit yalnız `GetObject` ve `ListObjectsV2` yollarını kullanır; `PutObject`, `DeleteObject` veya başka bir write yolu çağırmaz. `--history` ve `--snapshots` birlikte yerel dosya gösterdiğinde Keychain’e erişmez.
 
 Her kesinleşen carousel `selection_model_version`, `engagement_model_version`, `carousel_theme`, `carousel_format`, `featured_count`, `cover_variant`, `caption_hook_type`, `publish_slot`, `exploration_selected`, `learned_score`, `engagement_confidence`, `quality_component`, `engagement_component`, `diversity_component`, `exploration_component` ve varsa `preceding_post_distance_minutes` alanlarını taşır. Eski publication kayıtlarında bu alanların bulunmaması geçerlidir.
+
+### Eksik ölçüm ve aynı yaşta format karşılaştırması
+
+```console
+python3 scripts/report_feed_analytics.py
+python3 scripts/report_feed_analytics.py --json --output /tmp/feed-analytics.json
+python3 scripts/report_feed_analytics.py --history /path/history.json --snapshots /path/snapshots.json
+```
+
+Komut yalnız kayıtlı history ve Insights verisini okur; Instagram sorgusu veya R2 yazısı yapmaz. Uzak veri için ayrı `engagement-audit` profilini kullanır. İki yerel girdi verildiğinde Keychain'e erişmez. Çıktı dosyası zaten varsa üzerine yazmaz.
+
+1h/6h/24h/72h/168h pencerelerindeki complete, partial, unavailable, missed, due ve pending durumları nedenleriyle gösterilir. Kaçırılan ölçüm penceresi sayısı, etkilenen gönderi sayısından ayrıdır. Kapanmış bir pencerenin geçmiş verisi bugünkü Insights ile yeniden üretilemez. Geç etiketlenmiş ölçümler complete sayılmaz; sonraki geç ölçüm önceki geçerli ölçümü düşürmez.
+
+Karşılaştırma her hedef yaş ve format için ayrı observation, coverage, reach ve engagement oranlarını gösterir. Her metriğin paydası yalnız o metriği taşıyan gönderileri içerir; eksik değer sıfıra çevrilmez. Varsayılan asgari örnek sayısı format başına 5'tir (`--minimum-cohort-size`). Gerçek ölçüm yaşları açıklanır; yaş aralıkları ayrışırsa karşılaştırma uyarılır. Sonuçlar gözlemseldir, otomatik kazanan veya nedensellik iddiası üretilmez.
+
+### Hazır içerik kuyruğu — yerel pilot
+
+```console
+python3 scripts/prepare_feed_queue.py --directory /path/new-feed-queue --target 3
+python3 scripts/prepare_feed_queue.py --directory /path/new-feed-queue --status
+```
+
+Hazırlama carousel/tekli sırasıyla 3–5 paket oluşturur; önceki paketlerin eserlerini sonraki seçimlerden çıkarır. Her pakette görseller, açıklama, eser/kaynak ve hak bilgileri, SHA-256 digesti ve en fazla 14 günlük son kullanma zamanı bulunur (`--ttl-hours`). Hazırlama mevcut seçme/render yollarını kullanır; reservation, staging, yayınlama veya history yazısı yapmaz. Kaynak indirmeleri ve yapılandırılmış Gemini içerik üretimi çalışabilir. Uzak history/Insights okuması için ayrı read-only `engagement-audit` profili kullanılır. Var olan manifestin üzerine yazılmaz.
+
+`main.py --prepared-queue /path/new-feed-queue` mevcut yetkili publication akışında isteğe bağlı tüketimi açar. Bu seçenek kendi başına yayınlama izni vermez. Format, süre, görsel digest/uyumluluk, kayıtlı confirmed hak bilgileri ve güncel duplicate koruması reservation öncesinde tekrar denetlenir. Paket yalnız doğrulanmış publication receipt sonrasında CONSUMED olur; belirsiz sonuç QUARANTINED olur ve otomatik yeniden kullanılmaz. Boş veya geçersiz paketleri elenmiş kuyruk normal içerik üretimine döner. Bozuk manifest ve eşzamanlı sahiplik çatışması koşuyu durdurur.
+
+Pilot Mac/Linux üzerinde aynı host/paylaşılan kalıcı dosya sistemi için `fcntl` kilidi ve atomik manifest kullanır. GitHub Actions'ta otomatik etkinleştirilmemiştir; geçici runner diski koşular arası kalıcı kuyruk değildir. Ortak R2 depolaması ve dağıtık sahiplik bağlantısı bir sonraki aşamadır. Yayın öncesi müze kaynağından yeni hak sorgusu henüz eklenmedi; kayıtlı hak kanıtı ve süre sınırı denetlenir.
 
 ## History ve duplicate koruması
 

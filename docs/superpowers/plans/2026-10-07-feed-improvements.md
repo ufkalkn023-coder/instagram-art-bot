@@ -54,6 +54,8 @@
 
 ## Stage 3 — Prepared content queue
 
+Local implementation checkpoint, 2026-10-07: format-scoped Feed learning, missing-window reporting and equal-age comparison are implemented and tested in `codex/feed-learning-reports-queue`; see [implementation ledger](2026-10-07-feed-learning-reports-queue.md). A local filesystem queue pilot is also implemented. This stage remains incomplete until shared R2 persistence/distributed ownership and Actions integration are completed. These changes are not deployed; live main remains the Stage 1 rollout.
+
 - [ ] Prepare a bounded queue of 3–5 verified Feed packages using existing acquisition/rendering paths without publication mutation.
 - [ ] Persist package identity, content digest, creation/expiry, format and source rights in the existing storage pattern.
 - [ ] Consume only compatible, fresh packages; recheck current history/rights/format before reservation. Never reuse a package after uncertain publication.
