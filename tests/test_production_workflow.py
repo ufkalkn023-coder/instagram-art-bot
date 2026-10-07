@@ -10,7 +10,7 @@ WORKFLOW_PATH = REPOSITORY_ROOT / ".github" / "workflows" / "instagram_bot.yml"
 JOB_NAME = "post-to-instagram"
 SCHEDULE_FLAG = "ARTFOLIO_PRODUCTION_SCHEDULE_ENABLED"
 CONFIRMATION = "PUBLISH_TO_INSTAGRAM"
-CAROUSEL_CRON = "17 17 * * *"
+CAROUSEL_CRON = "17 * * * *"
 EXPECTED_PRODUCTION_SECRET_NAMES = {
     "INSTAGRAM_ACCOUNT_ID",
     "INSTAGRAM_ACCESS_TOKEN",
@@ -81,13 +81,36 @@ def test_job_condition_independently_gates_schedule_and_manual_publishing():
     assert "schedule" not in manual_branch
 
 
-def test_schedule_has_one_daily_utc_eligibility_event():
+def test_schedule_checks_hourly_eligibility_without_changing_format_rotation():
     schedules = _workflow()["on"]["schedule"]
     assert schedules == [{"cron": CAROUSEL_CRON}]
-    assert CAROUSEL_CRON.split() == ["17", "17", "*", "*", "*"]
+    assert CAROUSEL_CRON.split() == ["17", "*", "*", "*", "*"]
 
     publish = _steps_by_name()["Fetch artwork, process image, and post to Instagram"]
     assert publish["run"] == "python main.py --mode auto"
+
+
+def test_waiting_runs_skip_expensive_checks_and_publication():
+    job = _job()
+    steps = _steps_by_name()
+    readiness = steps["Check Feed readiness"]
+    assert readiness["id"] == "feed_readiness"
+    assert readiness["if"] == "github.event_name == 'schedule'"
+    assert "manage_feed_schedule.py status" in readiness["run"]
+    assert '--expected-sha "$GITHUB_SHA"' in readiness["run"]
+    assert "--github-output" in readiness["run"]
+    assert not any(key.startswith("INSTAGRAM_") for key in readiness["env"])
+    names = [step["name"] for step in job["steps"]]
+    assert names.index("Install dependencies") < names.index("Check Feed readiness")
+    for name in (
+        "Check dependency lock drift", "Compile validation", "Run test suite",
+        "Preflight normal Feed production", "Fetch artwork, process image, and post to Instagram",
+    ):
+        assert names.index("Check Feed readiness") < names.index(name)
+        assert _normalized(steps[name]["if"]) == (
+            "github.event_name == 'workflow_dispatch' || steps.feed_readiness.outputs.ready == 'true'"
+        )
+        assert "always()" not in steps[name]["if"]
 
 
 def test_production_invocations_use_success_based_format_rotation():

@@ -12,7 +12,9 @@ approval. It refuses unresolved owned attempts and dirty publication, receipt or
 media state. Explicit continuous approval supersedes the per-attempt operator-review
 requirement for this mode; it does not change publication or duplicate safeguards.
 
-At each daily 17:17 UTC event, the authenticated original main run checks the active
+The approval's `cadence` is `daily_utc1717` (the default for existing records) or
+`hourly_utc17`. Changing cron does not upgrade an existing approval. At each eligible
+event, the authenticated original main run checks the active
 approval, exact SHA, finite 60-minute window, clean state and 48-hour completion
 gate. A run before cooldown eligibility exits successfully without reservation,
 acquisition or publication. An eligible run appends one owned permit tied to the
@@ -22,7 +24,8 @@ is rejected, including after a definitive failure.
 
 Successful completion keeps scheduling enabled. A definitive failure can leave
 scheduling enabled only when its cleanup and reconciliation evidence is clear;
-the next attempt uses a later daily slot. Ambiguous or incomplete publication,
+the next attempt is no earlier than 24 hours after that safe failure's recorded
+outcome. This clock survives replacement of the approval or code SHA. Ambiguous or incomplete publication,
 dirty state, uncertain CAS or missing outcome evidence blocks further publication.
 This is not a publish retry. Explicit operator pause revokes the active approval and
 the pending permit; an already sent Meta request cannot be recalled. New code with
@@ -31,6 +34,7 @@ a different main SHA needs a fresh continuous approval.
 ```bash
 python scripts/manage_feed_schedule.py enable-continuous --apply \
   --expected-generation GENERATION --approved-sha EXACT_MAIN_SHA \
+  --cadence hourly_utc17 \
   --evidence-ref EXPLICIT_CONTINUOUS_APPROVAL
 ```
 
@@ -40,11 +44,24 @@ carousel and single through `--mode auto`.
 
 ## Eligibility and admission
 
-Feed cron is `17 17 * * *`: one daily eligibility event at **17:17 UTC**. The
+Feed cron is `17 * * * *`: one lightweight eligibility check each hour at UTC
+minute **17**. Hourly approvals allow the first eligible window after the 48-hour
+threshold; existing daily approvals and legacy permits remain restricted to
+**17:17 UTC**. Continuous windows last 60 minutes and adjacent closed windows may
+meet at expiry without overlapping. The
 repository variable `ARTFOLIO_PRODUCTION_SCHEDULE_ENABLED=true` is only an outer
 switch. A valid durable single-slot permit or continuous approval is also mandatory. Manual UUIDv4 Feed authorization
 retains its existing 60-minute freshness and reservation consumption semantics and
 needs no Stage B permit. Reel scheduling and the Reel workflow are unchanged.
+
+`python scripts/manage_feed_schedule.py status --expected-sha EXACT_MAIN_SHA`
+reads authoritative state/receipts and media ownership without mutation. It reports
+the last successful completion, next eligible/attempt/check times, next format and
+an actionable status (`READY`, cooldown/backoff/window waiting, active attempt,
+paused, mismatched SHA or blocked). Invalid or unreadable evidence returns a nonzero
+exit; ordinary waiting reports `ready=false`. The scheduled workflow runs this
+check before expensive validation and gates later steps on an explicit `ready=true`.
+This is advisory: actual admission and publication still reload every guard.
 
 The Feed workflow invokes `--mode auto`: a finalized carousel is followed by a
 single-image post, and a finalized single is followed by a carousel. With no
@@ -62,14 +79,14 @@ are resealed only in memory before the next existing safety CAS.
 
 Control records a pause flag/reason, the latest successful Feed completion and
 publication identity, derived next eligibility (+48 hours), and an append-only
-permit ledger. Each permit contains UUIDv4 identity, one daily UTC slot, creation
+permit ledger. Each permit contains UUIDv4 identity, one finite UTC slot, creation
 and expiry times, approved main SHA, approval reference, lifecycle, optional owner
 run ID/attempt and `schedule:<run_id>` authorization, reservation identity/generation,
 terminal outcome and acknowledgement. Previous permits and evidence cannot disappear
 or be rewritten during ordinary writes. This small ledger is retained for audit;
 it is not a second transaction or receipt store.
 
-Only a future 17:17 UTC slot can be armed. Expiry must be later than the slot and
+Only a future 17:17 UTC slot can be armed in legacy single-slot mode. Expiry must be later than the slot and
 at most 60 minutes after it. Both the authenticated run's creation time and admission
 must fit that window; reservation and pre-publish must still be within it. Queued,
 stale or delayed runs fail closed. No catch-up publication is allowed. GitHub's

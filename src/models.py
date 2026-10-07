@@ -379,6 +379,7 @@ class FeedScheduleReview(_StrictStateModel):
 class FeedContinuousApproval(_StrictStateModel):
     approval_id: str
     approved_sha: str = Field(pattern=r"^[0-9a-f]{40}$")
+    cadence: Literal["daily_utc1717", "hourly_utc17"] = "daily_utc1717"
     created_at: str
     approval_ref: str = Field(min_length=1)
     revoked_at: str | None = None
@@ -425,6 +426,7 @@ class FeedSchedulePermit(_StrictStateModel):
     outcome: FeedScheduleOutcome | None = None
     acknowledgement: FeedScheduleReview | None = None
     continuous_approval_id: str | None = None
+    cadence: Literal["daily_utc1717", "hourly_utc17"] = "daily_utc1717"
 
     @model_validator(mode="after")
     def consistent_permit(self):
@@ -442,15 +444,18 @@ class FeedSchedulePermit(_StrictStateModel):
         slot = parse_receipt_occurrence(self.slot_at)
         expiry = parse_receipt_occurrence(self.expires_at)
         created = parse_receipt_occurrence(self.created_at)
-        if (slot.hour, slot.minute, slot.second, slot.microsecond) != (
-            17,
-            17,
-            0,
-            0,
-        ) or not slot < expiry <= slot + timedelta(minutes=60):
-            raise ValueError("permit requires one finite daily UTC slot")
+        if (
+            slot.minute != 17
+            or slot.second != 0
+            or slot.microsecond != 0
+            or (self.cadence == "daily_utc1717" and slot.hour != 17)
+            or not slot < expiry <= slot + timedelta(minutes=60)
+        ):
+            raise ValueError("permit requires one finite minute-17 UTC slot")
         if self.continuous_approval_id is None and not created < slot:
             raise ValueError("legacy permit must be created before its slot")
+        if self.continuous_approval_id is None and self.cadence != "daily_utc1717":
+            raise ValueError("hourly cadence requires a continuous approval")
         if self.continuous_approval_id is not None and not slot <= created < expiry:
             raise ValueError("continuous permit must be created within its slot")
         owned = self.owner_run_id is not None
@@ -576,6 +581,7 @@ class FeedScheduleControl(_StrictStateModel):
             if (
                 approval is None
                 or permit.approved_sha != approval.approved_sha
+                or permit.cadence != approval.cadence
                 or parse_receipt_occurrence(approval.created_at) > created
                 or (
                     approval.revoked_at is not None
@@ -608,7 +614,7 @@ class FeedScheduleControl(_StrictStateModel):
             ):
                 eligible = (
                     parse_receipt_occurrence(following.slot_at)
-                    > parse_receipt_occurrence(prior.expires_at)
+                    >= parse_receipt_occurrence(prior.expires_at)
                     and parse_receipt_occurrence(following.created_at)
                     >= parse_receipt_occurrence(prior.outcome.recorded_at)
                 )
@@ -618,7 +624,7 @@ class FeedScheduleControl(_StrictStateModel):
                     and parse_receipt_occurrence(following.created_at)
                     >= parse_receipt_occurrence(prior.acknowledgement.reviewed_at)
                     and parse_receipt_occurrence(following.slot_at)
-                    > parse_receipt_occurrence(prior.expires_at)
+                    >= parse_receipt_occurrence(prior.expires_at)
                 )
             if not eligible:
                 raise ValueError("new permit requires a safe closed previous slot")

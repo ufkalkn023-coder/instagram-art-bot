@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 from datetime import datetime
 from pathlib import Path
 import sys
@@ -115,6 +116,9 @@ def main(
     parser = argparse.ArgumentParser(description=__doc__)
     commands = parser.add_subparsers(dest="command")
     commands.add_parser("inspect")
+    status = commands.add_parser("status")
+    status.add_argument("--expected-sha")
+    status.add_argument("--github-output", action="store_true")
     for command in ("arm", "enable-continuous", "pause", "revoke", "acknowledge"):
         sub = commands.add_parser(command)
         sub.add_argument("--apply", action="store_true", required=True)
@@ -129,12 +133,32 @@ def main(
             sub.add_argument("--expires-at", required=True)
         elif command == "enable-continuous":
             sub.add_argument("--approved-sha", required=True)
+            sub.add_argument(
+                "--cadence", choices=("daily_utc1717", "hourly_utc17"),
+                default="daily_utc1717",
+            )
     args = parser.parse_args(argv)
     try:
         manager = manager or FeedScheduleManager()
         github = github or GitHubEvidence()
         if args.command in {None, "inspect"}:
             print(json.dumps(manager.inspect(now=now), sort_keys=True, indent=2))
+        elif args.command == "status":
+            value = manager.status(expected_sha=args.expected_sha, now=now)
+            ready, state = value.get("ready"), value.get("status")
+            if (
+                type(ready) is not bool or not isinstance(state, str)
+                or not re.fullmatch(r"[A-Z][A-Z_]*", state)
+                or ready != (state == "READY")
+            ):
+                raise FeedScheduleError("FEED_STATUS_RESULT_INVALID")
+            if args.github_output:
+                output_path = os.environ.get("GITHUB_OUTPUT")
+                if not output_path:
+                    raise FeedScheduleError("FEED_STATUS_GITHUB_OUTPUT_REQUIRED")
+                with Path(output_path).open("a", encoding="utf-8") as output:
+                    output.write(f"ready={str(ready).lower()}\nstatus={state}\n")
+            print(json.dumps(value, sort_keys=True, indent=2))
         elif args.command == "arm":
             permit_id = manager.arm(
                 expected_generation=args.expected_generation,
@@ -159,6 +183,7 @@ def main(
                 approved_sha=args.approved_sha,
                 main_sha=github.main_sha(),
                 review_ref=args.evidence_ref,
+                cadence=args.cadence,
                 now=now,
             )
             print(json.dumps({"continuous_approval_id": approval_id}, sort_keys=True))
