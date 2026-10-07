@@ -115,7 +115,7 @@ def main(
     parser = argparse.ArgumentParser(description=__doc__)
     commands = parser.add_subparsers(dest="command")
     commands.add_parser("inspect")
-    for command in ("arm", "pause", "revoke", "acknowledge"):
+    for command in ("arm", "enable-continuous", "pause", "revoke", "acknowledge"):
         sub = commands.add_parser(command)
         sub.add_argument("--apply", action="store_true", required=True)
         sub.add_argument("--expected-generation", type=int, required=True)
@@ -127,6 +127,8 @@ def main(
             sub.add_argument("--approved-sha", required=True)
             sub.add_argument("--slot", required=True)
             sub.add_argument("--expires-at", required=True)
+        elif command == "enable-continuous":
+            sub.add_argument("--approved-sha", required=True)
     args = parser.parse_args(argv)
     try:
         manager = manager or FeedScheduleManager()
@@ -151,6 +153,15 @@ def main(
                 audit_runs=github.audit_runs,
                 now=now,
             )
+        elif args.command == "enable-continuous":
+            approval_id = manager.enable_continuous(
+                expected_generation=args.expected_generation,
+                approved_sha=args.approved_sha,
+                main_sha=github.main_sha(),
+                review_ref=args.evidence_ref,
+                now=now,
+            )
+            print(json.dumps({"continuous_approval_id": approval_id}, sort_keys=True))
         else:
             operation = manager.pause if args.command == "pause" else manager.revoke
             operation(

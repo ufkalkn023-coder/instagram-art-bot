@@ -376,6 +376,25 @@ class FeedScheduleReview(_StrictStateModel):
         return self
 
 
+class FeedContinuousApproval(_StrictStateModel):
+    approval_id: str
+    approved_sha: str = Field(pattern=r"^[0-9a-f]{40}$")
+    created_at: str
+    approval_ref: str = Field(min_length=1)
+    revoked_at: str | None = None
+
+    @model_validator(mode="after")
+    def consistent_approval(self):
+        if str(UUID(self.approval_id, version=4)) != self.approval_id:
+            raise ValueError("continuous approval ID requires UUIDv4")
+        created = parse_receipt_occurrence(self.created_at)
+        if self.revoked_at is not None and (
+            parse_receipt_occurrence(self.revoked_at) < created
+        ):
+            raise ValueError("continuous approval cannot be revoked before creation")
+        return self
+
+
 class FeedSchedulePermit(_StrictStateModel):
     permit_id: str
     slot_at: str
@@ -405,6 +424,7 @@ class FeedSchedulePermit(_StrictStateModel):
     reservation_generation: int | None = Field(default=None, ge=1)
     outcome: FeedScheduleOutcome | None = None
     acknowledgement: FeedScheduleReview | None = None
+    continuous_approval_id: str | None = None
 
     @model_validator(mode="after")
     def consistent_permit(self):
@@ -427,8 +447,12 @@ class FeedSchedulePermit(_StrictStateModel):
             17,
             0,
             0,
-        ) or not created < slot < expiry <= slot + timedelta(minutes=60):
-            raise ValueError("permit requires one finite future daily UTC slot")
+        ) or not slot < expiry <= slot + timedelta(minutes=60):
+            raise ValueError("permit requires one finite daily UTC slot")
+        if self.continuous_approval_id is None and not created < slot:
+            raise ValueError("legacy permit must be created before its slot")
+        if self.continuous_approval_id is not None and not slot <= created < expiry:
+            raise ValueError("continuous permit must be created within its slot")
         owned = self.owner_run_id is not None
         if owned:
             if (
@@ -437,6 +461,10 @@ class FeedSchedulePermit(_StrictStateModel):
                 or self.authorization_key != f"schedule:{self.owner_run_id}"
                 or self.admitted_at is None
                 or not slot <= parse_receipt_occurrence(self.admitted_at) < expiry
+                or (
+                    self.continuous_approval_id is not None
+                    and self.admitted_at != self.created_at
+                )
             ):
                 raise ValueError("invalid admitted schedule ownership")
         elif any(
@@ -504,6 +532,7 @@ class FeedScheduleControl(_StrictStateModel):
     latest_successful_feed_id: str = Field(min_length=1)
     next_eligible_at: str
     permits: list[FeedSchedulePermit] = Field(default_factory=list)
+    continuous_approvals: list[FeedContinuousApproval] = Field(default_factory=list)
 
     @model_validator(mode="before")
     @classmethod
@@ -526,23 +555,89 @@ class FeedScheduleControl(_StrictStateModel):
         owners = [p.owner_run_id for p in self.permits if p.owner_run_id is not None]
         if len(owners) != len(set(owners)):
             raise ValueError("scheduled run reuse")
-        for prior, following in zip(self.permits, self.permits[1:]):
-            if (
-                prior.acknowledgement is None
-                or parse_receipt_occurrence(following.created_at)
-                < parse_receipt_occurrence(prior.acknowledgement.reviewed_at)
-                or parse_receipt_occurrence(following.slot_at)
-                <= parse_receipt_occurrence(prior.expires_at)
-            ):
-                raise ValueError(
-                    "new permit requires review of the previous closed slot"
-                )
-        if not self.paused and (
-            not self.permits
-            or self.permits[-1].status != "ARMED"
-            or self.permits[-1].revoked_at is not None
+        approval_ids = [approval.approval_id for approval in self.continuous_approvals]
+        if len(approval_ids) != len(set(approval_ids)):
+            raise ValueError("duplicate continuous approval ID")
+        for prior_approval, following_approval in zip(
+            self.continuous_approvals, self.continuous_approvals[1:]
         ):
-            raise ValueError("only an armed permit may unpause admission")
+            if (
+                prior_approval.revoked_at is None
+                or parse_receipt_occurrence(prior_approval.revoked_at)
+                > parse_receipt_occurrence(following_approval.created_at)
+            ):
+                raise ValueError("continuous approvals must be sequentially revoked")
+        approval_by_id = {item.approval_id: item for item in self.continuous_approvals}
+        for permit in self.permits:
+            if permit.continuous_approval_id is None:
+                continue
+            approval = approval_by_id.get(permit.continuous_approval_id)
+            created = parse_receipt_occurrence(permit.created_at)
+            if (
+                approval is None
+                or permit.approved_sha != approval.approved_sha
+                or parse_receipt_occurrence(approval.created_at) > created
+                or (
+                    approval.revoked_at is not None
+                    and created > parse_receipt_occurrence(approval.revoked_at)
+                )
+            ):
+                raise ValueError("continuous permit lacks matching live approval")
+        owned_slots = [permit.slot_at for permit in self.permits if permit.owner_run_id is not None]
+        if len(owned_slots) != len(set(owned_slots)):
+            raise ValueError("continuous schedule slot already consumed")
+        for prior, following in zip(self.permits, self.permits[1:]):
+            if following.continuous_approval_id is None:
+                eligible = (
+                    prior.acknowledgement is not None
+                    and parse_receipt_occurrence(following.created_at)
+                    >= parse_receipt_occurrence(prior.acknowledgement.reviewed_at)
+                    and parse_receipt_occurrence(following.slot_at)
+                    > parse_receipt_occurrence(prior.expires_at)
+                )
+            elif prior.status in {"EXPIRED", "REVOKED"} and prior.owner_run_id is None:
+                closed_at = prior.revoked_at if prior.status == "REVOKED" else prior.expires_at
+                eligible = parse_receipt_occurrence(closed_at) <= parse_receipt_occurrence(
+                    following.created_at
+                )
+            elif (
+                prior.status in {"SUCCESS", "DEFINITIVE_FAILURE"}
+                and prior.outcome is not None
+                and not prior.outcome.cleanup_pending
+                and not prior.outcome.reconciliation_pending
+            ):
+                eligible = (
+                    parse_receipt_occurrence(following.slot_at)
+                    > parse_receipt_occurrence(prior.expires_at)
+                    and parse_receipt_occurrence(following.created_at)
+                    >= parse_receipt_occurrence(prior.outcome.recorded_at)
+                )
+            else:
+                eligible = (
+                    prior.acknowledgement is not None
+                    and parse_receipt_occurrence(following.created_at)
+                    >= parse_receipt_occurrence(prior.acknowledgement.reviewed_at)
+                    and parse_receipt_occurrence(following.slot_at)
+                    > parse_receipt_occurrence(prior.expires_at)
+                )
+            if not eligible:
+                raise ValueError("new permit requires a safe closed previous slot")
+        if not self.paused:
+            latest = self.permits[-1] if self.permits else None
+            live_approval = any(item.revoked_at is None for item in self.continuous_approvals)
+            if live_approval:
+                if (
+                    latest is not None
+                    and latest.status in {"AMBIGUOUS", "INCOMPLETE", "CANCELLED"}
+                    and latest.acknowledgement is None
+                ):
+                    raise ValueError("unsafe continuous permit cannot unpause admission")
+            elif (
+                latest is None
+                or latest.status != "ARMED"
+                or latest.revoked_at is not None
+            ):
+                raise ValueError("only an armed permit may unpause admission")
         return self
 
 

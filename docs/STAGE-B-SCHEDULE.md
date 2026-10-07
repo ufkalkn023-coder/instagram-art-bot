@@ -1,14 +1,48 @@
-# Stage B scheduled Feed control
+# Scheduled Feed control
 
-This is a development contract. Stage A is complete; Stage B production initialization,
-arming, scheduler enablement, workflow enablement and publication each remain subject
-to separate authorization. No deployment or migration is performed by this PR.
+Feed supports an operator-reviewed single-slot mode and an explicitly approved
+continuous mode. Initialization, scheduler enablement and publication require
+operator authorization. Existing single-slot approvals keep their original behavior.
+
+## Continuous operation
+
+`enable-continuous` records an append-only approval bound to the exact authenticated
+main SHA. It may revoke an unconsumed older single-slot permit without erasing its
+approval. It refuses unresolved owned attempts and dirty publication, receipt or
+media state. Explicit continuous approval supersedes the per-attempt operator-review
+requirement for this mode; it does not change publication or duplicate safeguards.
+
+At each daily 17:17 UTC event, the authenticated original main run checks the active
+approval, exact SHA, finite 60-minute window, clean state and 48-hour completion
+gate. A run before cooldown eligibility exits successfully without reservation,
+acquisition or publication. An eligible run appends one owned permit tied to the
+approval and run identity. Every reservation and pre-publish CAS still rechecks its
+owner, policy revocation and publication evidence. Another attempt in the same slot
+is rejected, including after a definitive failure.
+
+Successful completion keeps scheduling enabled. A definitive failure can leave
+scheduling enabled only when its cleanup and reconciliation evidence is clear;
+the next attempt uses a later daily slot. Ambiguous or incomplete publication,
+dirty state, uncertain CAS or missing outcome evidence blocks further publication.
+This is not a publish retry. Explicit operator pause revokes the active approval and
+the pending permit; an already sent Meta request cannot be recalled. New code with
+a different main SHA needs a fresh continuous approval.
+
+```bash
+python scripts/manage_feed_schedule.py enable-continuous --apply \
+  --expected-generation GENERATION --approved-sha EXACT_MAIN_SHA \
+  --evidence-ref EXPLICIT_CONTINUOUS_APPROVAL
+```
+
+The existing fresh manual UUID workflow can start the first Feed immediately;
+manual completion advances the same cooldown clock. Later scheduled posts alternate
+carousel and single through `--mode auto`.
 
 ## Eligibility and admission
 
 Feed cron is `17 17 * * *`: one daily eligibility event at **17:17 UTC**. The
 repository variable `ARTFOLIO_PRODUCTION_SCHEDULE_ENABLED=true` is only an outer
-switch. A valid durable permit is also mandatory. Manual UUIDv4 Feed authorization
+switch. A valid durable single-slot permit or continuous approval is also mandatory. Manual UUIDv4 Feed authorization
 retains its existing 60-minute freshness and reservation consumption semantics and
 needs no Stage B permit. Reel scheduling and the Reel workflow are unchanged.
 
@@ -51,7 +85,7 @@ Manual Feed finalization advances the clock in the existing finalization CAS eve
 when a permit exists; a new scheduled reservation then fails if its cooldown is stale.
 Receipt synchronization must complete before any later scheduled reservation.
 
-Admission claims one permit through the existing safety-state CAS and **immediately
+In single-slot mode, admission claims one permit through the existing safety-state CAS and **immediately
 pauses scheduling**. Owner/run attempt 1, repository, exact Feed workflow, schedule
 event, main ref, head SHA, approved SHA and finite window are bound to authenticated
 GitHub run metadata. The reservation rechecks ownership on its authoritative snapshot
@@ -62,7 +96,7 @@ existing irreversible-boundary CAS. Boundary replay cannot authorize another req
 
 `ONE_OPERATOR_REVIEW -> AT_MOST_ONE_SCHEDULED_PUBLICATION_ATTEMPT`
 
-There is no automatic rearming and no replacement publication following an admitted
+Single-slot mode has no automatic rearming and no replacement publication following an admitted
 failure. Failed outcome persistence never triggers a reservation or publish retry.
 The existing application `media_publish` call remains non-retrying. Reconciliation
 never publishes.
