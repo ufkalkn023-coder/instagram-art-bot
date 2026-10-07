@@ -20,6 +20,8 @@ Bu proje, müze API'lerinden gelen eserleri hak bilgisini koruyarak seçer, güv
 
 Instagram feed `--mode auto` ile son başarıyla kesinleşmiş Feed publication'a göre **carousel → single → carousel** sırasını izler. Başarılı Feed kaydı yoksa carousel ile başlar. Başarısız, belirsiz veya yalnız rezerve edilmiş denemeler sırayı ilerletmez; Reel kayıtları sıralamaya katılmaz. History okunamazsa publish başlamaz. Her iki format aynı tek kullanımlık production izni, durable reservation, pre-publish CAS ve receipt akışını kullanır.
 
+Tekli gönderi, güvenli biçimde doğrulanan adaylar arasından Instagram görsel koşullarını sağlayan ilk eseri seçer. Uygun olmayan görseller sınırlı aday havuzunda atlanır; eser kırpılmaz veya çerçeve eklenmez. Havuzda uygun görsel yoksa rezervasyon ve Instagram isteği yapılmadan çalışma sonlanır.
+
 Carousel koşusu bir editorial cover ve adaptive **5–8 featured eser** üretir; toplam slide sayısı 6–9'dur. En az beş güvenli, kaliteli ve temaya uyumlu featured eser ile bunlardan farklı bir cover bulunamazsa publication başlamaz. Sekize tamamlamak için zayıf aday eklenmez. Tekli koşu, mevcut güvenli tek eser seçicisiyle yalnız bir görsel seçer ve tek Instagram image container yayımlar.
 
 Carousel teması doğrulanmış registry ve deterministic Theme Planner tarafından seçilir. Reel/export ve legacy history okuma altyapısı feed publisher'dan ayrıdır. CLI `carousel`, `single` ve `auto` modlarını destekler; geriye uyumluluk için açık mod verilmezse carousel çalışır.

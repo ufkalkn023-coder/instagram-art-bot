@@ -1,5 +1,6 @@
 """Single Feed uses the same durable scheduled lifecycle as a carousel."""
 
+from pathlib import Path
 from types import SimpleNamespace
 
 from PIL import Image
@@ -26,7 +27,10 @@ def single_runtime(monkeypatch, tmp_path, *, phase="success"):
         "date": "1900", "museum": "Fixture Museum", "local_image_path": str(source),
         "alt_text": "A blue artwork", "region": "europe",
     }
-    monkeypatch.setattr(main.art_fetcher, "fetch_single_artwork", lambda _: artwork)
+    def candidate_iterator(_, *, max_candidates):
+        yield artwork
+
+    monkeypatch.setattr(main.art_fetcher, "iter_single_post_candidates", candidate_iterator)
     monkeypatch.setattr(main.gemini_ai, "analyze_artwork", lambda **_: None)
 
     def upload(path, publication_id):
@@ -147,9 +151,100 @@ def test_single_no_permit_stops_before_acquisition(monkeypatch, tmp_path):
     feed_schedule.FeedScheduleManager(store, owned_media=lambda **_: set()).pause(
         expected_generation=3, reason="stopped", now=NOW,
     )
-    monkeypatch.setattr(main.art_fetcher, "fetch_single_artwork", lambda _: pytest.fail("unpermitted acquisition"))
+    monkeypatch.setattr(main.art_fetcher, "iter_single_post_candidates", lambda *_args, **_kwargs: pytest.fail("unpermitted acquisition"))
     assert main.main(["--mode", "single"]) == 1
     assert sent == []
+
+
+def test_single_skips_unsuitable_candidate_and_publishes_one_valid_image(monkeypatch, tmp_path):
+    store, _, sent, _ = single_runtime(monkeypatch, tmp_path)
+    unsuitable_path = tmp_path / "too_wide.jpg"
+    valid_path = tmp_path / "valid.jpg"
+    Image.new("RGB", (2200, 900), "red").save(unsuitable_path)
+    Image.new("RGB", (1080, 1350), "green").save(valid_path)
+    unsuitable = {
+        "id": "aic_111111", "title": "Unsuitable Artwork", "artist": "Artist",
+        "museum": "Fixture Museum", "local_image_path": str(unsuitable_path),
+    }
+    valid = {
+        "id": "aic_222222", "title": "Valid Artwork", "artist": "Artist",
+        "museum": "Fixture Museum", "local_image_path": str(valid_path),
+    }
+    generator_closed = []
+    analyzed = []
+
+    def candidate_iterator(_posted_ids, *, max_candidates):
+        assert max_candidates == main.art_fetcher.SINGLE_DIVERSITY_FINALIST_TARGET
+        try:
+            yield unsuitable
+            yield valid
+        finally:
+            generator_closed.append(True)
+
+    monkeypatch.setattr(main.art_fetcher, "iter_single_post_candidates", candidate_iterator)
+    monkeypatch.setattr(main.gemini_ai, "analyze_artwork", lambda **kwargs: analyzed.append(kwargs) or None)
+    uploaded_paths = []
+    prepared_paths = []
+    prepare = main.image_processor.create_feed_post
+
+    def prepare_and_record(raw_path, **kwargs):
+        result = prepare(raw_path, **kwargs)
+        prepared_paths.append((raw_path, result))
+        return result
+
+    monkeypatch.setattr(main.image_processor, "create_feed_post", prepare_and_record)
+
+    def upload(path, publication_id):
+        uploaded_paths.append(path)
+        return r2_media.TempMediaUpload(
+            f"images/publications/{publication_id}/20261004171700_{'a' * 32}.jpg",
+            "https://media.example/single.jpg", publication_id,
+        )
+
+    monkeypatch.setattr(main.image_processor, "upload_temp_media", upload)
+
+    assert main.main(["--mode", "single"]) == 0
+    assert len(analyzed) == 1 and analyzed[0]["image_path"] == str(valid_path)
+    assert len(sent) == 2
+    assert "Valid Artwork" in sent[0][1]["caption"]
+    assert len(uploaded_paths) == 1
+    assert prepared_paths == [(str(valid_path), uploaded_paths[0])]
+    assert Path(uploaded_paths[0]).is_file()
+    assert generator_closed == [True]
+    state = store.load_safety()[0]
+    assert len(state.active_publication_state.posted_artworks) == 1
+    assert state.active_publication_state.posted_artworks[0]["id"] == "aic_222222"
+
+
+def test_single_candidate_pool_exhaustion_stops_before_gemini_or_publication(monkeypatch, tmp_path):
+    store, _, sent, _ = single_runtime(monkeypatch, tmp_path)
+    unsuitable_paths = []
+    for index, dimensions in enumerate(((2200, 900), (900, 1600))):
+        source = tmp_path / f"unsuitable_{index}.jpg"
+        Image.new("RGB", dimensions, "red").save(source)
+        unsuitable_paths.append(str(source))
+    candidates = [
+        {"id": f"aic_{index + 1:06d}", "title": f"Unsuitable {index}",
+         "artist": "Artist", "museum": "Fixture Museum", "local_image_path": path}
+        for index, path in enumerate(unsuitable_paths)
+    ]
+    generator_closed = []
+
+    def candidate_iterator(_posted_ids, *, max_candidates):
+        assert max_candidates == main.art_fetcher.SINGLE_DIVERSITY_FINALIST_TARGET
+        try:
+            yield from candidates
+        finally:
+            generator_closed.append(True)
+
+    monkeypatch.setattr(main.art_fetcher, "iter_single_post_candidates", candidate_iterator)
+    monkeypatch.setattr(main.gemini_ai, "analyze_artwork", lambda **_: pytest.fail("Gemini must not run"))
+    monkeypatch.setattr(main.image_processor, "upload_temp_media", lambda *_: pytest.fail("upload must not run"))
+
+    assert main.main(["--mode", "single"]) == 1
+    assert generator_closed == [True]
+    assert sent == []
+    assert store.load_safety()[0].active_publication_state.posted_artworks == []
 
 
 @pytest.mark.parametrize("publications,expected", [
