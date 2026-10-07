@@ -22,11 +22,15 @@ from src.production_authorization import (
     ProductionAuthorization,
     ProductionAuthorizationError,
 )
-from src.production_config import require_clear_publication_state
+from src.production_config import (
+    ProductionConfigurationError,
+    require_clear_publication_state,
+)
 
 FEED_REPOSITORY = "ufkalkn023-coder/instagram-art-bot"
 FEED_WORKFLOW = ".github/workflows/instagram_bot.yml"
 COOLDOWN = timedelta(hours=48)
+FAILURE_BACKOFF = timedelta(hours=24)
 
 
 class FeedScheduleError(RuntimeError):
@@ -115,6 +119,62 @@ def safe_completed_attempt(permit: FeedSchedulePermit) -> bool:
     )
 
 
+def attempt_backoff(control: FeedScheduleControl) -> datetime | None:
+    """Return the latest durable clock from a safely closed failed attempt."""
+    failures = [
+        parse_receipt_occurrence(permit.outcome.recorded_at) + FAILURE_BACKOFF
+        for permit in control.permits
+        if permit.status == "DEFINITIVE_FAILURE"
+        and permit.outcome is not None
+        and (
+            safe_completed_attempt(permit)
+            or permit.acknowledgement is not None
+        )
+    ]
+    return max(failures) if failures else None
+
+
+def cadence_window(now: datetime, cadence: str) -> tuple[datetime, datetime]:
+    """Return the daily or hourly window containing ``now``."""
+    now = utc(now)
+    if cadence == "daily_utc1717":
+        slot = now.replace(hour=17, minute=17, second=0, microsecond=0)
+    elif cadence == "hourly_utc17":
+        slot = now.replace(minute=17, second=0, microsecond=0)
+        if now.minute < 17:
+            slot -= timedelta(hours=1)
+    else:
+        raise FeedScheduleError("SCHEDULE_CADENCE_INVALID")
+    return slot, slot + timedelta(minutes=60)
+
+
+def next_window_at_or_after(at: datetime, cadence: str) -> datetime:
+    """Return the earliest instant at or after ``at`` inside a cadence window."""
+    at = utc(at)
+    slot, expiry = cadence_window(at, cadence)
+    if slot <= at < expiry:
+        return at
+    if cadence == "hourly_utc17":
+        return at.replace(minute=17, second=0, microsecond=0)
+    next_slot = slot if at < slot else slot + timedelta(days=1)
+    return next_slot
+
+
+def _next_feed_format(state: PublicationSafetyState) -> str:
+    """Mirror auto-format alternation from the newest projected Feed success."""
+    publications = [
+        row for row in state.operational_projection.publications
+        if row.get("type") in {"single", "carousel"}
+    ]
+    if not publications:
+        return "carousel"
+    latest = max(
+        publications,
+        key=lambda row: parse_receipt_occurrence(row["posted_at"]),
+    )
+    return "single" if latest["type"] == "carousel" else "carousel"
+
+
 def require_cooldown(
     state: PublicationSafetyState, ledger: PublicationReceipts, at: datetime
 ) -> None:
@@ -187,7 +247,7 @@ def require_control_update(
         raise publication_state.StateValidationError("Continuous approvals are append-only")
     for prior, candidate in zip(old.continuous_approvals, new.continuous_approvals):
         if any(getattr(prior, field) != getattr(candidate, field) for field in (
-            "approval_id", "approved_sha", "created_at", "approval_ref",
+            "approval_id", "approved_sha", "cadence", "created_at", "approval_ref",
         )) or (prior.revoked_at is not None and prior.revoked_at != candidate.revoked_at):
             raise publication_state.StateValidationError("Continuous approval evidence is immutable")
     if parse_receipt_occurrence(
@@ -227,6 +287,7 @@ def require_control_update(
             "slot_at",
             "expires_at",
             "approved_sha",
+            "cadence",
             "created_at",
             "approval_ref",
             "continuous_approval_id",
@@ -307,6 +368,137 @@ class FeedScheduleManager:
             "effective_pause_reason": effective_reason,
         }
 
+    def status(
+        self, *, expected_sha: str | None = None, now: datetime | None = None
+    ) -> dict[str, Any]:
+        """Return a sanitized read-only readiness snapshot for scheduled Feed work."""
+        now = utc(now or datetime.now(timezone.utc))
+        state, _ = self.store.load_safety()
+        ledger, _ = self.store.load_receipts()
+        control = state.feed_schedule_control
+        completed, publication_id = latest_success(state, ledger)
+        next_eligible = completed + COOLDOWN
+        active = continuous_approval(control) if control is not None else None
+        latest = control.permits[-1] if control is not None and control.permits else None
+        cadence = active.cadence if active is not None else (
+            latest.cadence if latest is not None else "daily_utc1717"
+        )
+        approved_sha = active.approved_sha if active is not None else (
+            latest.approved_sha if latest is not None else None
+        )
+        failure_due = attempt_backoff(control) if control is not None else None
+        due_at = max(next_eligible, failure_due) if failure_due is not None else next_eligible
+        next_attempt = next_window_at_or_after(max(now, due_at), cadence)
+        legacy_slot = legacy_expiry = None
+        if active is None and latest is not None and latest.status == "ARMED":
+            legacy_slot = parse_receipt_occurrence(latest.slot_at)
+            legacy_expiry = parse_receipt_occurrence(latest.expires_at)
+            candidate = max(now, due_at, legacy_slot)
+            next_attempt = candidate if candidate < legacy_expiry else None
+        next_format = _next_feed_format(state)
+        base = {
+            "ready": False,
+            "status": "UNINITIALIZED" if control is None else "PAUSED",
+            "reason": "SCHEDULE_NOT_INITIALIZED" if control is None else "SCHEDULE_PAUSED",
+            "checked_at": stamp(now),
+            "last_successful_feed_at": stamp(completed),
+            "last_successful_feed_id": publication_id,
+            "next_eligible_at": stamp(next_eligible),
+            "next_attempt_at": stamp(next_attempt) if next_attempt is not None else None,
+            "next_check_at": stamp(next_attempt) if next_attempt is not None else None,
+            "next_format": next_format,
+            "cadence": cadence,
+            "approved_sha": approved_sha,
+            "generation": state.generation,
+        }
+        try:
+            self._clean(state, ledger, now)
+        except ProductionConfigurationError:
+            base.update(
+                status="BLOCKED", reason="PUBLICATION_STATE_BLOCKED",
+                next_attempt_at=None, next_check_at=None,
+            )
+            return base
+        if control is None:
+            base.update(next_attempt_at=None, next_check_at=None)
+            return base
+        if (
+            parse_receipt_occurrence(control.latest_successful_feed_at) != completed
+            or control.latest_successful_feed_id != publication_id
+        ):
+            raise FeedScheduleError("SCHEDULE_COMPLETION_BASELINE_MISMATCH")
+        if latest is not None and latest.owner_run_id is not None and (
+            not safe_completed_attempt(latest) and latest.acknowledgement is None
+        ):
+            base.update(
+                status="ATTEMPT_ACTIVE", reason="PREVIOUS_ATTEMPT_UNRESOLVED",
+                next_attempt_at=None, next_check_at=None,
+            )
+            return base
+        has_sha_match = (
+            expected_sha is None
+            or (active is not None and active.approved_sha == expected_sha)
+            or (active is None and latest is not None and latest.approved_sha == expected_sha)
+        )
+        if not has_sha_match:
+            base.update(
+                status="SHA_MISMATCH", reason="APPROVED_SHA_MISMATCH",
+                next_attempt_at=None, next_check_at=None,
+            )
+            return base
+        if control.paused:
+            base.update(next_attempt_at=None, next_check_at=None)
+            return base
+        if active is None and (
+            latest is None or latest.status != "ARMED" or latest.revoked_at is not None
+        ):
+            base.update(
+                status="ATTEMPT_ACTIVE", reason="NO_AVAILABLE_PERMIT",
+                next_attempt_at=None, next_check_at=None,
+            )
+            return base
+        if active is None:
+            if now >= legacy_expiry:
+                base.update(
+                    status="WAITING_WINDOW", reason="SCHEDULE_WINDOW_CLOSED",
+                    next_attempt_at=None, next_check_at=None,
+                )
+                return base
+            if due_at >= legacy_expiry:
+                base.update(
+                    status="WAITING_WINDOW", reason="SCHEDULE_WINDOW_CLOSED",
+                    next_attempt_at=None, next_check_at=stamp(legacy_expiry),
+                )
+                return base
+            if now < due_at:
+                waiting = (
+                    "WAITING_FAILURE_BACKOFF"
+                    if failure_due is not None and failure_due > next_eligible
+                    else "WAITING_COOLDOWN"
+                )
+                base.update(status=waiting, reason=waiting)
+                base["next_check_at"] = stamp(due_at)
+                return base
+            if now < legacy_slot:
+                base.update(status="WAITING_WINDOW", reason="OUTSIDE_PERMIT_WINDOW")
+                base["next_attempt_at"] = stamp(legacy_slot)
+                base["next_check_at"] = stamp(legacy_slot)
+                return base
+            base.update(ready=True, status="READY", reason="READY", next_check_at=None)
+            return base
+        if now < due_at:
+            waiting = "WAITING_FAILURE_BACKOFF" if failure_due is not None and failure_due > next_eligible else "WAITING_COOLDOWN"
+            base.update(status=waiting, reason=waiting)
+            base["next_check_at"] = stamp(due_at)
+            return base
+        slot, expiry = cadence_window(now, cadence)
+        if not slot <= now < expiry:
+            base.update(status="WAITING_WINDOW", reason="OUTSIDE_CADENCE_WINDOW")
+            base["next_check_at"] = stamp(next_attempt)
+            return base
+        base.update(ready=True, status="READY", reason="READY", next_check_at=None)
+        return base
+
     def _clean(
         self, state: PublicationSafetyState, ledger: PublicationReceipts, now: datetime
     ) -> None:
@@ -377,7 +569,8 @@ class FeedScheduleManager:
 
     def enable_continuous(
         self, *, expected_generation: int, approved_sha: str, main_sha: str,
-        review_ref: str, now: datetime | None = None,
+        review_ref: str, cadence: str = "daily_utc1717",
+        now: datetime | None = None,
     ) -> str:
         now = utc(now or datetime.now(timezone.utc))
         state, etag, control = self._expected(expected_generation)
@@ -389,7 +582,10 @@ class FeedScheduleManager:
                 or publication_id != control.latest_successful_feed_id):
             raise FeedScheduleError("CONTINUOUS_APPROVAL_OR_BASELINE_INVALID")
         active = continuous_approval(control)
-        if active is not None and not control.paused and active.approved_sha == approved_sha:
+        if (
+            active is not None and not control.paused
+            and active.approved_sha == approved_sha and active.cadence == cadence
+        ):
             return active.approval_id
         if control.permits:
             prior = control.permits[-1]
@@ -402,7 +598,7 @@ class FeedScheduleManager:
             active.revoked_at = stamp(now)
         approval = FeedContinuousApproval(
             approval_id=str(uuid4()), approved_sha=approved_sha,
-            created_at=stamp(now), approval_ref=review_ref,
+            cadence=cadence, created_at=stamp(now), approval_ref=review_ref,
         )
         control.continuous_approvals.append(approval)
         control.paused = False
@@ -415,8 +611,7 @@ class FeedScheduleManager:
         ledger: PublicationReceipts, authorization: ProductionAuthorization,
         now: datetime, approval: FeedContinuousApproval,
     ) -> str | None:
-        slot = now.replace(hour=17, minute=17, second=0, microsecond=0)
-        expiry = slot + timedelta(minutes=60)
+        slot, expiry = cadence_window(now, approval.cadence)
         if (not authorization.is_scheduled_feed
                 or authorization.repository != FEED_REPOSITORY
                 or authorization.workflow_path != FEED_WORKFLOW
@@ -431,22 +626,26 @@ class FeedScheduleManager:
         if control.permits:
             prior = control.permits[-1]
             if prior.owner_run_id is not None and (
-                slot <= parse_receipt_occurrence(prior.expires_at)
+                slot < parse_receipt_occurrence(prior.expires_at)
                 or not safe_completed_attempt(prior) and prior.acknowledgement is None
             ):
                 raise FeedScheduleError("CONTINUOUS_PREVIOUS_ATTEMPT_UNRESOLVED")
             if prior.owner_run_id is None and prior.status not in {"EXPIRED", "REVOKED"}:
                 raise FeedScheduleError("CONTINUOUS_PREVIOUS_PERMIT_UNRESOLVED")
-        if now < parse_receipt_occurrence(control.next_eligible_at):
+        completed, _ = latest_success(state, ledger)
+        next_eligible = completed + COOLDOWN
+        failure_due = attempt_backoff(control)
+        due_at = max(next_eligible, failure_due) if failure_due is not None else next_eligible
+        if now < due_at:
             # Prove the stored baseline even on a read-only cooldown skip.
-            require_cooldown(state, ledger, parse_receipt_occurrence(control.next_eligible_at))
+            require_cooldown(state, ledger, next_eligible)
             return None
         require_cooldown(state, ledger, now)
         permit = FeedSchedulePermit(
             permit_id=str(uuid4()), slot_at=stamp(slot), expires_at=stamp(expiry),
             approved_sha=approval.approved_sha, created_at=stamp(now),
             approval_ref=approval.approval_ref, continuous_approval_id=approval.approval_id,
-            status="ADMITTED", owner_run_id=authorization.run_id, owner_run_attempt=1,
+            cadence=approval.cadence, status="ADMITTED", owner_run_id=authorization.run_id, owner_run_attempt=1,
             authorization_key=authorization.key, admitted_at=stamp(now),
         )
         control.permits.append(permit)

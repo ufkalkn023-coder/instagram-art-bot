@@ -62,15 +62,15 @@ Format policy, temanın istediği bilinçli benzerliği istenmeyen tekrardan ay�
 
 ## Zamanlama ve GitHub Actions
 
-Workflow her gün 17:17 UTC’de tek bir Feed uygunluk olayı oluşturur:
+Workflow her saat UTC dakika 17’de Feed yayın uygunluğunu kontrol eder:
 
 ```text
-Feed:     17 17 * * *
+Feed:     17 * * * *
 ```
 
-GitHub Actions cron ifadeleri UTC’dir. Experiment metadata’sındaki dört legacy zaman bucket’ı korunur; bunlar publication izni veya cron sıklığı değildir.
+GitHub Actions cron ifadeleri UTC’dir. Saatlik cadence için aynı main SHA’sına `hourly_utc17` sürekli çalışma izni gerekir; mevcut `daily_utc1717` izinleri günlük zaman penceresini korur. Experiment metadata’sındaki dört legacy zaman bucket’ı korunur; bunlar publication izni veya cron sıklığı değildir.
 
-Scheduled invocation açıkça `python main.py --mode auto` çalıştırır. Scheduled production varsayılan olarak kapalıdır; repository Actions variable `ARTFOLIO_PRODUCTION_SCHEDULE_ENABLED` tam olarak `true` olduğunda publish job’ı çalışabilir. Feed publication ayrıca tek slotluk durable Stage B permit veya açıkça verilmiş sürekli çalışma izni ve en az 48 saatlik completion gate gerektirir. Değişkenin eksik olması veya farklı bir değer taşıması fail-closed davranır. Tek slot modu her denemeden sonra duraklar. `enable-continuous` ile aynı main sürümüne verilen kalıcı izinde normal başarılı yayınlardan sonra bot duraklamaz; her günlük uygunluk koşusunda sıradaki formatı seçer. Cooldown dolmamışsa içerik üretmeden başarılı biçimde atlar. Belirsiz yayın, eksik receipt veya çözülmemiş cleanup durumunda yeni paylaşım yapmaz; aynı slotta tekrar denemez. Yeni main sürümü için çalışma izni yeniden verilmelidir.
+Scheduled invocation açıkça `python main.py --mode auto` çalıştırır. Scheduled production varsayılan olarak kapalıdır; repository Actions variable `ARTFOLIO_PRODUCTION_SCHEDULE_ENABLED` tam olarak `true` olduğunda publish job’ı çalışabilir. Feed publication ayrıca tek slotluk durable Stage B permit veya açıkça verilmiş sürekli çalışma izni ve en az 48 saatlik completion gate gerektirir. Değişkenin eksik olması veya farklı bir değer taşıması fail-closed davranır. Tek slot modu her denemeden sonra duraklar. `enable-continuous` ile aynı main sürümüne verilen kalıcı izinde normal başarılı yayınlardan sonra bot duraklamaz; izin verilen zaman penceresindeki uygunluk koşusunda sıradaki formatı seçer. Cooldown dolmamışsa içerik üretmeden başarılı biçimde atlar. Belirsiz yayın, eksik receipt veya çözülmemiş cleanup durumunda yeni paylaşım yapmaz; aynı slotta tekrar denemez. Yeni main sürümü için çalışma izni yeniden verilmelidir.
 
 Workflow manuel olarak da **Actions → Instagram Art Bot Scheduler → Run workflow** üzerinden başlatılabilir. Manuel yol da `auto` sırasını izler; `confirm_publish` alanı tam olarak `PUBLISH_TO_INSTAGRAM` olmalıdır. Operatör her yeni publication izni için rastgele bir UUIDv4 üretir, repository Actions variable `ARTFOLIO_MANUAL_AUTHORIZATION_ID` olarak ayarlar, aynı anda `ARTFOLIO_MANUAL_AUTHORIZATION_ISSUED_AT` değerini UTC ISO-8601 zaman damgası olarak ayarlar ve UUID'yi `authorization_id` dispatch alanına girer. Reel manuel dispatch'i aynı iki variable'ı ve kendi `PUBLISH_REEL_TO_INSTAGRAM` onayını kullanır. Tek bir UUID, Feed veya Reel tarafında yalnız bir reservation CAS yazısında tüketilebilir; ikinci dispatch aynı UUID'yi yeniden kullanamaz. İzin verildikten sonra iki variable yeniden güncellenmeden başka manuel publication yapılamaz.
 
@@ -82,13 +82,14 @@ Her workflow invocation şu sırayla ilerler:
 
 ```text
 dependency install
+→ lightweight read-only readiness check (scheduled runs)
 → compile validation
 → pytest
 → read-only Feed production preflight
 → production bot
 ```
 
-Compile adımı `main.py`, `src`, `scripts` ve `tests` kapsamını; test adımı hızlı olan full `pytest -q` suite’ini çalıştırır. Install, compile, test veya preflight başarısız olursa production adımı çalışmaz. Production secret’ları yalnız preflight ve publish adımlarına verilir; compile ve test adımları secret almaz. Preflight strict rights/config ve public HTTPS URL biçimini, ayrı durable-state bucket yapılandırmasını, `publication_safety_state.v2.json` ve `publication_receipts.v2.json` nesnelerinin varlığını, şemalarını ve GET yanıtlarındaki expiration metadata'sını doğrular; Instagram hesap kimliğini GET ile okur. Eksik veya bozuk v2 state production'ı durdurur; eski `posted_history.json` otomatik fallback değildir. Preflight canlı `PENDING`, `PUBLISHING`, `AMBIGUOUS`, eksik receipt ve çözülmemiş cleanup queue durumunu durdurur. Eski ama hâlâ `PENDING` olan kayıt operatör uzlaştırması gerektirir; durable `EXPIRED` durumuna geçmiş ve medyası temizlenmiş kayıt engel değildir. Reservation'dan hemen önce authoritative state ve receipt tekrar okunur, sahipli R2 media prefix'leri salt okunur listelenir; `EXPIRED` veya bilinmeyen publication ID altında kalan media anomali sayılır, normal `PUBLISHED` media retention kabul edilir. İzin tüketimi ve reservation aynı state CAS yazısındadır. Bucket lifecycle kuralları deployment sırasında ayrıca denetlenir; scoped runtime credential ile bucket konfigürasyonu okunmaz. Preflight R2 write veya Instagram publish yetkisini kanıtlamaz.
+Compile adımı `main.py`, `src`, `scripts` ve `tests` kapsamını; test adımı hızlı olan full `pytest -q` suite’ini çalıştırır. Install, compile, test veya preflight başarısız olursa production adımı çalışmaz. Instagram ve içerik üretim secret’ları yalnız preflight ve publish adımlarına verilir; readiness kontrolü salt okunur R2 state/receipt ve sahipli media envanterini okur. Compile ve test adımları secret almaz. Preflight strict rights/config ve public HTTPS URL biçimini, ayrı durable-state bucket yapılandırmasını, `publication_safety_state.v2.json` ve `publication_receipts.v2.json` nesnelerinin varlığını, şemalarını ve GET yanıtlarındaki expiration metadata'sını doğrular; Instagram hesap kimliğini GET ile okur. Eksik veya bozuk v2 state production'ı durdurur; eski `posted_history.json` otomatik fallback değildir. Preflight canlı `PENDING`, `PUBLISHING`, `AMBIGUOUS`, eksik receipt ve çözülmemiş cleanup queue durumunu durdurur. Eski ama hâlâ `PENDING` olan kayıt operatör uzlaştırması gerektirir; durable `EXPIRED` durumuna geçmiş ve medyası temizlenmiş kayıt engel değildir. Reservation'dan hemen önce authoritative state ve receipt tekrar okunur, sahipli R2 media prefix'leri salt okunur listelenir; `EXPIRED` veya bilinmeyen publication ID altında kalan media anomali sayılır, normal `PUBLISHED` media retention kabul edilir. İzin tüketimi ve reservation aynı state CAS yazısındadır. Bucket lifecycle kuralları deployment sırasında ayrıca denetlenir; scoped runtime credential ile bucket konfigürasyonu okunmaz. Preflight R2 write veya Instagram publish yetkisini kanıtlamaz.
 
 Receipt `occurred_at` alanı boş (`null`) olabilir; mevcut olduğunda timezone zorunludur. Kabul edilen biçim `YYYY-MM-DDTHH:MM:SS` (isteğe bağlı 1–6 haneli kesir) ve ardından `Z`, `+HH:MM`/`-HH:MM` veya recovery ledger'daki `+HHMM`/`-HHMM` offset'idir. Geçersiz tarih/saat, hatalı offset, timezone'suz değer ve sonda ek veri reddedilir. Orijinal receipt metni ve digest değiştirilmez. CI'daki Python 3.10 testleri, production preflight'in bu legacy offset'i okumasını ayrıca doğrular.
 
@@ -446,16 +447,20 @@ Insights lane: owned media GET → association → append-only R2 snapshots
 
 ## Stage B scheduled Feed hardening
 
-Stage A is complete; Stage B remains disabled. Feed has one daily eligibility event
-at 17:17 UTC (`17 17 * * *`). Publication additionally requires a finite, operator-armed
-durable permit for the exact main SHA and one original scheduled run. Successful Feed
-completions must be at least 48 hours apart. Admission immediately pauses scheduling;
-every outcome requires operator review and a separate new permit. There is no catch-up,
-automatic rearm or replacement after failure. Manual Feed authorization and Reel remain
-compatible. Legacy state loads normally, but missing Stage B control blocks scheduled Feed.
+Feed supports explicitly approved continuous operation and legacy operator-reviewed
+single-slot permits. Hourly eligibility checks (`17 * * * *`) do not change the minimum
+48-hour gap after a proven successful Feed completion. New hourly operation requires
+`hourly_utc17` approval for the exact main SHA; old approvals default to daily 17:17 UTC.
+Safe continuous outcomes keep scheduling enabled. Clean definitive failures retain
+a minimum 24-hour attempt backoff; ambiguous, incomplete or dirty state blocks publication.
+Waiting checks skip expensive validation and publishing. Manual Feed authorization
+and Reel behavior remain compatible; missing Stage B control still fails closed.
+
+Use `python scripts/manage_feed_schedule.py status --expected-sha EXACT_MAIN_SHA`
+for a read-only status showing the last success, next opportunity and current reason.
 
 See [Stage B control and operator procedures](docs/STAGE-B-SCHEDULE.md) for the CAS
-operator tool, future separately authorized PAUSED migration and emergency stop.
+operator tool, cadence approval, migration and emergency stop.
 Turning the scheduler variable off does **not** stop a job already running. No production
 migration, scheduler enablement, workflow enablement or Instagram publication is
 authorized by this change.
