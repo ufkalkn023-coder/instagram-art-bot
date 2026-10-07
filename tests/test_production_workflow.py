@@ -46,7 +46,7 @@ def _normalized(expression: str) -> str:
     return " ".join(expression.split())
 
 
-def test_manual_dispatch_is_carousel_only_and_requires_exact_confirmation():
+def test_manual_dispatch_requires_exact_feed_confirmation():
     dispatch = _workflow()["on"]["workflow_dispatch"]
     assert set(dispatch["inputs"]) == {"confirm_publish", "authorization_id"}
 
@@ -54,7 +54,7 @@ def test_manual_dispatch_is_carousel_only_and_requires_exact_confirmation():
     assert confirmation["required"] is True
     assert confirmation["type"] == "string"
     assert CONFIRMATION in confirmation["description"]
-    assert "REAL Instagram carousel" in confirmation["description"]
+    assert "REAL Instagram Feed post" in confirmation["description"]
     assert "default" not in confirmation
     assert dispatch["inputs"]["authorization_id"]["required"] is True
     assert "default" not in dispatch["inputs"]["authorization_id"]
@@ -87,15 +87,14 @@ def test_schedule_has_one_daily_utc_eligibility_event():
     assert CAROUSEL_CRON.split() == ["17", "17", "*", "*", "*"]
 
     publish = _steps_by_name()["Fetch artwork, process image, and post to Instagram"]
-    assert publish["run"] == "python main.py --mode carousel"
+    assert publish["run"] == "python main.py --mode auto"
 
 
-def test_all_production_invocations_are_carousel_only():
+def test_production_invocations_use_success_based_format_rotation():
     publish = _steps_by_name()["Fetch artwork, process image, and post to Instagram"]
     script = publish["run"]
-    assert "single" not in script
     assert "--force-carousel" not in script
-    assert script == "python main.py --mode carousel"
+    assert script == "python main.py --mode auto"
 
 
 def test_production_workflow_retains_operational_safety_gates():
@@ -122,14 +121,14 @@ def test_production_workflow_retains_operational_safety_gates():
         "python -m compileall -q main.py src scripts tests"
     )
     assert steps["Run test suite"]["run"] == "pytest -q"
-    assert steps["Preflight normal carousel production"]["run"] == (
-        "python main.py --preflight-carousel"
+    assert steps["Preflight normal Feed production"]["run"] == (
+        "python main.py --preflight-feed"
     )
 
 
 def test_production_workflow_sets_strict_rights_policy_and_fences_legacy_token():
     steps = _steps_by_name()
-    validation_environment = steps["Preflight normal carousel production"]["env"]
+    validation_environment = steps["Preflight normal Feed production"]["env"]
     publish_environment = steps[
         "Fetch artwork, process image, and post to Instagram"
     ]["env"]

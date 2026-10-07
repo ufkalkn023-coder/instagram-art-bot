@@ -8,6 +8,7 @@ from enum import Enum
 from pathlib import Path
 from typing import Sequence
 from urllib.parse import urlsplit
+from uuid import uuid4
 
 import config
 from src.aic_image_policy import get_aic_image_request_policy
@@ -96,6 +97,8 @@ ARTFOLIO_SELECTION_THEME = CarouselThemeDefinition(
 
 class ProductionMode(str, Enum):
     CAROUSEL = "carousel"
+    SINGLE = "single"
+    AUTO = "auto"
 
 
 def _format_adapter_reasons(values: dict[str, str]) -> str:
@@ -253,6 +256,7 @@ _GENERATED_ARTIFACT_PATTERNS = (
     "output_post.jpg",
     "output_raw_*.jpg",
     "raw_artwork.jpg",
+    "single_*.jpg",
 )
 
 
@@ -288,7 +292,146 @@ def _cleanup_new_generated_artifacts(existing: set[Path]) -> None:
 
 def _resolve_production_mode(args, now: datetime | None = None) -> ProductionMode:
     del now
-    return ProductionMode(args.mode)
+    mode = ProductionMode(args.mode)
+    if mode is not ProductionMode.AUTO:
+        return mode
+    publications = [
+        row for row in history_tracker.get_recent_publications()
+        if row.get("type") in {"single", "carousel"}
+    ]
+    if not publications:
+        return ProductionMode.CAROUSEL
+    latest = max(
+        publications,
+        key=lambda row: datetime.fromisoformat(row["posted_at"].replace("Z", "+00:00")),
+    )
+    return (
+        ProductionMode.SINGLE if latest["type"] == "carousel"
+        else ProductionMode.CAROUSEL
+    )
+
+
+def _format_single_caption(artwork: dict, analysis: dict | None) -> str:
+    """Keep factual credits outside the optional generated editorial story."""
+    credits = "\n".join(
+        f"{label}: {str(artwork[key]).strip()}"
+        for key, label in (
+            ("title", "Title"), ("artist", "Artist"),
+            ("date", "Date"), ("museum", "Collection"),
+        )
+        if artwork.get(key) and str(artwork[key]).strip()
+    )
+    hashtags = str((analysis or {}).get("hashtags") or "#Art #Artfolio #MuseumArt").strip()
+    fixed = f"{credits}\n\n{hashtags}"
+    if len(fixed) > 2200:
+        raise ValueError("Single artwork credits exceed Instagram caption capacity")
+    story = str((analysis or {}).get("caption") or "").strip()
+    available = 2200 - len(fixed) - 2
+    story = story[:max(0, available)].rstrip()
+    return f"{credits}\n\n{story}\n\n{hashtags}" if story else fixed
+
+
+def run_single_post(args, authorization: ProductionAuthorization | None = None):
+    """Publish one securely selected artwork through the durable Feed lifecycle."""
+    try:
+        artwork = art_fetcher.fetch_single_artwork(history_tracker.get_posted_ids())
+    except StopIteration as error:
+        raise RuntimeError("No publishable single artwork is available") from error
+    analysis = gemini_ai.analyze_artwork(
+        image_path=artwork["local_image_path"],
+        title=artwork.get("title", ""), artist=artwork.get("artist", ""),
+        date=artwork.get("date", ""), museum=artwork.get("museum", ""),
+        medium=artwork.get("medium", ""), classification=artwork.get("classification", ""),
+    )
+    caption = _format_single_caption(artwork, analysis)
+    path = image_processor.create_feed_post(
+        artwork["local_image_path"],
+        output_path=os.path.join(config.DATA_DIR, f"single_{uuid4().hex}.jpg"),
+    )
+    if args.dry_run:
+        logger.info(
+            "DRY RUN SUCCESS mode=single artwork_id=%s local_artifact=%s "
+            "history_mutation=skipped media_upload=skipped instagram_publish=skipped",
+            artwork["id"], path,
+        )
+        return
+
+    artwork_ids = [artwork["id"]]
+    publication_id = history_tracker.reserve_single_publication(
+        artwork, authorization=authorization,
+    )
+    uploads: list[r2_media.TempMediaUpload] = []
+    try:
+        uploads.append(image_processor.upload_temp_media(path, publication_id))
+    except Exception:
+        _handle_pre_meta_staging_failure(artwork_ids, publication_id, uploads)
+        raise
+    publish_attempt_started = False
+
+    def before_publish(container_id: str, child_container_ids: tuple[str, ...]) -> None:
+        nonlocal publish_attempt_started
+        history_tracker.start_publication_attempt(
+            artwork_ids, container_id, child_container_ids,
+            expected_publication_id=publication_id,
+            **({"authorization": authorization} if authorization is not None
+               and authorization.is_scheduled_feed else {}),
+        )
+        publish_attempt_started = True
+
+    access_token = os.environ.get("INSTAGRAM_ACCESS_TOKEN")
+    try:
+        media_id = instagram_poster.post_to_instagram_graph_api(
+            media_url=uploads[0].public_url, caption=caption,
+            account_id=os.environ.get("INSTAGRAM_ACCOUNT_ID"), access_token=access_token,
+            alt_text=(analysis or {}).get("alt_text") or artwork.get("alt_text"),
+            before_publish=before_publish,
+        )
+        if not publish_attempt_started:
+            history_tracker.mark_artworks_ambiguous(
+                artwork_ids, "publisher_skipped_durable_boundary",
+                expected_publication_id=publication_id,
+            )
+            raise RuntimeError("Instagram publisher skipped the durable publication boundary")
+    except instagram_poster.InstagramPrePublishBoundaryError:
+        history_tracker.mark_publication_not_published(
+            artwork_ids, "pre_publish_boundary_failure", authoritative=True,
+            expected_publication_id=publication_id,
+        )
+        _cleanup_authoritatively_expired_media(publication_id, reason="pre_publish_boundary_failure")
+        raise
+    except instagram_poster.InstagramPublishAmbiguousError:
+        history_tracker.mark_artworks_ambiguous(
+            artwork_ids, expected_publication_id=publication_id,
+        )
+        raise
+    except instagram_poster.InstagramAPIError as error:
+        if publish_attempt_started:
+            history_tracker.mark_publication_not_published(
+                artwork_ids, f"definitive_media_publish_rejection:{type(error).__name__}",
+                authoritative=True, expected_publication_id=publication_id,
+            )
+            _cleanup_authoritatively_expired_media(publication_id, reason="definitive_media_publish_rejection")
+        raise
+    except Exception as error:
+        if publish_attempt_started:
+            history_tracker.mark_artworks_ambiguous(
+                artwork_ids, f"unexpected_post_boundary_error:{type(error).__name__}",
+                expected_publication_id=publication_id,
+            )
+        raise
+
+    try:
+        history_tracker.record_publish_response(
+            artwork_ids, media_id, expected_publication_id=publication_id,
+        )
+    except Exception:
+        logger.exception("Single publish response persistence failed; durable container lock retained")
+    history_tracker.confirm_artworks_and_record_publication(
+        artwork_ids, media_id, "single", publication_id=publication_id,
+        content_type="SINGLE_ARTWORK",
+        permalink=_get_published_instagram_permalink(media_id, access_token),
+    )
+    logger.info("history_confirmed mode=single publication_id=%s media_id=%s", publication_id, media_id)
 
 
 def _load_engagement_model() -> EngagementModel:
@@ -1060,7 +1203,7 @@ def main(argv: list[str] | None = None) -> int:
         "--mode",
         choices=[mode.value for mode in ProductionMode],
         default=ProductionMode.CAROUSEL.value,
-        help="Publish the canonical carousel feed product",
+        help="Publish a carousel, one artwork, or alternate formats from successful Feed history",
     )
     parser.add_argument(
         "--validate-production-config",
@@ -1068,9 +1211,9 @@ def main(argv: list[str] | None = None) -> int:
         help="Validate required production environment variables and exit",
     )
     parser.add_argument(
-        "--preflight-carousel",
+        "--preflight-feed", "--preflight-carousel", dest="preflight_carousel",
         action="store_true",
-        help="Read-only production carousel readiness check and exit",
+        help="Read-only production Feed readiness check and exit",
     )
     parser.add_argument(
         "--reconcile-publications",
@@ -1112,7 +1255,7 @@ def main(argv: list[str] | None = None) -> int:
         if args.preflight_carousel:
             optional_status = validate_carousel_production_preflight()
             logger.info(
-                "preflight_complete mode=carousel optional_integrations=%s",
+                "preflight_complete mode=feed optional_integrations=%s",
                 ",".join(
                     f"{name}:{status}"
                     for name, status in sorted(optional_status.items())
@@ -1233,10 +1376,16 @@ def main(argv: list[str] | None = None) -> int:
                     "STOP_AUTOMATED_PRODUCTION: reconciliation or cleanup incomplete"
                 )
 
+        # Resolve auto again after reconciliation so an older confirmed outcome
+        # cannot leave format selection based on a stale publication projection.
+        if not args.dry_run and args.mode == ProductionMode.AUTO.value:
+            mode = _resolve_production_mode(args)
+        logger.info("production_format_selected mode=%s", mode.value)
+        runner = run_single_post if mode is ProductionMode.SINGLE else run_carousel_post
         if args.dry_run:
-            run_carousel_post(args)
+            runner(args)
         else:
-            run_carousel_post(args, authorization)
+            runner(args, authorization)
 
         if not args.dry_run:
             logger.info("production_success mode=%s", mode.value)
