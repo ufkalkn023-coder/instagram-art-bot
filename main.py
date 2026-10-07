@@ -333,10 +333,38 @@ def _format_single_caption(artwork: dict, analysis: dict | None) -> str:
 
 def run_single_post(args, authorization: ProductionAuthorization | None = None):
     """Publish one securely selected artwork through the durable Feed lifecycle."""
+    from src.instagram_image import InstagramImageNotPublishableError
+
+    candidates = art_fetcher.iter_single_post_candidates(
+        history_tracker.get_posted_ids(),
+        max_candidates=art_fetcher.SINGLE_DIVERSITY_FINALIST_TARGET,
+    )
+    artwork = None
+    path = None
     try:
-        artwork = art_fetcher.fetch_single_artwork(history_tracker.get_posted_ids())
-    except StopIteration as error:
-        raise RuntimeError("No publishable single artwork is available") from error
+        for candidate in candidates:
+            try:
+                candidate_path = image_processor.create_feed_post(
+                    candidate["local_image_path"],
+                    output_path=os.path.join(config.DATA_DIR, f"single_{uuid4().hex}.jpg"),
+                )
+            except InstagramImageNotPublishableError as error:
+                reason = getattr(error.result.reason, "value", error.result.reason)
+                logger.warning(
+                    "single_candidate_unpublishable artwork_id=%s reason=%s",
+                    candidate.get("id"), reason,
+                )
+                continue
+            artwork = candidate
+            path = candidate_path
+            break
+    finally:
+        candidates.close()
+    if artwork is None or path is None:
+        raise RuntimeError(
+            "No single artwork in the bounded candidate pool passed Instagram image validation"
+        )
+
     analysis = gemini_ai.analyze_artwork(
         image_path=artwork["local_image_path"],
         title=artwork.get("title", ""), artist=artwork.get("artist", ""),
@@ -344,10 +372,6 @@ def run_single_post(args, authorization: ProductionAuthorization | None = None):
         medium=artwork.get("medium", ""), classification=artwork.get("classification", ""),
     )
     caption = _format_single_caption(artwork, analysis)
-    path = image_processor.create_feed_post(
-        artwork["local_image_path"],
-        output_path=os.path.join(config.DATA_DIR, f"single_{uuid4().hex}.jpg"),
-    )
     if args.dry_run:
         logger.info(
             "DRY RUN SUCCESS mode=single artwork_id=%s local_artifact=%s "
