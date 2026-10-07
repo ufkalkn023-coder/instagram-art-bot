@@ -1341,7 +1341,10 @@ def main(argv: list[str] | None = None) -> int:
             optional_status = validate_carousel_production_preflight()
             authorization = load_workflow_authorization()
             if isinstance(authorization, ProductionAuthorization) and authorization.is_scheduled_feed:
-                feed_schedule.FeedScheduleManager().admit(authorization)
+                permit_id = feed_schedule.FeedScheduleManager().admit(authorization)
+                if permit_id is None:
+                    logger.info("production_skipped reason=continuous_feed_cooldown schedule_enabled=true")
+                    return 0
                 admitted_schedule = True
             logger.info(
                 "validation_complete config_only=false optional_integrations=%s",
@@ -1404,7 +1407,7 @@ def main(argv: list[str] | None = None) -> int:
                     authorization, interrupted=schedule_interrupted,
                 )
             except Exception:
-                logger.exception("schedule_outcome_persistence_failed scheduling_remains_paused")
+                logger.exception("schedule_outcome_persistence_failed attempt_lock_retained")
                 result = 1
         if existing_artifacts is not None:
             _cleanup_new_generated_artifacts(existing_artifacts)

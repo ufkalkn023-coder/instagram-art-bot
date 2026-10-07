@@ -1,4 +1,4 @@
-"""One operator review permits at most one scheduled Feed attempt, using safety CAS."""
+"""Single-slot and continuously approved Feed attempts use the same safety CAS."""
 
 from __future__ import annotations
 
@@ -12,6 +12,7 @@ from src.models import (
     FeedScheduleOutcome,
     FeedSchedulePermit,
     FeedScheduleReview,
+    FeedContinuousApproval,
     PublicationReceipts,
     PublicationSafetyState,
     parse_receipt_occurrence,
@@ -99,6 +100,21 @@ def control_for(state: PublicationSafetyState) -> FeedScheduleControl:
     return state.feed_schedule_control
 
 
+def continuous_approval(control: FeedScheduleControl) -> FeedContinuousApproval | None:
+    if control.continuous_approvals and control.continuous_approvals[-1].revoked_at is None:
+        return control.continuous_approvals[-1]
+    return None
+
+
+def safe_completed_attempt(permit: FeedSchedulePermit) -> bool:
+    return bool(
+        permit.outcome is not None
+        and permit.status in {"SUCCESS", "DEFINITIVE_FAILURE"}
+        and not permit.outcome.cleanup_pending
+        and not permit.outcome.reconciliation_pending
+    )
+
+
 def require_cooldown(
     state: PublicationSafetyState, ledger: PublicationReceipts, at: datetime
 ) -> None:
@@ -125,6 +141,12 @@ def require_owner(
     if not control.permits:
         raise FeedScheduleError("SCHEDULE_NOT_ARMED")
     permit = control.permits[-1]
+    if permit.continuous_approval_id is not None:
+        approval = continuous_approval(control)
+        if (control.paused or approval is None
+                or approval.approval_id != permit.continuous_approval_id
+                or approval.approved_sha != authorization.head_sha):
+            raise FeedScheduleError("CONTINUOUS_APPROVAL_REVOKED")
     if (
         not authorization.is_scheduled_feed
         or permit.status != status
@@ -160,6 +182,14 @@ def require_control_update(
         raise publication_state.StateValidationError(
             "Schedule evidence cannot disappear"
         )
+    if (len(new.continuous_approvals) < len(old.continuous_approvals)
+            or len(new.continuous_approvals) > len(old.continuous_approvals) + 1):
+        raise publication_state.StateValidationError("Continuous approvals are append-only")
+    for prior, candidate in zip(old.continuous_approvals, new.continuous_approvals):
+        if any(getattr(prior, field) != getattr(candidate, field) for field in (
+            "approval_id", "approved_sha", "created_at", "approval_ref",
+        )) or (prior.revoked_at is not None and prior.revoked_at != candidate.revoked_at):
+            raise publication_state.StateValidationError("Continuous approval evidence is immutable")
     if parse_receipt_occurrence(
         new.latest_successful_feed_at
     ) < parse_receipt_occurrence(old.latest_successful_feed_at):
@@ -199,6 +229,7 @@ def require_control_update(
             "approved_sha",
             "created_at",
             "approval_ref",
+            "continuous_approval_id",
         ):
             if getattr(prior, field) != getattr(candidate, field):
                 raise publication_state.StateValidationError(
@@ -230,7 +261,8 @@ def require_control_update(
             )
     if len(new.permits) > len(old.permits) + 1:
         raise publication_state.StateValidationError("Only one permit may be armed")
-    if not new.paused and (len(new.permits) == len(old.permits) and old.paused):
+    newly_approved = len(new.continuous_approvals) == len(old.continuous_approvals) + 1
+    if not new.paused and (len(new.permits) == len(old.permits) and old.paused) and not newly_approved:
         raise publication_state.StateValidationError(
             "An existing permit cannot be rearmed"
         )
@@ -254,7 +286,10 @@ class FeedScheduleManager:
         effective_reason = (
             control.pause_reason if control else "STAGE_B_SCHEDULE_NOT_INITIALIZED"
         )
-        if control is not None and not control.paused and control.permits:
+        if control is not None and not control.paused and continuous_approval(control) is not None:
+            effective_paused = False
+            effective_reason = "CONTINUOUS_ENABLED"
+        elif control is not None and not control.paused and control.permits:
             permit = control.permits[-1]
             effective_paused = not (
                 parse_receipt_occurrence(permit.slot_at)
@@ -340,17 +375,101 @@ class FeedScheduleManager:
         self._save(state, etag, control)
         return permit.permit_id
 
+    def enable_continuous(
+        self, *, expected_generation: int, approved_sha: str, main_sha: str,
+        review_ref: str, now: datetime | None = None,
+    ) -> str:
+        now = utc(now or datetime.now(timezone.utc))
+        state, etag, control = self._expected(expected_generation)
+        ledger, _ = self.store.load_receipts()
+        self._clean(state, ledger, now)
+        completed, publication_id = latest_success(state, ledger)
+        if (approved_sha != main_sha
+                or completed != parse_receipt_occurrence(control.latest_successful_feed_at)
+                or publication_id != control.latest_successful_feed_id):
+            raise FeedScheduleError("CONTINUOUS_APPROVAL_OR_BASELINE_INVALID")
+        active = continuous_approval(control)
+        if active is not None and not control.paused and active.approved_sha == approved_sha:
+            return active.approval_id
+        if control.permits:
+            prior = control.permits[-1]
+            if prior.owner_run_id is not None and not safe_completed_attempt(prior) and prior.acknowledgement is None:
+                raise FeedScheduleError("CONTINUOUS_PREVIOUS_ATTEMPT_UNRESOLVED")
+            if prior.status == "ARMED":
+                prior.status = "REVOKED"
+                prior.revoked_at = stamp(now)
+        if active is not None:
+            active.revoked_at = stamp(now)
+        approval = FeedContinuousApproval(
+            approval_id=str(uuid4()), approved_sha=approved_sha,
+            created_at=stamp(now), approval_ref=review_ref,
+        )
+        control.continuous_approvals.append(approval)
+        control.paused = False
+        control.pause_reason = "CONTINUOUS_ENABLED"
+        self._save(state, etag, control)
+        return approval.approval_id
+
+    def _admit_continuous(
+        self, state: PublicationSafetyState, etag: str, control: FeedScheduleControl,
+        ledger: PublicationReceipts, authorization: ProductionAuthorization,
+        now: datetime, approval: FeedContinuousApproval,
+    ) -> str | None:
+        slot = now.replace(hour=17, minute=17, second=0, microsecond=0)
+        expiry = slot + timedelta(minutes=60)
+        if (not authorization.is_scheduled_feed
+                or authorization.repository != FEED_REPOSITORY
+                or authorization.workflow_path != FEED_WORKFLOW
+                or type(authorization.run_attempt) is not int or authorization.run_attempt != 1
+                or authorization.head_sha != approval.approved_sha
+                or authorization.key != f"schedule:{authorization.run_id}"
+                or not parse_receipt_occurrence(approval.created_at) <= utc(authorization.created_at)
+                or not slot <= utc(authorization.created_at) <= now < expiry
+                or any(a["run_id"] == authorization.run_id or a["key"] == authorization.key
+                       for a in state.active_publication_state.consumed_authorizations)):
+            raise FeedScheduleError("CONTINUOUS_RUN_IDENTITY_OR_WINDOW_INVALID")
+        if control.permits:
+            prior = control.permits[-1]
+            if prior.owner_run_id is not None and (
+                slot <= parse_receipt_occurrence(prior.expires_at)
+                or not safe_completed_attempt(prior) and prior.acknowledgement is None
+            ):
+                raise FeedScheduleError("CONTINUOUS_PREVIOUS_ATTEMPT_UNRESOLVED")
+            if prior.owner_run_id is None and prior.status not in {"EXPIRED", "REVOKED"}:
+                raise FeedScheduleError("CONTINUOUS_PREVIOUS_PERMIT_UNRESOLVED")
+        if now < parse_receipt_occurrence(control.next_eligible_at):
+            # Prove the stored baseline even on a read-only cooldown skip.
+            require_cooldown(state, ledger, parse_receipt_occurrence(control.next_eligible_at))
+            return None
+        require_cooldown(state, ledger, now)
+        permit = FeedSchedulePermit(
+            permit_id=str(uuid4()), slot_at=stamp(slot), expires_at=stamp(expiry),
+            approved_sha=approval.approved_sha, created_at=stamp(now),
+            approval_ref=approval.approval_ref, continuous_approval_id=approval.approval_id,
+            status="ADMITTED", owner_run_id=authorization.run_id, owner_run_attempt=1,
+            authorization_key=authorization.key, admitted_at=stamp(now),
+        )
+        control.permits.append(permit)
+        control.pause_reason = "CONTINUOUS_ATTEMPT_ACTIVE"
+        self._save(state, etag, control)
+        return permit.permit_id
+
     def admit(
         self, authorization: ProductionAuthorization, *, now: datetime | None = None
-    ) -> str:
+    ) -> str | None:
         now = utc(now or datetime.now(timezone.utc))
         require_fresh(authorization, now)
         state, etag = self.store.load_safety()
         control = control_for(state).model_copy(deep=True)
-        if not control.permits or control.paused:
+        if control.paused:
             raise FeedScheduleError("SCHEDULE_NOT_ARMED")
         ledger, _ = self.store.load_receipts()
         self._clean(state, ledger, now)
+        approval = continuous_approval(control)
+        if approval is not None:
+            return self._admit_continuous(state, etag, control, ledger, authorization, now, approval)
+        if not control.permits:
+            raise FeedScheduleError("SCHEDULE_NOT_ARMED")
         require_cooldown(state, ledger, now)
         permit = control.permits[-1]
         if (
@@ -390,6 +509,9 @@ class FeedScheduleManager:
         state, etag, control = self._expected(expected_generation)
         control.paused = True
         control.pause_reason = reason
+        approval = continuous_approval(control)
+        if approval is not None:
+            approval.revoked_at = stamp(now or datetime.now(timezone.utc))
         if control.permits:
             permit = control.permits[-1]
             if permit.acknowledgement is None and permit.revoked_at is None:
@@ -436,8 +558,14 @@ class FeedScheduleManager:
         )
         permit.outcome = outcome
         permit.status = outcome.classification
-        control.paused = True
-        control.pause_reason = f"{permit.status}_OPERATOR_REVIEW_REQUIRED"
+        keep_enabled = (
+            not control.paused and permit.continuous_approval_id is not None
+            and continuous_approval(control) is not None and safe_completed_attempt(permit)
+        )
+        control.paused = not keep_enabled
+        control.pause_reason = (
+            "CONTINUOUS_ENABLED" if keep_enabled else f"{permit.status}_OPERATOR_REVIEW_REQUIRED"
+        )
         self._save(state, etag, control)
 
     def acknowledge(
