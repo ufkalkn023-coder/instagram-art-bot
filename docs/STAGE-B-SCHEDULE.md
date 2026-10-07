@@ -12,6 +12,14 @@ switch. A valid durable permit is also mandatory. Manual UUIDv4 Feed authorizati
 retains its existing 60-minute freshness and reservation consumption semantics and
 needs no Stage B permit. Reel scheduling and the Reel workflow are unchanged.
 
+The Feed workflow invokes `--mode auto`: a finalized carousel is followed by a
+single-image post, and a finalized single is followed by a carousel. With no
+successful Feed history, it starts with a carousel. Selection reads validated
+successful publications, ignores Reel and unresolved attempts, and is refreshed
+after reconciliation. An unreadable history stops publication. Both formats use
+the same one-use authorization, reservation CAS, irreversible boundary and receipt
+completion gates. Alternation does not rearm a permit or change the 48-hour gate.
+
 The optional top-level `feed_schedule_control` in the sealed v2 safety object has
 its own schema version 1. Legacy objects without it remain readable; scheduled
 Feed fails closed. Malformed/unsupported control fails strict state validation.

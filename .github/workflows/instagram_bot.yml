@@ -6,7 +6,7 @@ name: Instagram Art Bot Scheduler
   workflow_dispatch: # Allows manual trigger from GitHub Actions tab
     inputs:
       confirm_publish:
-        description: "Type PUBLISH_TO_INSTAGRAM to create a REAL Instagram carousel"
+        description: "Type PUBLISH_TO_INSTAGRAM to create a REAL Instagram Feed post (carousel or single)"
         required: true
         type: string
       authorization_id:
@@ -67,7 +67,7 @@ jobs:
       - name: Run test suite
         run: pytest -q
 
-      - name: Preflight normal carousel production
+      - name: Preflight normal Feed production
         env:
           ARTFOLIO_RIGHTS_POLICY: strict_public_domain
           INSTAGRAM_ACCOUNT_ID: ${{ secrets.INSTAGRAM_ACCOUNT_ID }}
@@ -80,7 +80,7 @@ jobs:
           CLOUDFLARE_STATE_R2_ACCESS_KEY_ID: ${{ secrets.CLOUDFLARE_STATE_R2_ACCESS_KEY_ID }}
           CLOUDFLARE_STATE_R2_SECRET_ACCESS_KEY: ${{ secrets.CLOUDFLARE_STATE_R2_SECRET_ACCESS_KEY }}
           CLOUDFLARE_R2_PUBLIC_URL: ${{ secrets.CLOUDFLARE_R2_PUBLIC_URL }}
-        run: python main.py --preflight-carousel
+        run: python main.py --preflight-feed
 
       - name: Fetch artwork, process image, and post to Instagram
         env:
@@ -104,4 +104,4 @@ jobs:
           CLOUDFLARE_STATE_R2_ACCESS_KEY_ID: ${{ secrets.CLOUDFLARE_STATE_R2_ACCESS_KEY_ID }}
           CLOUDFLARE_STATE_R2_SECRET_ACCESS_KEY: ${{ secrets.CLOUDFLARE_STATE_R2_SECRET_ACCESS_KEY }}
           CLOUDFLARE_R2_PUBLIC_URL: ${{ secrets.CLOUDFLARE_R2_PUBLIC_URL }}
-        run: python main.py --mode carousel
+        run: python main.py --mode auto

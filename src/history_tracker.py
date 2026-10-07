@@ -2204,6 +2204,53 @@ def reserve_carousel(
     return publication_id
 
 
+def reserve_single_publication(
+    artwork_data: Dict[str, Any],
+    *,
+    authorization: ProductionAuthorization | None = None,
+) -> str:
+    """Atomically reserve one artwork for a single-feed publication."""
+    artwork_id = normalize_artwork_id(artwork_data["id"])
+    history, etag = load_history_with_etag()
+    now = datetime.now(timezone.utc)
+    _require_production_authorization(history, authorization, now)
+    if artwork_is_globally_protected(history, artwork_id, now=now):
+        raise RuntimeError(
+            f"Single publication reservation collided with protected artwork: {artwork_id}"
+        )
+
+    history["posted_artworks"] = [
+        item
+        for item in history.get("posted_artworks", [])
+        if not isinstance(item, dict)
+        or not isinstance(item.get("id"), str)
+        or normalize_artwork_id(item["id"]) != artwork_id
+    ]
+    publication_id = str(uuid.uuid4())
+    payload = dict(artwork_data)
+    payload["content_type"] = "SINGLE_ARTWORK"
+    record = _reservation_record(payload, publication_id=publication_id)
+    record["publication_type"] = "single"
+    history["posted_artworks"].append(record)
+    if authorization is not None:
+        history["consumed_authorizations"].append({
+            "key": authorization.key,
+            "run_id": authorization.run_id,
+            "publication_id": publication_id,
+            "consumed_at": _utc_timestamp(now),
+        })
+    if authorization is not None and authorization.is_scheduled_feed:
+        from src.feed_schedule import reserve_in_history
+        reserve_in_history(history, authorization, publication_id, now)
+    _upload_history(history, etag)
+    logger.info(
+        "Reserved single publication=%s artwork=%s in one R2 write.",
+        publication_id,
+        artwork_id,
+    )
+    return publication_id
+
+
 def start_publication_attempt(
     artwork_ids: Iterable[str],
     container_id: str,

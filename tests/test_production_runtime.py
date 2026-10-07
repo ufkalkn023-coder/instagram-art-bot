@@ -227,18 +227,25 @@ def test_explicit_mode_does_not_depend_on_wall_clock():
     )
 
 
-def test_single_mode_is_not_exposed_by_production_cli():
-    with pytest.raises(SystemExit):
-        main.main(["--dry-run", "--mode", "single"])
+def test_single_mode_uses_single_runner_in_dry_run(monkeypatch):
+    calls = []
+    monkeypatch.setattr(main, "run_single_post", lambda args: calls.append(args.dry_run))
+    monkeypatch.setattr(main, "run_carousel_post", lambda *_: pytest.fail("single routed to carousel"))
+    assert main.main(["--dry-run", "--mode", "single"]) == 0
+    assert calls == [True]
 
 
 def test_cleanup_removes_only_new_production_artifacts(monkeypatch, tmp_path):
     monkeypatch.setattr(main.config, "DATA_DIR", str(tmp_path))
     existing = tmp_path / "output_post.jpg"
     existing.write_bytes(b"preserve")
+    existing_single = tmp_path / "single_existing.jpg"
+    existing_single.write_bytes(b"preserve")
     snapshot = main._snapshot_generated_artifacts()
     generated = tmp_path / "raw_artwork.jpg"
     generated.write_bytes(b"remove")
+    generated_single = tmp_path / "single_new.jpg"
+    generated_single.write_bytes(b"remove")
     qc_directory = tmp_path / "qc_carousels" / "review"
     qc_directory.mkdir(parents=True)
     qc_artifact = qc_directory / "carousel_01.jpg"
@@ -248,6 +255,8 @@ def test_cleanup_removes_only_new_production_artifacts(monkeypatch, tmp_path):
 
     assert existing.read_bytes() == b"preserve"
     assert not generated.exists()
+    assert not generated_single.exists()
+    assert existing_single.read_bytes() == b"preserve"
     assert qc_artifact.read_bytes() == b"preserve"
 
 

@@ -1,6 +1,6 @@
 # Instagram Sanat Müzesi Paylaşım Otomasyonu
 
-Bu proje, müze API'lerinden gelen eserleri hak bilgisini koruyarak seçer, güvenli biçimde indirir ve resmi Meta Instagram Graph API üzerinden yalnız editorial carousel olarak paylaşır. GitHub Actions zamanlaması, aynı checkout üzerinde önce compile ve test doğrulamasını tamamlar; yalnız ardından production bot çalışır.
+Bu proje, müze API'lerinden gelen eserleri hak bilgisini koruyarak seçer, güvenli biçimde indirir ve resmi Meta Instagram Graph API üzerinden sırayla editorial carousel ve tekli görsel gönderisi olarak paylaşır. GitHub Actions zamanlaması, aynı checkout üzerinde önce compile ve test doğrulamasını tamamlar; yalnız ardından production bot çalışır.
 
 ## Ne yapar?
 
@@ -10,6 +10,7 @@ Bu proje, müze API'lerinden gelen eserleri hak bilgisini koruyarak seçer, güv
 - Duplicate, hak-policy, kalite ve tema uyumluluğu filtrelerinden geçen görselleri güvenli biçimde indirir; HTTPS-only erişim, private-network/SSRF koruması, redirect yeniden doğrulaması, sınırlı indirme ve Pillow doğrulaması uygular.
 - Chicago kaynağında yalnız açıkça public-domain eserler 1686px IIIF türevini kullanır; diğerleri API'nin meşru 843px analysis türevinde kalır. AIC IIIF istekleri süreç içinde tekilleştirilip yaklaşık saniyede bir isteğe sınırlandırılır ve `AIC-User-Agent` ile tanımlanır.
 - Carousel featured eserlerini ortak 1080×1350 (4:5) editorial canvas üzerinde, tam eseri contain ederek ve tek kez compositing yaparak gösterir. Boş alan carousel boyunca ortak deterministic nötr gallery field'dır; crop, stretch, blurred clone veya metadata overlay yoktur.
+- Tekli gönderide tek eserin oranını ve tamamını korur; yalnız gerekli Instagram uyumluluk dönüşümünü uygular. Caption kaynak başlık, sanatçı, tarih ve müze bilgisini korur; eksik bilgi uydurulmaz.
 - Gemini kullanılabiliyorsa caption, alt metin ve görsel metin önerisi üretir; anahtar yoksa veya istek başarısız olursa yerel fallback caption kullanır.
 - History bilgisini Cloudflare R2 üzerinde tutar; Instagram publish öncesinde durable kilit kullanarak olası duplicate paylaşımları engeller.
 - Kaynak hatalarını `source_health` kategorileriyle izole eder; bir adapter'ın erişim,
@@ -17,9 +18,11 @@ Bu proje, müze API'lerinden gelen eserleri hak bilgisini koruyarak seçer, güv
 
 ## Çalışma modu
 
-Instagram feed için tek canonical ürün carousel'dir. Her production koşusu bir editorial cover ve adaptive **5–8 featured eser** üretir; toplam slide sayısı 6–9'dur. En az beş güvenli, kaliteli ve temaya uyumlu featured eser ile bunlardan farklı bir cover bulunamazsa publication başlamaz. Sekize tamamlamak için zayıf aday eklenmez.
+Instagram feed `--mode auto` ile son başarıyla kesinleşmiş Feed publication'a göre **carousel → single → carousel** sırasını izler. Başarılı Feed kaydı yoksa carousel ile başlar. Başarısız, belirsiz veya yalnız rezerve edilmiş denemeler sırayı ilerletmez; Reel kayıtları sıralamaya katılmaz. History okunamazsa publish başlamaz. Her iki format aynı tek kullanımlık production izni, durable reservation, pre-publish CAS ve receipt akışını kullanır.
 
-Carousel teması doğrulanmış registry ve deterministic Theme Planner tarafından seçilir. Reel/export ve legacy history okuma altyapısı feed publisher'dan ayrıdır; feed CLI'sinde single modu, `--force-carousel`, dış image URL veya Pinterest publish seçeneği yoktur.
+Carousel koşusu bir editorial cover ve adaptive **5–8 featured eser** üretir; toplam slide sayısı 6–9'dur. En az beş güvenli, kaliteli ve temaya uyumlu featured eser ile bunlardan farklı bir cover bulunamazsa publication başlamaz. Sekize tamamlamak için zayıf aday eklenmez. Tekli koşu, mevcut güvenli tek eser seçicisiyle yalnız bir görsel seçer ve tek Instagram image container yayımlar.
+
+Carousel teması doğrulanmış registry ve deterministic Theme Planner tarafından seçilir. Reel/export ve legacy history okuma altyapısı feed publisher'dan ayrıdır. CLI `carousel`, `single` ve `auto` modlarını destekler; geriye uyumluluk için açık mod verilmezse carousel çalışır.
 
 ## Artfolio Theme Registry
 
@@ -60,14 +63,14 @@ Format policy, temanın istediği bilinçli benzerliği istenmeyen tekrardan ay�
 Workflow her gün 17:17 UTC’de tek bir Feed uygunluk olayı oluşturur:
 
 ```text
-carousel: 17 17 * * *
+Feed:     17 17 * * *
 ```
 
 GitHub Actions cron ifadeleri UTC’dir. Experiment metadata’sındaki dört legacy zaman bucket’ı korunur; bunlar publication izni veya cron sıklığı değildir.
 
-Scheduled invocation açıkça `python main.py --mode carousel` çalıştırır. Scheduled production varsayılan olarak kapalıdır; repository Actions variable `ARTFOLIO_PRODUCTION_SCHEDULE_ENABLED` tam olarak `true` olduğunda publish job’ı çalışabilir. Feed publication ayrıca tek slotluk durable Stage B permit ve 48 saatlik completion gate gerektirir. Değişkenin eksik olması veya farklı bir değer taşıması fail-closed davranır.
+Scheduled invocation açıkça `python main.py --mode auto` çalıştırır. Scheduled production varsayılan olarak kapalıdır; repository Actions variable `ARTFOLIO_PRODUCTION_SCHEDULE_ENABLED` tam olarak `true` olduğunda publish job’ı çalışabilir. Feed publication ayrıca tek slotluk durable Stage B permit ve 48 saatlik completion gate gerektirir. Değişkenin eksik olması veya farklı bir değer taşıması fail-closed davranır. Format dönüşümü otomatik izin yenilemez: her kabul edilen denemeden sonra Stage B yine duraklar ve sonraki slot ayrı permit gerektirir.
 
-Workflow manuel olarak da **Actions → Instagram Art Bot Scheduler → Run workflow** üzerinden başlatılabilir. Manuel yol da yalnız carousel yayınlar; `confirm_publish` alanı tam olarak `PUBLISH_TO_INSTAGRAM` olmalıdır. Operatör her yeni publication izni için rastgele bir UUIDv4 üretir, repository Actions variable `ARTFOLIO_MANUAL_AUTHORIZATION_ID` olarak ayarlar, aynı anda `ARTFOLIO_MANUAL_AUTHORIZATION_ISSUED_AT` değerini UTC ISO-8601 zaman damgası olarak ayarlar ve UUID'yi `authorization_id` dispatch alanına girer. Reel manuel dispatch'i aynı iki variable'ı ve kendi `PUBLISH_REEL_TO_INSTAGRAM` onayını kullanır. Tek bir UUID, Feed veya Reel tarafında yalnız bir reservation CAS yazısında tüketilebilir; ikinci dispatch aynı UUID'yi yeniden kullanamaz. İzin verildikten sonra iki variable yeniden güncellenmeden başka manuel publication yapılamaz.
+Workflow manuel olarak da **Actions → Instagram Art Bot Scheduler → Run workflow** üzerinden başlatılabilir. Manuel yol da `auto` sırasını izler; `confirm_publish` alanı tam olarak `PUBLISH_TO_INSTAGRAM` olmalıdır. Operatör her yeni publication izni için rastgele bir UUIDv4 üretir, repository Actions variable `ARTFOLIO_MANUAL_AUTHORIZATION_ID` olarak ayarlar, aynı anda `ARTFOLIO_MANUAL_AUTHORIZATION_ISSUED_AT` değerini UTC ISO-8601 zaman damgası olarak ayarlar ve UUID'yi `authorization_id` dispatch alanına girer. Reel manuel dispatch'i aynı iki variable'ı ve kendi `PUBLISH_REEL_TO_INSTAGRAM` onayını kullanır. Tek bir UUID, Feed veya Reel tarafında yalnız bir reservation CAS yazısında tüketilebilir; ikinci dispatch aynı UUID'yi yeniden kullanamaz. İzin verildikten sonra iki variable yeniden güncellenmeden başka manuel publication yapılamaz.
 
 Run attempt yalnız `1` olabilir. Workflow, GitHub Actions run API'sinden repository, event, commit, run ID, attempt ve değişmez `created_at` değerini doğrular; Actions token'ı yalnız `actions: read` ve `contents: read` yetkilerine sahiptir. Manuel izin veriliş zamanı ve run oluşturulma zamanı, reservation anında en fazla 60 dakika eski olabilir; run izin verilmeden önce oluşturulmuşsa veya sırada gecikmişse `PRODUCTION_AUTHORIZATION_EXPIRED` ile durur. Scheduled Feed ve Reel event'leri kendi schedule variable'larına bağlıdır ve `schedule:<run_id>` iznini bir kez tüketir. `instagram-bot` concurrency grubu aynı anda tek publish job'ına izin verir; tek kullanım kuralı ayrıca durable state CAS ile uygulanır. Scheduler ve workflow'ları etkinleştirmek ayrı rollout kararı gerektirir.
 
@@ -79,7 +82,7 @@ Her workflow invocation şu sırayla ilerler:
 dependency install
 → compile validation
 → pytest
-→ read-only carousel production preflight
+→ read-only Feed production preflight
 → production bot
 ```
 
@@ -265,15 +268,20 @@ Lock compiler sürümü `requirements-dev.in` içinde pinlidir. CI aynı üretim
 ```bash
 # Yerel çıktı üretir, publish mutasyonlarını yapmaz
 python main.py --dry-run
+python main.py --dry-run --mode single
+python main.py --dry-run --mode auto
 
-# Canonical production carousel'i çalıştırır (production config zorunludur)
+# Production config ve taze yayın izni zorunludur
 python main.py --mode carousel
+python main.py --mode single
+python main.py --mode auto
 
 # Network/acquisition başlatmadan yalnız required production config'i doğrular
 python main.py --validate-production-config
 
-# Instagram/R2 GET kontrolleriyle carousel production hazırlığını read-only doğrular
-python main.py --preflight-carousel
+# Instagram/R2 GET kontrolleriyle Feed production hazırlığını read-only doğrular
+# --preflight-carousel eski adı da desteklenir
+python main.py --preflight-feed
 
 # Yeni içerik üretmeden unresolved publication lifecycle durumunu uzlaştırır
 python3 main.py --reconcile-publications
