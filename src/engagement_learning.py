@@ -1,4 +1,4 @@
-"""Explainable, deterministic learning from carousel-level Instagram Insights.
+"""Explainable, deterministic learning from format-scoped Feed Insights.
 
 Instagram exposes post-level outcomes, not slide-level attribution. This module
 therefore learns only repeated publication and artwork-set features and shrinks
@@ -11,14 +11,14 @@ import hashlib
 import math
 from collections import Counter, defaultdict
 from collections.abc import Iterable, Mapping, Sequence
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import datetime, timezone
 from src.engagement_features import EngagementFeatureVector
 from src.insights_storage import parse_aware_timestamp
 from src.insights_snapshot import learning_snapshot_components
 
 
-MODEL_VERSION = "engagement_rates_v2"
+MODEL_VERSION = "engagement_rates_v3"
 MATURE_SNAPSHOT_PREFERENCE = (72, 168, 24)
 SNAPSHOT_CONFIDENCE = {24: 0.45, 72: 1.0, 168: 1.0}
 OUTCOME_WEIGHTS = {
@@ -86,6 +86,7 @@ class _RawObservation:
     components: Mapping[str, float]
     maturity_weight: float
     feature_keys: tuple[str, ...]
+    publication_format: str = "carousel"
 
 
 @dataclass(frozen=True)
@@ -122,6 +123,7 @@ class ObservationDiagnostic:
     reach_confidence_factor: float
     metric_coverage_factor: float
     final_observation_weight: float
+    publication_format: str = "carousel"
 
 
 @dataclass(frozen=True)
@@ -157,11 +159,25 @@ class EngagementModel:
     feature_estimates: Mapping[str, FeatureEstimate] = field(default_factory=dict)
     config: LearningConfig = field(default_factory=LearningConfig)
     version: str = MODEL_VERSION
+    format_models: Mapping[str, "EngagementModel"] = field(default_factory=dict)
+
+    @property
+    def useful_feed_observations(self) -> int:
+        return self.useful_publications
+
+    def for_format(self, publication_format: str) -> "EngagementModel":
+        """Never borrow evidence or confidence from the other Feed format."""
+        if publication_format not in {"carousel", "single"}:
+            raise ValueError("Unsupported Feed publication format")
+        if self.format_models:
+            return self.format_models.get(publication_format, self.cold_start(self.config))
+        # Legacy manually constructed models were carousel-only.
+        return self if publication_format == "carousel" else self.cold_start(self.config)
 
     @property
     def useful_carousel_observations(self) -> int:
-        """Unambiguous name for the historical ``useful_publications`` field."""
-        return self.useful_publications
+        """Retain the historical carousel-specific count for existing callers."""
+        return self.for_format("carousel").useful_publications
 
     @classmethod
     def cold_start(cls, config: LearningConfig | None = None) -> "EngagementModel":
@@ -375,10 +391,12 @@ def _publication_feature_keys(
         else preceding_minutes
     )
     context = {
+        "publication_format": publication.get("type"),
         "engagement_features": publication.get("engagement_features"),
         "carousel_theme": publication.get("carousel_theme", publication.get("theme")),
         "carousel_format": publication.get("carousel_format"),
-        "featured_count": publication.get("featured_count") or max(0, len(artworks) - 1),
+        "featured_count": (1 if publication.get("type") == "single" else
+                           publication.get("featured_count") or max(0, len(artworks) - 1)),
         "cover_variant": publication.get("cover_variant"),
         "caption_hook_type": publication.get("caption_hook_type"),
         "publish_slot": publication.get("publish_slot"),
@@ -412,6 +430,8 @@ def _raw_observations(
     history: Mapping[str, object],
     snapshots: Sequence[Mapping[str, object]],
     now: datetime,
+    *,
+    publication_formats: frozenset[str] = frozenset({"carousel", "single"}),
 ) -> _RawObservationResult:
     raw_publications = history.get("publications", [])
     raw_artworks = history.get("posted_artworks", [])
@@ -494,7 +514,7 @@ def _raw_observations(
 
     valid_publications: list[tuple[datetime, Mapping[str, object]]] = []
     for publication in raw_publications:
-        if not isinstance(publication, Mapping) or publication.get("type") != "carousel":
+        if not isinstance(publication, Mapping) or publication.get("type") not in publication_formats:
             continue
         if not identity_validity.get(id(publication), False):
             continue
@@ -510,10 +530,11 @@ def _raw_observations(
     result: list[_RawObservation] = []
     publications_with_snapshots = 0
     slot_publications: Counter[int] = Counter()
-    previous_posted_at: datetime | None = None
+    previous_posted_at: dict[str, datetime] = {}
     for posted_at, publication in valid_publications:
         publication_id = str(publication["id"]).strip()
         media_id = str(publication["media_id"]).strip()
+        publication_format = str(publication["type"])
         candidates = snapshots_by_pair.get((publication_id, media_id), ())
         if candidates:
             publications_with_snapshots += 1
@@ -527,11 +548,11 @@ def _raw_observations(
             )
         snapshot = select_mature_snapshot(candidates)
         preceding = (
-            (posted_at - previous_posted_at).total_seconds() / 60
-            if previous_posted_at is not None
+            (posted_at - previous_posted_at[publication_format]).total_seconds() / 60
+            if publication_format in previous_posted_at
             else None
         )
-        previous_posted_at = posted_at
+        previous_posted_at[publication_format] = posted_at
         if snapshot is None:
             exclusions["no_usable_snapshot" if candidates else "no_snapshot"] += 1
             continue
@@ -549,6 +570,7 @@ def _raw_observations(
         result.append(
             _RawObservation(
                 publication_id=publication_id,
+                publication_format=publication_format,
                 posted_at=posted_at,
                 target_age_hours=target,
                 reach=reach,
@@ -726,12 +748,18 @@ def analyze_engagement_learning(
         return EngagementAudit(model=model, excluded_by_reason={"malformed_history": 1})
     snapshot_values = snapshots if isinstance(snapshots, Sequence) else ()
     raw = _raw_observations(history, snapshot_values, timestamp)
-    scored = _score_observations(
-        raw.observations,
-        now=timestamp,
-        config=active_config,
-    )
-    model = _model_from_scored(scored, active_config)
+    scored = []
+    format_models = {}
+    for publication_format in ("carousel", "single"):
+        format_scored = _score_observations(
+            [item for item in raw.observations if item.publication_format == publication_format],
+            now=timestamp,
+            config=active_config,
+        )
+        scored.extend(format_scored)
+        format_models[publication_format] = _model_from_scored(format_scored, active_config)
+    model = (_model_from_scored(scored, active_config) if not scored else
+             replace(_model_from_scored(scored, active_config), format_models=format_models))
     total_weight = sum(item.weight for item in scored)
     exact_confidence = (
         total_weight / (total_weight + active_config.global_confidence_observations)
@@ -754,6 +782,8 @@ def analyze_engagement_learning(
             reach_confidence_factor=item.reach_confidence_factor,
             metric_coverage_factor=item.metric_coverage_factor,
             final_observation_weight=item.weight,
+            publication_format=next(raw_item.publication_format for raw_item in raw.observations
+                                    if raw_item.publication_id == item.publication_id),
         )
         for item in scored
     )

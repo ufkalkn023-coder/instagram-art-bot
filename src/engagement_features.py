@@ -35,6 +35,7 @@ _CANDIDATE_FEATURE_FIELDS = (
     "orientation",
 )
 _CONTEXT_FEATURE_FIELDS = (
+    "publication_format",
     "theme",
     "format",
     "featured_count",
@@ -107,6 +108,7 @@ class EngagementFeatureVector(BaseModel):
     luminance_bucket: str | None = None
     orientation: str | None = None
     theme: str | None = None
+    publication_format: Literal["single", "carousel"] | None = None
     format: str | None = None
     featured_count: int | None = Field(default=None, ge=1, le=8)
     cover_variant: str | None = None
@@ -216,6 +218,7 @@ class EngagementFeatureVector(BaseModel):
         )
         spacing = raw_spacing if raw_spacing in _SPACING_BUCKETS else None
         return cls(
+            publication_format=context.get("publication_format") or canonical.get("publication_format"),
             theme=_first_known(
                 canonical.get("theme"),
                 context.get("carousel_theme"),

@@ -144,7 +144,7 @@ def test_no_insights_empty_history_and_legacy_publication_degrade_safely():
     model = build_engagement_model(history, snapshots, now=NOW)
 
     assert model.useful_publications == 1
-    assert model.version == "engagement_rates_v2"
+    assert model.version == "engagement_rates_v3"
     assert not any(key.startswith("theme:") for key in model.feature_estimates)
 
 

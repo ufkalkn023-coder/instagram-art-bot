@@ -329,6 +329,7 @@ def _temporal_folds(
             train_history,
             available_snapshots,
             test.posted_at,
+            publication_formats=frozenset({"carousel"}),
         ).observations
         if mature_only:
             train = tuple(
@@ -715,7 +716,9 @@ def run_engagement_backtest(
         is not None
         and captured_at <= timestamp
     ]
-    raw = _raw_observations(history, current_snapshots, timestamp)
+    # This historical temporal evaluator remains explicitly carousel-scoped.
+    raw = _raw_observations(history, current_snapshots, timestamp,
+                            publication_formats=frozenset({"carousel"}))
     all_observations = raw.observations
     mature_observations = tuple(
         item

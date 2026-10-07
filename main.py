@@ -3,6 +3,7 @@ import os
 import sys
 import logging
 import inspect
+from dataclasses import replace
 from datetime import datetime, timezone
 from enum import Enum
 from pathlib import Path
@@ -56,6 +57,7 @@ from src.engagement_features import (
     previous_post_spacing_bucket,
 )
 from src.engagement_learning import EngagementModel, analyze_engagement_learning
+from src.feed_content import PreparedFeedContent
 from src.insights_storage import InsightsStorage
 from src.carousel_themes import (
     CarouselFormat,
@@ -331,13 +333,24 @@ def _format_single_caption(artwork: dict, analysis: dict | None) -> str:
     return f"{credits}\n\n{story}\n\n{hashtags}" if story else fixed
 
 
-def run_single_post(args, authorization: ProductionAuthorization | None = None):
-    """Publish one securely selected artwork through the durable Feed lifecycle."""
+def prepare_single_content(args, *, excluded_ids: set[str] | None = None) -> PreparedFeedContent:
+    """Select, render and write copy without reserving or publishing anything."""
     from src.instagram_image import InstagramImageNotPublishableError
 
+    model = _load_engagement_model().for_format("single")
+    now = datetime.now(timezone.utc)
+    learning_kwargs = ({"engagement_model": model, "engagement_context": {
+        "publication_format": "single", "featured_count": 1,
+        "publish_slot": canonical_publish_slot(now),
+        "publication_weekday": now.strftime("%A").casefold(),
+        "preceding_post_distance_minutes": _preceding_post_distance_minutes(now, publication_format="single"),
+    }} if model.confidence > 0 else {})
+    posted_ids = history_tracker.get_posted_ids()
+    posted_ids.update(excluded_ids or ())
     candidates = art_fetcher.iter_single_post_candidates(
-        history_tracker.get_posted_ids(),
+        posted_ids,
         max_candidates=art_fetcher.SINGLE_DIVERSITY_FINALIST_TARGET,
+        **learning_kwargs,
     )
     artwork = None
     path = None
@@ -346,7 +359,8 @@ def run_single_post(args, authorization: ProductionAuthorization | None = None):
             try:
                 candidate_path = image_processor.create_feed_post(
                     candidate["local_image_path"],
-                    output_path=os.path.join(config.DATA_DIR, f"single_{uuid4().hex}.jpg"),
+                    output_path=os.path.join(getattr(args, "preparation_directory", None) or config.DATA_DIR,
+                                             f"single_{uuid4().hex}.jpg"),
                 )
             except InstagramImageNotPublishableError as error:
                 reason = getattr(error.result.reason, "value", error.result.reason)
@@ -372,6 +386,17 @@ def run_single_post(args, authorization: ProductionAuthorization | None = None):
         medium=artwork.get("medium", ""), classification=artwork.get("classification", ""),
     )
     caption = _format_single_caption(artwork, analysis)
+    return PreparedFeedContent("single", (artwork,), (path,), caption,
+                               alt_text=(analysis or {}).get("alt_text") or artwork.get("alt_text"))
+
+
+def run_single_post(args, authorization: ProductionAuthorization | None = None, *,
+                    prepared_content: PreparedFeedContent | None = None):
+    """Publish one securely selected artwork through the durable Feed lifecycle."""
+    content = prepared_content or prepare_single_content(args)
+    if content.publication_format != "single":
+        raise ValueError("Single runner requires single prepared content")
+    artwork, path, caption = dict(content.artworks[0]), content.media_paths[0], content.caption
     if args.dry_run:
         logger.info(
             "DRY RUN SUCCESS mode=single artwork_id=%s local_artifact=%s "
@@ -407,7 +432,7 @@ def run_single_post(args, authorization: ProductionAuthorization | None = None):
         media_id = instagram_poster.post_to_instagram_graph_api(
             media_url=uploads[0].public_url, caption=caption,
             account_id=os.environ.get("INSTAGRAM_ACCOUNT_ID"), access_token=access_token,
-            alt_text=(analysis or {}).get("alt_text") or artwork.get("alt_text"),
+            alt_text=content.alt_text,
             before_publish=before_publish,
         )
         if not publish_attempt_started:
@@ -456,6 +481,7 @@ def run_single_post(args, authorization: ProductionAuthorization | None = None):
         permalink=_get_published_instagram_permalink(media_id, access_token),
     )
     logger.info("history_confirmed mode=single publication_id=%s media_id=%s", publication_id, media_id)
+    return publication_id
 
 
 def _load_engagement_model() -> EngagementModel:
@@ -497,7 +523,7 @@ def _load_engagement_model() -> EngagementModel:
     return model
 
 
-def _preceding_post_distance_minutes(now: datetime) -> float | None:
+def _preceding_post_distance_minutes(now: datetime, *, publication_format: str = "carousel") -> float | None:
     try:
         publications = history_tracker.get_recent_publications()
     except Exception as error:
@@ -510,7 +536,7 @@ def _preceding_post_distance_minutes(now: datetime) -> float | None:
         (
             publication
             for publication in reversed(publications)
-            if publication.get("type") == "carousel"
+            if publication.get("type") == publication_format
         ),
         None,
     )
@@ -527,9 +553,10 @@ def _preceding_post_distance_minutes(now: datetime) -> float | None:
     return max(0.0, (now - posted_at.astimezone(timezone.utc)).total_seconds() / 60)
 
 
-def run_carousel_post(args, authorization: ProductionAuthorization | None = None):
+def prepare_carousel_content(args, *, excluded_ids: set[str] | None = None) -> PreparedFeedContent:
     logger.info("Running carousel post logic...")
     posted_ids = history_tracker.get_posted_ids()
+    posted_ids.update(excluded_ids or ())
     color_tone = _get_grid_color_tone_for_run(args.dry_run)
 
     selection_run_seed = art_fetcher.resolve_selection_run_seed()
@@ -537,11 +564,12 @@ def run_carousel_post(args, authorization: ProductionAuthorization | None = None
     publish_slot = canonical_publish_slot(run_time)
     preceding_distance = _preceding_post_distance_minutes(run_time)
     spacing_bucket = previous_post_spacing_bucket(preceding_distance)
-    engagement_model = _load_engagement_model()
+    engagement_model = _load_engagement_model().for_format("carousel")
     exploration_selected = engagement_model.exploration_selected(
         selection_run_seed.value
     )
     base_engagement_context = {
+        "publication_format": "carousel",
         "publish_slot": publish_slot,
         "publication_weekday": run_time.strftime("%A").casefold(),
         "cover_variant": CoverVariant.EDITORIAL.value,
@@ -985,7 +1013,8 @@ def run_carousel_post(args, authorization: ProductionAuthorization | None = None
             editorial_title=plan.editorial_title,
             editorial_subtitle=plan.editorial_subtitle,
             micro_facts=plan.cover_micro_facts,
-            output_path=os.path.join(config.DATA_DIR, "carousel_cover.jpg"),
+            output_path=os.path.join(getattr(args, "preparation_directory", None) or config.DATA_DIR,
+                                     "carousel_cover.jpg"),
         )
     ]
 
@@ -1005,13 +1034,15 @@ def run_carousel_post(args, authorization: ProductionAuthorization | None = None
         render_result = render_carousel_featured_artwork(
             art["local_image_path"],
             presentation=featured_presentation,
-            output_path=os.path.join(config.DATA_DIR, f"carousel_{index:02d}.jpg"),
+            output_path=os.path.join(getattr(args, "preparation_directory", None) or config.DATA_DIR,
+                                     f"carousel_{index:02d}.jpg"),
         )
         output_media_paths.append(render_result.output_path)
 
-    if args.dry_run:
+    if args.dry_run and not getattr(args, "prepare_only", False):
         _log_carousel_dry_run_success(plan, output_media_paths)
-        return
+        return PreparedFeedContent("carousel", (dict(plan.cover.artwork), *map(dict, plan.featured_artworks)),
+                                   tuple(output_media_paths), plan.caption)
 
     logger.info("media_prepared mode=carousel count=%s", len(output_media_paths))
 
@@ -1094,18 +1125,34 @@ def run_carousel_post(args, authorization: ProductionAuthorization | None = None
         exploration_selected,
     )
 
+    return PreparedFeedContent(
+        "carousel", (dict(plan.cover.artwork), *map(dict, plan.featured_artworks)),
+        tuple(output_media_paths), plan.caption, publication_metadata=publication_metadata,
+        theme_id=plan.theme.id, theme_family=plan.theme.family.value,
+        carousel_format=plan.theme.format.value,
+    )
+
+
+def run_carousel_post(args, authorization: ProductionAuthorization | None = None, *,
+                      prepared_content: PreparedFeedContent | None = None):
+    content = prepared_content or prepare_carousel_content(args)
+    if content.publication_format != "carousel":
+        raise ValueError("Carousel runner requires carousel prepared content")
+    if args.dry_run:
+        return
+    output_media_paths = content.media_paths
     # All selection, copy, validation, and rendering has succeeded. Reserve the
     # all variable-length canonical IDs together before any Instagram media operation.
     publication_id = history_tracker.reserve_carousel(
-        dict(plan.cover.artwork),
-        [dict(art) for art in plan.featured_artworks],
-        theme_id=plan.theme.id,
-        theme_family=plan.theme.family.value,
-        carousel_format=plan.theme.format.value,
-        publication_metadata=publication_metadata,
+        dict(content.artworks[0]),
+        [dict(art) for art in content.artworks[1:]],
+        theme_id=content.theme_id,
+        theme_family=content.theme_family,
+        carousel_format=content.carousel_format,
+        publication_metadata=content.publication_metadata,
         authorization=authorization,
     )
-    logger.info("reservation_complete mode=carousel count=%s", len(plan.publication_ids))
+    logger.info("reservation_complete mode=carousel count=%s", len(content.publication_ids))
     media_uploads: list[r2_media.TempMediaUpload] = []
     try:
         for path in output_media_paths:
@@ -1114,7 +1161,7 @@ def run_carousel_post(args, authorization: ProductionAuthorization | None = None
             )
     except Exception:
         _handle_pre_meta_staging_failure(
-            plan.publication_ids, publication_id, media_uploads
+            content.publication_ids, publication_id, media_uploads
         )
         raise
     public_urls = [upload.public_url for upload in media_uploads]
@@ -1128,7 +1175,7 @@ def run_carousel_post(args, authorization: ProductionAuthorization | None = None
     def before_publish(container_id: str, child_container_ids: tuple[str, ...]) -> None:
         nonlocal publish_attempt_started
         history_tracker.start_publication_attempt(
-            plan.publication_ids, container_id, child_container_ids,
+            content.publication_ids, container_id, child_container_ids,
             expected_publication_id=publication_id,
             **({"authorization": authorization} if authorization is not None
                and authorization.is_scheduled_feed else {}),
@@ -1139,21 +1186,21 @@ def run_carousel_post(args, authorization: ProductionAuthorization | None = None
         # Exact order: editorial cover, then every selected Featured Work.
         carousel_id = instagram_poster.post_carousel_to_instagram_graph_api(
             media_urls=public_urls,
-            caption=plan.caption,
+            caption=content.caption,
             account_id=account_id,
             access_token=access_token,
             before_publish=before_publish,
         )
         if not publish_attempt_started:
             history_tracker.mark_artworks_ambiguous(
-                plan.publication_ids, "publisher_skipped_durable_boundary",
+                content.publication_ids, "publisher_skipped_durable_boundary",
                 expected_publication_id=publication_id,
             )
             raise RuntimeError("Instagram publisher skipped the durable publication boundary")
         logger.info("publish_complete mode=carousel media_id=%s", carousel_id)
     except instagram_poster.InstagramPrePublishBoundaryError:
         history_tracker.mark_publication_not_published(
-            plan.publication_ids,
+            content.publication_ids,
             "pre_publish_boundary_failure",
             authoritative=True,
             expected_publication_id=publication_id,
@@ -1167,7 +1214,7 @@ def run_carousel_post(args, authorization: ProductionAuthorization | None = None
         logger.error("Instagram carousel publish result is ambiguous; preserving duplicate locks.")
         try:
             history_tracker.mark_artworks_ambiguous(
-                plan.publication_ids, expected_publication_id=publication_id
+                content.publication_ids, expected_publication_id=publication_id
             )
         except Exception:
             logger.exception("Failed to preserve ambiguous carousel reservations.")
@@ -1176,7 +1223,7 @@ def run_carousel_post(args, authorization: ProductionAuthorization | None = None
     except instagram_poster.InstagramAPIError as error:
         if publish_attempt_started:
             history_tracker.mark_publication_not_published(
-                plan.publication_ids,
+                content.publication_ids,
                 f"definitive_media_publish_rejection:{type(error).__name__}",
                 authoritative=True,
                 expected_publication_id=publication_id,
@@ -1190,7 +1237,7 @@ def run_carousel_post(args, authorization: ProductionAuthorization | None = None
         if publish_attempt_started:
             try:
                 history_tracker.mark_artworks_ambiguous(
-                    plan.publication_ids,
+                    content.publication_ids,
                     f"unexpected_post_boundary_error:{type(error).__name__}",
                     expected_publication_id=publication_id,
                 )
@@ -1200,7 +1247,7 @@ def run_carousel_post(args, authorization: ProductionAuthorization | None = None
 
     try:
         history_tracker.record_publish_response(
-            plan.publication_ids, carousel_id,
+            content.publication_ids, carousel_id,
             expected_publication_id=publication_id,
         )
     except Exception:
@@ -1211,18 +1258,74 @@ def run_carousel_post(args, authorization: ProductionAuthorization | None = None
     permalink = _get_published_instagram_permalink(carousel_id, access_token)
     finalization_kwargs = {"permalink": permalink} if permalink is not None else {}
     history_tracker.confirm_carousel_publication(
-        plan.cover.canonical_id,
-        plan.featured_ids,
+        content.publication_ids[0],
+        content.featured_ids,
         carousel_id,
         publication_id=publication_id,
         **finalization_kwargs,
     )
-    logger.info("history_confirmed mode=carousel count=%s", len(plan.publication_ids))
+    logger.info("history_confirmed mode=carousel count=%s", len(content.publication_ids))
+    return publication_id
+
+
+def run_feed_with_queue(args, mode: ProductionMode, authorization: ProductionAuthorization | None):
+    """Optionally consume local content through the unchanged publication gates."""
+    if mode not in {ProductionMode.SINGLE, ProductionMode.CAROUSEL}:
+        raise ValueError("Resolve the next successful Feed format before claiming content")
+    runner = run_single_post if mode is ProductionMode.SINGLE else run_carousel_post
+    directory = getattr(args, "prepared_queue", None)
+    if args.dry_run or directory is None:
+        return runner(args) if args.dry_run else runner(args, authorization)
+    if not isinstance(authorization, ProductionAuthorization):
+        raise ValueError("Prepared content is not a production authorization")
+    from src.feed_queue import PreparedFeedQueue
+
+    queue = PreparedFeedQueue(directory)
+    now = datetime.now(timezone.utc)
+    claim = queue.claim(mode.value, protected_ids=history_tracker.get_posted_ids(),
+                        owner=authorization.key, now=now)
+    if claim is None:
+        logger.info("prepared_queue_empty mode=%s fallback=fresh_acquisition", mode.value)
+        return runner(args, authorization)
+    try:
+        content = claim.content
+        if mode is ProductionMode.CAROUSEL:
+            metadata = dict(content.publication_metadata)
+            preceding = _preceding_post_distance_minutes(now)
+            metadata.pop("preceding_post_distance_minutes", None)
+            metadata.pop("previous_post_spacing_bucket", None)
+            if preceding is not None:
+                metadata.update(preceding_post_distance_minutes=preceding,
+                                previous_post_spacing_bucket=previous_post_spacing_bucket(preceding))
+            metadata["publish_slot"] = canonical_publish_slot(now)
+            canonical = dict(metadata.get("engagement_features") or {})
+            canonical.update(publication_format="carousel", publish_slot=metadata["publish_slot"],
+                             weekday=now.strftime("%A").casefold(),
+                             previous_post_spacing_bucket=previous_post_spacing_bucket(preceding))
+            metadata["engagement_features"] = EngagementFeatureVector.from_context({
+                **metadata, "publication_format": "carousel", "engagement_features": canonical,
+            }).model_dump(exclude_none=True)
+            content = replace(content, publication_metadata=metadata)
+        publication_id = runner(args, authorization, prepared_content=content)
+        confirmed = any(pub["id"] == publication_id and pub["type"] == mode.value
+                        and tuple(pub["artwork_ids"]) == content.publication_ids
+                        for pub in history_tracker.get_recent_publications())
+        if not confirmed:
+            raise RuntimeError("Prepared package has no matching confirmed publication")
+    except BaseException:
+        try:
+            queue.finish(claim.package_id, owner=authorization.key, successful=False)
+        except Exception:
+            logger.exception("prepared_queue_outcome_uncertain package_claim_retained=true")
+        raise
+    queue.finish(claim.package_id, owner=authorization.key, successful=True)
+    return publication_id
 
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Instagram Art Museum Automation Bot")
     parser.add_argument("--dry-run", action="store_true", help="Run bot locally without posting to Instagram")
+    parser.add_argument("--prepared-queue", type=Path, help="Optional local prepared Feed queue; all publication gates still apply")
     parser.add_argument(
         "--mode",
         choices=[mode.value for mode in ProductionMode],
@@ -1408,11 +1511,7 @@ def main(argv: list[str] | None = None) -> int:
         if not args.dry_run and args.mode == ProductionMode.AUTO.value:
             mode = _resolve_production_mode(args)
         logger.info("production_format_selected mode=%s", mode.value)
-        runner = run_single_post if mode is ProductionMode.SINGLE else run_carousel_post
-        if args.dry_run:
-            runner(args)
-        else:
-            runner(args, authorization)
+        run_feed_with_queue(args, mode, authorization)
 
         if not args.dry_run:
             logger.info("production_success mode=%s", mode.value)

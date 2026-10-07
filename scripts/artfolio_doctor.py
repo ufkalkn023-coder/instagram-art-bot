@@ -974,12 +974,25 @@ def check_engagement_learning(data: ProductionData) -> CheckResult:
     details = {
         "total_publications": audit.total_publication_records,
         "carousel_publications": audit.carousel_publications,
+        "single_publications": audit.single_publications,
         "publications_with_snapshots": audit.publications_with_snapshots,
-        "usable_publications": audit.model.useful_carousel_observations,
+        "usable_publications": audit.model.useful_feed_observations,
         "invalid_snapshots": data.invalid_snapshots,
         "effective_observations": audit.effective_observations,
         "global_confidence": audit.global_confidence,
         "current_learned_influence": learned_influence,
+        "confidence_scope": "aggregate_diagnostic; serving uses each format model",
+        "by_format": {
+            format_name: {
+                "usable_publications": audit.model.for_format(format_name).useful_publications,
+                "global_confidence": audit.model.for_format(format_name).confidence,
+                "current_learned_influence": (
+                    audit.model.config.mature_engagement_weight
+                    * audit.model.for_format(format_name).confidence
+                ),
+            }
+            for format_name in ("carousel", "single")
+        },
         "selected_snapshot_counts": {
             f"{slot}h": audit.selected_snapshot_slot_counts.get(slot, 0)
             for slot in (24, 72, 168)
@@ -996,9 +1009,9 @@ def check_engagement_learning(data: ProductionData) -> CheckResult:
             )
         )
     if (
-        audit.carousel_publications
+        (audit.carousel_publications + audit.single_publications)
         and audit.publications_with_snapshots
-        and not audit.model.useful_carousel_observations
+        and not audit.model.useful_feed_observations
     ):
         issues.append(
             _issue(
@@ -1011,7 +1024,7 @@ def check_engagement_learning(data: ProductionData) -> CheckResult:
     elif audit.global_confidence < LOW_LEARNING_CONFIDENCE:
         state = (
             "operational but low-confidence"
-            if audit.model.useful_carousel_observations
+            if audit.model.useful_feed_observations
             else "awaiting usable data"
         )
         issues.append(
@@ -1023,10 +1036,10 @@ def check_engagement_learning(data: ProductionData) -> CheckResult:
             )
         )
     status = aggregate_status([CheckResult(issue.severity, "") for issue in issues])
-    operational = audit.model.useful_carousel_observations > 0
+    operational = audit.model.useful_feed_observations > 0
     summary = (
         f"{'operational' if operational else 'no usable observations'}, "
-        f"usable={audit.model.useful_carousel_observations}, "
+        f"usable={audit.model.useful_feed_observations}, "
         f"confidence={audit.global_confidence:.2%}"
     )
     return _result(status, summary, details, issues)
