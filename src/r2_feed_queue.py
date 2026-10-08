@@ -10,12 +10,12 @@ import copy
 import hashlib
 import json
 from contextlib import contextmanager
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 
 from botocore.exceptions import BotoCoreError, ClientError
 
-from src.feed_queue import MAX_MANIFEST_BYTES, PreparedFeedQueue, _now
+from src.feed_queue import MAX_MANIFEST_BYTES, MAX_PACKAGE_AGE_HOURS, PreparedFeedQueue, _now
 from src.insights_storage import parse_aware_timestamp
 from src import publication_state
 from src.publication_state import StateConfiguration, canonical_bytes, seal
@@ -134,6 +134,34 @@ class R2PreparedFeedQueue(PreparedFeedQueue):
     def build(self, **kwargs):
         raise RuntimeError("Build a local validated batch, then install it explicitly")
 
+    def refill_status(self, *, now: datetime | None = None) -> dict:
+        """Advisory manifest-only check; never repair, rearm or upload anything."""
+        document, _ = self._read_manifest()
+        return self._replacement_status(document, _now(now))
+
+    @staticmethod
+    def _replacement_status(document: dict, timestamp: datetime) -> dict:
+        packages = document['packages']
+        if any(item['state'] == 'CLAIMED' for item in packages):
+            return {'refill_needed': False, 'reason': 'CLAIMED_PRESENT'}
+        fresh = False
+        expired = False
+        for item in packages:
+            if item['state'] != 'READY':
+                continue
+            created = parse_aware_timestamp(item.get('created_at'))
+            expiry = parse_aware_timestamp(item.get('expires_at'))
+            if (created is None or expiry is None or created > timestamp or expiry <= created
+                    or expiry - created > timedelta(hours=MAX_PACKAGE_AGE_HOURS)
+                    or item.get('owner') is not None):
+                raise RuntimeError('Prepared R2 READY package has invalid age or ownership')
+            fresh |= expiry > timestamp
+            expired |= expiry <= timestamp
+        if fresh:
+            return {'refill_needed': False, 'reason': 'READY_PRESENT'}
+        return {'refill_needed': True,
+                'reason': 'EXPIRED' if expired else 'EXHAUSTED' if packages else 'EMPTY'}
+
     def install(self, local: PreparedFeedQueue, *, now: datetime | None = None):
         timestamp = _now(now)
         document = local._load()
@@ -160,12 +188,12 @@ class R2PreparedFeedQueue(PreparedFeedQueue):
                           for asset in package["content"]["assets"])
         with self._lock():
             existing = self._load()
+            if not self._replacement_status(existing, timestamp)['refill_needed']:
+                raise RuntimeError("Prepared R2 batch contains unfinished packages")
             for item in existing["packages"]:
                 expiry = parse_aware_timestamp(item.get("expires_at"))
                 if item["state"] == "READY" and expiry is not None and expiry <= timestamp:
                     item.update(state="QUARANTINED", reason="expired")
-            if any(item["state"] in {"READY", "CLAIMED"} for item in existing["packages"]):
-                raise RuntimeError("Prepared R2 batch contains unfinished packages")
             if existing["packages"]:
                 archive = canonical_bytes(seal(existing))
                 key = f"{QUEUE_PREFIX}/archives/{hashlib.sha256(archive).hexdigest()}.json"
