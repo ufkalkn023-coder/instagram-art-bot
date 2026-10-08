@@ -31,3 +31,18 @@ def test_carousel_preparation_returns_cover_and_featured_assets_without_reservat
     assert content.artworks[0]["id"] == "met_cover"
     assert content.publication_metadata["featured_count"] == len(content.artworks) - 1
     assert not any(item in calls for item in ("reserve", "upload", "publish"))
+
+
+def test_controlled_caption_hook_reaches_rendered_caption_and_persistent_metadata(monkeypatch):
+    from tests.test_carousel_orchestration import _install_reads_and_selection
+    from src.models import CarouselExperimentMetadata
+    _install_reads_and_selection(monkeypatch, [])
+    monkeypatch.setenv('ARTFOLIO_CAPTION_EXPERIMENT_ENABLED', 'true')
+    monkeypatch.setattr(main, 'create_carousel_editorial_cover', lambda **kwargs: kwargs['output_path'])
+    monkeypatch.setattr(main, 'render_carousel_featured_artwork', lambda *_, **kwargs: SimpleNamespace(output_path=kwargs['output_path']))
+    content = main.prepare_carousel_content(SimpleNamespace(dry_run=True, prepare_only=True, image_url=None, pinterest=False))
+    metadata = CarouselExperimentMetadata.model_validate(content.publication_metadata)
+    assignment = metadata.controlled_experiment
+    assert assignment.variant == metadata.caption_hook_type
+    expected = ('What connects these' if assignment.variant == 'question' else 'Look closely at these')
+    assert expected in content.caption

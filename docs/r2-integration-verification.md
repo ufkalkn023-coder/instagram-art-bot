@@ -66,3 +66,18 @@ Instagram. Teardown deletes only exact keys in the run's UUID namespace and
 verifies that they are absent. This suite has **not** been run during local
 recovery implementation; running it is an operator decision after provisioning
 an isolated test bucket.
+
+## Prepared Feed queue verification (2026-10-08)
+
+The same explicitly gated module now also checks prepared JPEG round trips
+between runners, terminal-batch archival/refill, stale-ETag claim conflicts and
+a remote claim whose successful PUT response is deliberately lost. The last
+scenario must remain CLAIMED after expiry and block refill. Application clients
+reject a bucket mismatch before I/O; all queue keys are mapped under the test
+run's UUID prefix and use the existing guarded teardown.
+
+Offline scenario-contract tests use an in-memory S3 client and prove no live
+interoperability. All 13 live tests remain skipped without the opt-in. Historical
+August live verification predates this queue code and the dedicated TEST secret
+mapping. Current rollout prerequisites and read-only evidence are recorded in
+[the rollout ledger](superpowers/plans/2026-10-08-feed-rollout.md).

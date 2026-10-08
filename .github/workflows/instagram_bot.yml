@@ -104,6 +104,8 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           ARTFOLIO_PRODUCTION_SCHEDULE_ENABLED: ${{ vars.ARTFOLIO_PRODUCTION_SCHEDULE_ENABLED }}
+          ARTFOLIO_FEED_QUEUE_ENABLED: ${{ vars.ARTFOLIO_FEED_QUEUE_ENABLED }}
+          ARTFOLIO_CAPTION_EXPERIMENT_ENABLED: ${{ vars.ARTFOLIO_CAPTION_EXPERIMENT_ENABLED }}
           ARTFOLIO_CONFIRM_PUBLISH: ${{ inputs.confirm_publish }}
           ARTFOLIO_AUTHORIZATION_ID: ${{ inputs.authorization_id }}
           ARTFOLIO_MANUAL_AUTHORIZATION_ID: ${{ vars.ARTFOLIO_MANUAL_AUTHORIZATION_ID }}
@@ -123,3 +125,15 @@ jobs:
           CLOUDFLARE_STATE_R2_SECRET_ACCESS_KEY: ${{ secrets.CLOUDFLARE_STATE_R2_SECRET_ACCESS_KEY }}
           CLOUDFLARE_R2_PUBLIC_URL: ${{ secrets.CLOUDFLARE_R2_PUBLIC_URL }}
         run: python main.py --mode auto
+
+      - name: Report consolidated Feed status changes
+        if: always() && vars.ARTFOLIO_FEED_STATUS_ENABLED == 'true'
+        env:
+          CLOUDFLARE_R2_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_R2_ACCOUNT_ID }}
+          CLOUDFLARE_R2_ACCESS_KEY_ID: ${{ secrets.CLOUDFLARE_R2_ACCESS_KEY_ID }}
+          CLOUDFLARE_R2_SECRET_ACCESS_KEY: ${{ secrets.CLOUDFLARE_R2_SECRET_ACCESS_KEY }}
+          CLOUDFLARE_R2_BUCKET_NAME: ${{ secrets.CLOUDFLARE_R2_BUCKET_NAME }}
+          CLOUDFLARE_STATE_R2_BUCKET_NAME: ${{ secrets.CLOUDFLARE_STATE_R2_BUCKET_NAME }}
+          CLOUDFLARE_STATE_R2_ACCESS_KEY_ID: ${{ secrets.CLOUDFLARE_STATE_R2_ACCESS_KEY_ID }}
+          CLOUDFLARE_STATE_R2_SECRET_ACCESS_KEY: ${{ secrets.CLOUDFLARE_STATE_R2_SECRET_ACCESS_KEY }}
+        run: python scripts/report_feed_status.py --r2 --notify --expected-sha "$GITHUB_SHA"

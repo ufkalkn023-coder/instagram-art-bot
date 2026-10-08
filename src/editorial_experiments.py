@@ -7,6 +7,7 @@ from datetime import datetime, timezone
 from enum import Enum
 
 from src.carousel_themes import CarouselFormat, CarouselThemeDefinition
+from src.models import ControlledCaptionExperiment
 
 
 SELECTION_MODEL_VERSION = "carousel_learning_v1"
@@ -82,3 +83,18 @@ def select_caption_hook_type(
     material = f"{run_seed}\x1fcaption_hook\x1f{theme.id}".encode()
     index = int.from_bytes(hashlib.sha256(material).digest(), "big") % len(choices)
     return choices[index]
+
+
+def assign_caption_experiment(theme: CarouselThemeDefinition, *, run_seed: str) -> ControlledCaptionExperiment:
+    material = f"caption_hook_v1\x1f{theme.id}\x1f{run_seed}".encode()
+    index = int.from_bytes(hashlib.sha256(material).digest(), "big") % 2
+    variants = (CaptionHookType.QUESTION, CaptionHookType.VISUAL_DETAIL)
+    return ControlledCaptionExperiment(variant=variants[index].value, theme_id=theme.id)
+
+
+def controlled_caption_intro(assignment: ControlledCaptionExperiment, *, featured_count: int, body: str) -> str:
+    if type(featured_count) is not int or not 5 <= featured_count <= 8:
+        raise ValueError("Controlled hook requires 5–8 featured works")
+    lead = (f"What connects these {featured_count} works?" if assignment.variant == CaptionHookType.QUESTION.value
+            else f"Look closely at these {featured_count} works.")
+    return f"{lead}\n\n{body}"

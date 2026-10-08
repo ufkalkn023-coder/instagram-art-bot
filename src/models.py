@@ -47,6 +47,28 @@ def parse_receipt_occurrence(value: str) -> datetime:
     return timestamp
 
 
+class FeedEditorialPair(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+    pair_id: str = Field(pattern=r"^[a-f0-9]{32}$")
+    theme_id: str = Field(min_length=1, max_length=100)
+    role: Literal["anchor", "followup"]
+    status: Literal["planned", "matched", "unmatched"]
+
+
+class FeedEditorialMetadata(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    editorial_pair: Optional[FeedEditorialPair] = None
+
+
+class ControlledCaptionExperiment(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+    experiment_id: Literal["caption_hook_v1"] = "caption_hook_v1"
+    variable: Literal["caption_hook_type"] = "caption_hook_type"
+    variant: Literal["question", "visual_detail"]
+    theme_id: str = Field(min_length=1, max_length=100)
+    cover_variant: Literal["editorial"] = "editorial"
+
+
 class CarouselExperimentMetadata(BaseModel):
     """Compact, publication-level explanation of one carousel strategy."""
 
@@ -68,6 +90,18 @@ class CarouselExperimentMetadata(BaseModel):
     preceding_post_distance_minutes: Optional[float] = Field(default=None, ge=0)
     previous_post_spacing_bucket: Optional[SpacingBucket] = None
     engagement_features: Optional[EngagementFeatureVector] = None
+    editorial_pair: Optional[FeedEditorialPair] = None
+    controlled_experiment: Optional[ControlledCaptionExperiment] = None
+
+    @model_validator(mode="after")
+    def require_matching_assignment(self):
+        assignment = self.controlled_experiment
+        if assignment is not None and (
+            assignment.theme_id != self.carousel_theme or assignment.variant != self.caption_hook_type
+            or assignment.cover_variant != self.cover_variant
+        ):
+            raise ValueError("Controlled experiment must match delivered theme, hook and cover")
+        return self
 
 
 def normalize_artwork_id(artwork_id: str) -> str:
@@ -144,6 +178,18 @@ class PublicationRecord(BaseModel):
     preceding_post_distance_minutes: Optional[float] = Field(default=None, ge=0)
     previous_post_spacing_bucket: Optional[SpacingBucket] = None
     engagement_features: Optional[EngagementFeatureVector] = None
+    editorial_pair: Optional[FeedEditorialPair] = None
+    controlled_experiment: Optional[ControlledCaptionExperiment] = None
+
+    @model_validator(mode="after")
+    def require_matching_experiment(self):
+        assignment = self.controlled_experiment
+        if assignment is not None and (
+            self.type != "carousel" or assignment.theme_id != self.carousel_theme
+            or assignment.variant != self.caption_hook_type or assignment.cover_variant != self.cover_variant
+        ):
+            raise ValueError("Controlled experiment requires a matching carousel delivery")
+        return self
 
     @field_validator("id", "media_id", "posted_at")
     @classmethod

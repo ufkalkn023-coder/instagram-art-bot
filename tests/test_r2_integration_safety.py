@@ -191,4 +191,21 @@ def test_live_module_is_skipped_without_explicit_opt_in():
     )
 
     assert result.returncode == 0, result.stdout + result.stderr
-    assert "10 skipped" in result.stdout
+    assert "13 skipped" in result.stdout
+
+
+@pytest.mark.parametrize("operation", ["get_object", "put_object"])
+def test_namespaced_application_client_rejects_wrong_bucket_before_io(operation):
+    from tests.integration.test_r2_conditional_writes import NamespacedStateClient
+
+    class ForbiddenClient:
+        def get_object(self, **kwargs):
+            pytest.fail("wrong bucket reached R2")
+
+        def put_object(self, **kwargs):
+            pytest.fail("wrong bucket reached R2")
+
+    context = R2IntegrationContext(ForbiddenClient(), "test-bucket", make_run_prefix())
+    client = NamespacedStateClient(context, "queue")
+    with pytest.raises(ValueError, match="bucket"):
+        getattr(client, operation)(Bucket="production", Key="feed-queue/v1/manifest.json")

@@ -23,6 +23,7 @@ from src.carousel_policy import (
 )
 from src.models import (
     CarouselExperimentMetadata,
+    FeedEditorialMetadata,
     PublicationRecord,
     ReelCleanupQueueEntry,
     ReelPublicationRecord,
@@ -2208,8 +2209,11 @@ def reserve_single_publication(
     artwork_data: Dict[str, Any],
     *,
     authorization: ProductionAuthorization | None = None,
+    publication_metadata: Mapping[str, Any] | None = None,
 ) -> str:
     """Atomically reserve one artwork for a single-feed publication."""
+    metadata = (FeedEditorialMetadata.model_validate(publication_metadata).model_dump(exclude_none=True)
+                if publication_metadata is not None else None)
     artwork_id = normalize_artwork_id(artwork_data["id"])
     history, etag = load_history_with_etag()
     now = datetime.now(timezone.utc)
@@ -2231,6 +2235,8 @@ def reserve_single_publication(
     payload["content_type"] = "SINGLE_ARTWORK"
     record = _reservation_record(payload, publication_id=publication_id)
     record["publication_type"] = "single"
+    if metadata:
+        record["publication_metadata"] = metadata
     history["posted_artworks"].append(record)
     if authorization is not None:
         history["consumed_authorizations"].append({
@@ -2547,6 +2553,13 @@ def _finalize_publication_history(
 
     role_records = [record for record in target_records if record.get("publication_role")]
     experiment_metadata: dict[str, Any] = {}
+    if publication_type == "single" and len(target_records) == 1:
+        raw_single_metadata = target_records[0].get("publication_metadata")
+        if raw_single_metadata is not None:
+            try:
+                experiment_metadata = FeedEditorialMetadata.model_validate(raw_single_metadata).model_dump(exclude_none=True)
+            except ValidationError as error:
+                raise CorruptedHistoryError("Single reservation has malformed editorial metadata") from error
     if role_records:
         if publication_type != "carousel":
             raise RuntimeError("Role-bearing reservation must finalize as carousel")

@@ -3,6 +3,7 @@ import os
 import sys
 import logging
 import inspect
+import tempfile
 from dataclasses import replace
 from datetime import datetime, timezone
 from enum import Enum
@@ -51,6 +52,8 @@ from src.editorial_experiments import (
     CoverVariant,
     canonical_publish_slot,
     select_caption_hook_type,
+    assign_caption_experiment,
+    controlled_caption_intro,
 )
 from src.engagement_features import (
     EngagementFeatureVector,
@@ -333,7 +336,8 @@ def _format_single_caption(artwork: dict, analysis: dict | None) -> str:
     return f"{credits}\n\n{story}\n\n{hashtags}" if story else fixed
 
 
-def prepare_single_content(args, *, excluded_ids: set[str] | None = None) -> PreparedFeedContent:
+def prepare_single_content(args, *, excluded_ids: set[str] | None = None,
+                           theme_definition: CarouselThemeDefinition | None = None) -> PreparedFeedContent:
     """Select, render and write copy without reserving or publishing anything."""
     from src.instagram_image import InstagramImageNotPublishableError
 
@@ -350,6 +354,7 @@ def prepare_single_content(args, *, excluded_ids: set[str] | None = None) -> Pre
     candidates = art_fetcher.iter_single_post_candidates(
         posted_ids,
         max_candidates=art_fetcher.SINGLE_DIVERSITY_FINALIST_TARGET,
+        **({"theme_definition": theme_definition} if theme_definition is not None else {}),
         **learning_kwargs,
     )
     artwork = None
@@ -375,6 +380,9 @@ def prepare_single_content(args, *, excluded_ids: set[str] | None = None) -> Pre
     finally:
         candidates.close()
     if artwork is None or path is None:
+        if theme_definition is not None:
+            from src.feed_editorial import ThematicSingleUnavailable
+            raise ThematicSingleUnavailable("Themed single candidates failed image validation")
         raise RuntimeError(
             "No single artwork in the bounded candidate pool passed Instagram image validation"
         )
@@ -408,6 +416,7 @@ def run_single_post(args, authorization: ProductionAuthorization | None = None, 
     artwork_ids = [artwork["id"]]
     publication_id = history_tracker.reserve_single_publication(
         artwork, authorization=authorization,
+        **({"publication_metadata": content.publication_metadata} if content.publication_metadata else {}),
     )
     uploads: list[r2_media.TempMediaUpload] = []
     try:
@@ -593,6 +602,8 @@ def prepare_carousel_content(args, *, excluded_ids: set[str] | None = None) -> P
         ordered_candidates = (theme_selection.theme,)
         fallback_enabled = False
     ranked_scores = getattr(theme_selection, "ranked_scores", ())
+    excluded_theme_ids = getattr(args, "excluded_theme_ids", set())
+    ordered_candidates = tuple(theme for theme in ordered_candidates if theme.id not in excluded_theme_ids)
     base_scores = {
         score.theme_id: score.total
         for score in ranked_scores
@@ -976,6 +987,12 @@ def prepare_carousel_content(args, *, excluded_ids: set[str] | None = None) -> P
     editorial_intro = grounded_gemini_intro(
         (ai_analysis or {}).get("editorial_intro"), editorial_facts, fallback_intro
     )
+    controlled_experiment = None
+    if os.environ.get("ARTFOLIO_CAPTION_EXPERIMENT_ENABLED") == "true":
+        controlled_experiment = assign_caption_experiment(theme_definition, run_seed=selection_run_seed.value)
+        caption_hook_type = CaptionHookType(controlled_experiment.variant)
+        editorial_intro = controlled_caption_intro(controlled_experiment,
+                                                  featured_count=len(artworks), body=fallback_intro)
     hashtags = (
         ai_analysis.get("hashtags", "#Art #Artfolio #ClassicArt #MuseumArt")
         if ai_analysis else "#Art #Artfolio #ClassicArt #MuseumArt"
@@ -1084,6 +1101,7 @@ def prepare_carousel_content(args, *, excluded_ids: set[str] | None = None) -> P
         final_engagement_context
     )
     publication_metadata = {
+        **({"controlled_experiment": controlled_experiment.model_dump()} if controlled_experiment is not None else {}),
         "selection_model_version": SELECTION_MODEL_VERSION,
         "engagement_model_version": ENGAGEMENT_MODEL_VERSION,
         "carousel_theme": plan.theme.id,
@@ -1274,21 +1292,35 @@ def run_feed_with_queue(args, mode: ProductionMode, authorization: ProductionAut
         raise ValueError("Resolve the next successful Feed format before claiming content")
     runner = run_single_post if mode is ProductionMode.SINGLE else run_carousel_post
     directory = getattr(args, "prepared_queue", None)
-    if args.dry_run or directory is None:
+    remote = getattr(args, "prepared_queue_r2", False) or os.environ.get("ARTFOLIO_FEED_QUEUE_ENABLED") == "true"
+    if directory is not None and remote:
+        raise ValueError("Select either a local or R2 prepared queue")
+    if args.dry_run or (directory is None and not remote):
         return runner(args) if args.dry_run else runner(args, authorization)
     if not isinstance(authorization, ProductionAuthorization):
         raise ValueError("Prepared content is not a production authorization")
     from src.feed_queue import PreparedFeedQueue
+    if remote:
+        from src.r2_feed_queue import R2PreparedFeedQueue
+        from src.feed_queue_rights import revalidate_source_rights
+        with tempfile.TemporaryDirectory(prefix="artfolio-feed-queue-") as workdir:
+            return _consume_feed_queue(args, mode, authorization,
+                                       R2PreparedFeedQueue(workdir), revalidate_source_rights)
+    return _consume_feed_queue(args, mode, authorization, PreparedFeedQueue(directory))
 
-    queue = PreparedFeedQueue(directory)
+
+def _consume_feed_queue(args, mode, authorization, queue, rights_revalidator=None):
+    runner = run_single_post if mode is ProductionMode.SINGLE else run_carousel_post
     now = datetime.now(timezone.utc)
     claim = queue.claim(mode.value, protected_ids=history_tracker.get_posted_ids(),
-                        owner=authorization.key, now=now)
+                        owner=authorization.key, now=now, rights_revalidator=rights_revalidator)
     if claim is None:
         logger.info("prepared_queue_empty mode=%s fallback=fresh_acquisition", mode.value)
         return runner(args, authorization)
     try:
         content = claim.content
+        if datetime.now(timezone.utc) >= claim.expires_at:
+            raise RuntimeError("Prepared package expired during revalidation")
         if mode is ProductionMode.CAROUSEL:
             metadata = dict(content.publication_metadata)
             preceding = _preceding_post_distance_minutes(now)
@@ -1326,6 +1358,7 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Instagram Art Museum Automation Bot")
     parser.add_argument("--dry-run", action="store_true", help="Run bot locally without posting to Instagram")
     parser.add_argument("--prepared-queue", type=Path, help="Optional local prepared Feed queue; all publication gates still apply")
+    parser.add_argument("--prepared-queue-r2", action="store_true", help="Consume the private R2 prepared queue with fresh rights checks")
     parser.add_argument(
         "--mode",
         choices=[mode.value for mode in ProductionMode],

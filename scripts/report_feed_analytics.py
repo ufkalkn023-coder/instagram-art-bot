@@ -53,6 +53,7 @@ def run(argv: list[str] | None = None) -> int:
     parser.add_argument("--now", help="Aware ISO-8601 timestamp")
     parser.add_argument("--json", action="store_true")
     parser.add_argument("--minimum-cohort-size", type=int, default=5)
+    parser.add_argument("--experiments", action="store_true", help="JSON caption-hook cohorts; no automatic winner")
     parser.add_argument("--output", type=Path, help="Create a new output file; never overwrite inputs or an existing file")
     args = parser.parse_args(argv)
     timestamp = parse_aware_timestamp(args.now) if args.now else None
@@ -68,7 +69,10 @@ def run(argv: list[str] | None = None) -> int:
         report = build_feed_analytics_report(history, snapshots, now=timestamp,
                                              minimum_cohort_size=args.minimum_cohort_size)
         report["diagnostics"]["invalid_loaded_snapshots"] = invalid_count
-        rendered = json.dumps(report, indent=2, ensure_ascii=False, sort_keys=True) if args.json else render_markdown(report)
+        if args.experiments:
+            from src.feed_experiment_report import build_experiment_report
+            report = build_experiment_report(history, snapshots, now=timestamp, minimum_cohort_size=args.minimum_cohort_size)
+        rendered = json.dumps(report, indent=2, ensure_ascii=False, sort_keys=True) if args.json or args.experiments else render_markdown(report)
         if args.output:
             with args.output.open("x", encoding="utf-8") as destination:
                 destination.write(rendered + "\n")
