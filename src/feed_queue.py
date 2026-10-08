@@ -44,6 +44,7 @@ ARTWORK_FIELDS = frozenset({
 class QueueClaim:
     package_id: str
     content: PreparedFeedContent
+    expires_at: datetime
 
 
 def _now(value: datetime | None) -> datetime:
@@ -80,6 +81,10 @@ class PreparedFeedQueue:
         if self.manifest.is_symlink() or self.manifest.stat().st_size > MAX_MANIFEST_BYTES:
             raise RuntimeError("Prepared queue manifest is unsafe")
         document = json.loads(self.manifest.read_text(encoding="utf-8"))
+        return self.validate_document(document)
+
+    @staticmethod
+    def validate_document(document: object) -> dict:
         if (not isinstance(document, dict) or document.get("schema_version") != 1
                 or document.get("payload_sha256") != payload_digest(document)
                 or not isinstance(document.get("packages"), list)
@@ -214,10 +219,12 @@ class PreparedFeedQueue:
     def status(self) -> list[dict]:
         return [{"id": package["id"], "publication_format": package["content"]["publication_format"],
                  "state": package["state"], "reason": package["reason"], "created_at": package["created_at"],
-                 "expires_at": package["expires_at"]} for package in self._load()["packages"]]
+                 "expires_at": package["expires_at"], "owner": package.get("owner")}
+                for package in self._load()["packages"]]
 
     def claim(self, expected_format: str, *, protected_ids: set[str], owner: str,
-              now: datetime | None = None) -> QueueClaim | None:
+              now: datetime | None = None,
+              rights_revalidator: Callable[[PreparedFeedContent], bool] | None = None) -> QueueClaim | None:
         timestamp = _now(now)
         if expected_format not in {"single", "carousel"} or not isinstance(owner, str) or not owner.strip():
             raise ValueError("Queue claim requires a Feed format and owner")
@@ -238,6 +245,8 @@ class PreparedFeedQueue:
                         content = self._content(package)
                         if any(identifier in protected_ids for identifier in content.publication_ids):
                             reason = "protected_artwork"
+                        elif rights_revalidator is not None and not rights_revalidator(content):
+                            reason = "fresh_rights_unconfirmed"
                     except (OSError, ValueError, KeyError, TypeError):
                         reason = "invalid_content"
                 if reason:
@@ -246,7 +255,7 @@ class PreparedFeedQueue:
                     continue
                 package.update(state="CLAIMED", owner=owner, reason=None)
                 self._write(document)
-                return QueueClaim(package["id"], content)
+                return QueueClaim(package["id"], content, expiry)
             if changed:
                 self._write(document)
             return None

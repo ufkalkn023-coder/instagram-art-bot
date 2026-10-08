@@ -3,11 +3,14 @@
 from __future__ import annotations
 
 import json
+import copy
+from datetime import timedelta
+from pathlib import Path
 from concurrent.futures import ThreadPoolExecutor
 from threading import Barrier
 import time
 
-from botocore.exceptions import ClientError
+from botocore.exceptions import ClientError, EndpointConnectionError
 import pytest
 
 from src import history_tracker, publication_state
@@ -230,12 +233,106 @@ class NamespacedStateClient:
         return self.context.key(f"{self.subpath}/{key}")
 
     def get_object(self, *, Bucket, Key):
+        if Bucket != self.context.bucket:
+            raise ValueError("Refusing R2 operation outside the isolated test bucket")
         return self.context.client.get_object(Bucket=Bucket, Key=self.key(Key))
 
     def put_object(self, *, Bucket, Key, **kwargs):
+        if Bucket != self.context.bucket:
+            raise ValueError("Refusing R2 operation outside the isolated test bucket")
         test_key = self.key(Key)
         self.context.wait_for_write_slot(test_key)
         return self.context.client.put_object(Bucket=Bucket, Key=test_key, **kwargs)
+
+
+def _feed_queue(context, directory, subpath):
+    from src.r2_feed_queue import R2PreparedFeedQueue
+
+    config = publication_state.StateConfiguration("integration", context.bucket, "test", "test")
+    return R2PreparedFeedQueue(directory, config=config,
+                               client=NamespacedStateClient(context, subpath))
+
+
+def test_prepared_feed_queue_survives_runners_and_archives_terminal_batch(r2_context, tmp_path):
+    from tests.test_feed_queue import NOW, build
+
+    local, _ = build(tmp_path)
+    queue = _feed_queue(r2_context, tmp_path / "installer", "feed-lifecycle")
+    queue.install(local, now=NOW)
+    with pytest.raises(RuntimeError, match="unfinished"):
+        queue.install(local, now=NOW)
+    original_ids = [row["id"] for row in queue.status()]
+    for index, format_name in enumerate(("carousel", "single", "carousel")):
+        runner = _feed_queue(r2_context, tmp_path / f"runner-{index}", "feed-lifecycle")
+        claim = runner.claim(format_name, protected_ids=set(), owner=f"run:{index}", now=NOW)
+        assert claim is not None and claim.package_id == original_ids[index]
+        for offset, path in enumerate(claim.content.media_paths):
+            assert Path(path).read_bytes() == (local.directory / claim.package_id / f"media-{offset}.jpg").read_bytes()
+        with pytest.raises(RuntimeError, match="ownership"):
+            runner.finish(claim.package_id, owner="wrong-owner", successful=True)
+        runner.finish(claim.package_id, owner=f"run:{index}", successful=True)
+    assert [row["state"] for row in queue.status()] == ["CONSUMED"] * 3
+    assert queue.claim("single", protected_ids=set(), owner="later", now=NOW) is None
+    fresh, _ = build(tmp_path / "refill")
+    queue.install(fresh, now=NOW)
+    assert [row["state"] for row in queue.status()] == ["READY"] * 3
+    assert {row["id"] for row in queue.status()}.isdisjoint(original_ids)
+    archive_keys = [key for key in r2_context.created_keys if "/feed-lifecycle/feed-queue/v1/archives/" in key]
+    assert len(archive_keys) == 1
+    archived = json.loads(_get_bytes(r2_context, archive_keys[0]))
+    assert [row["id"] for row in archived["packages"]] == original_ids
+    assert [row["state"] for row in archived["packages"]] == ["CONSUMED"] * 3
+    print("Prepared Feed lifecycle .. PASS")
+
+
+def test_prepared_feed_queue_stale_owner_cannot_replace_winner(r2_context, tmp_path):
+    from tests.test_feed_queue import NOW, build
+
+    local, _ = build(tmp_path)
+    stale = _feed_queue(r2_context, tmp_path / "stale", "feed-cas")
+    stale.install(local, now=NOW)
+    winner = _feed_queue(r2_context, tmp_path / "winner", "feed-cas")
+    with stale._lock():
+        candidate = copy.deepcopy(stale._load())
+        claim = winner.claim("single", protected_ids=set(), owner="winner", now=NOW)
+        assert claim is not None
+        candidate["packages"][1].update(state="CLAIMED", owner="loser", reason=None)
+        with pytest.raises(RuntimeError, match="conflict"):
+            stale._write(candidate)
+    assert stale.status()[1]["owner"] == "winner"
+    assert stale.claim("single", protected_ids=set(), owner="loser", now=NOW) is None
+    print("Prepared Feed stale CAS .. PASS")
+
+
+def test_prepared_feed_queue_lost_claim_response_never_rearms(r2_context, tmp_path):
+    from src.r2_feed_queue import MANIFEST_KEY
+    from tests.test_feed_queue import NOW, build
+
+    local, _ = build(tmp_path)
+    queue = _feed_queue(r2_context, tmp_path / "uncertain", "feed-uncertain")
+    queue.install(local, now=NOW)
+    client = queue.client
+
+    class LostClaimResponse:
+        get_object = client.get_object
+
+        def put_object(self, *, Bucket, Key, **kwargs):
+            response = client.put_object(Bucket=Bucket, Key=Key, **kwargs)
+            if Key == MANIFEST_KEY:
+                raise EndpointConnectionError(endpoint_url="https://test.invalid")
+            return response
+
+    queue.client = LostClaimResponse()
+    with pytest.raises(RuntimeError, match="uncertain"):
+        queue.claim("single", protected_ids=set(), owner="uncertain", now=NOW)
+    fresh = _feed_queue(r2_context, tmp_path / "later", "feed-uncertain")
+    assert fresh.status()[1]["state"] == "CLAIMED"
+    assert fresh.status()[1]["owner"] == "uncertain"
+    assert fresh.claim("single", protected_ids=set(), owner="later", now=NOW + timedelta(days=15)) is None
+    refill, _ = build(tmp_path / "refill")
+    with pytest.raises(RuntimeError, match="unfinished"):
+        fresh.install(refill, now=NOW)
+    print("Prepared Feed lost reply . PASS")
 
 
 def _state_store(context: R2IntegrationContext, subpath: str):

@@ -28,7 +28,7 @@ from src.aic_image_policy import (
 from src import history_tracker
 from src import content_diversity
 from src.region import normalize_region
-from src.carousel_themes import CarouselThemeDefinition, ThemeEvidenceMode
+from src.carousel_themes import CarouselThemeDefinition, ThemeEvidenceMode, primary_search_query
 from src.artwork_visual_features import extract_visual_features, features_from_dimensions
 from src.single_post_diversity import (
     SinglePostDiversityScore,
@@ -431,6 +431,7 @@ def iter_single_post_candidates(
     selection_run_seed: SelectionRunSeed | None = None,
     engagement_model: "EngagementModel | None" = None,
     engagement_context: Mapping[str, object] | None = None,
+    theme_definition: CarouselThemeDefinition | None = None,
 ) -> Iterator[Dict[str, Any]]:
     """
     Yield securely validated single-post candidates in deterministic score order.
@@ -476,6 +477,7 @@ def iter_single_post_candidates(
             candidates = adapter.fetch_candidates(
                 limit=15,
                 rng=_museum_adapter_rng(selection_run_seed, adapter.source_id, "single_post", None),
+                **({"query": primary_search_query(theme_definition)} if theme_definition is not None else {}),
             )
         except Exception:
             logger.exception(
@@ -492,6 +494,12 @@ def iter_single_post_candidates(
     new_candidates = []
     seen_candidate_ids = set()
     for candidate in all_candidates:
+        if theme_definition is not None:
+            from src.theme_acquisition import evaluate_theme_relevance, DEFAULT_MIN_THEME_RELEVANCE
+            evidence = evaluate_theme_relevance(candidate, theme_definition, ())
+            if not evidence.relevance_eligible or evidence.theme_relevance_score < DEFAULT_MIN_THEME_RELEVANCE:
+                observability.reject("theme_mismatch")
+                continue
         if not is_rights_eligible(candidate):
             observability.reject("rights_policy")
             logger.debug("single_candidate_rejected candidate=%s reason=rights_policy", candidate.canonical_id)
@@ -514,6 +522,9 @@ def iter_single_post_candidates(
     logger.info(f"Candidates after duplicate filter: {len(new_candidates)}")
     
     if not new_candidates:
+        if theme_definition is not None:
+            from src.feed_editorial import ThematicSingleUnavailable
+            raise ThematicSingleUnavailable("No matching new artwork in the bounded themed single pool")
         logger.info(
             "selection_summary raw=%s rights_safe=%s history_new=0 quality_pass=0 downloads=0 selected=none rejections=%s",
             observability.raw_candidates,

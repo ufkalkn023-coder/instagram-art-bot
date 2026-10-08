@@ -1,0 +1,64 @@
+name: Prepare private Feed queue
+
+"on":
+  workflow_dispatch:
+    inputs:
+      confirmation:
+        description: "Type PREPARE_FEED_QUEUE to write 3–5 private prepared packages; no Instagram publication"
+        required: true
+        type: string
+      target:
+        description: "Number of alternating packages"
+        type: choice
+        options: ["3", "4", "5"]
+        default: "3"
+      caption_experiment:
+        description: "Opt into the fixed-cover caption-hook experiment"
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: artfolio-feed-queue-prepare
+  cancel-in-progress: false
+
+jobs:
+  prepare:
+    if: github.ref == 'refs/heads/main' && inputs.confirmation == 'PREPARE_FEED_QUEUE'
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - name: Block reruns
+        run: |
+          if [ "$GITHUB_RUN_ATTEMPT" != "1" ]; then
+            echo 'PREPARED_QUEUE_RERUN_BLOCKED' >&2
+            exit 1
+          fi
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.10"
+          cache: pip
+          cache-dependency-path: requirements-dev.lock
+      - name: Install dependencies
+        run: python -m pip install --require-hashes -r requirements-dev.lock
+      - name: Verify queue implementation
+        run: pytest -q tests/test_feed_queue.py tests/test_r2_feed_queue.py tests/test_feed_queue_rights.py tests/test_feed_queue_runtime.py
+      - name: Prepare and install validated batch
+        env:
+          QUEUE_TARGET: ${{ inputs.target }}
+          ARTFOLIO_CAPTION_EXPERIMENT_ENABLED: ${{ inputs.caption_experiment }}
+          ARTFOLIO_RIGHTS_POLICY: strict_public_domain
+          GOOGLE_GEMINI_API_KEY: ${{ secrets.GOOGLE_GEMINI_API_KEY }}
+          SMITHSONIAN_API_KEY: ${{ secrets.SMITHSONIAN_API_KEY }}
+          EUROPEANA_API_KEY: ${{ secrets.EUROPEANA_API_KEY }}
+          CLOUDFLARE_R2_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_R2_ACCOUNT_ID }}
+          CLOUDFLARE_R2_ACCESS_KEY_ID: ${{ secrets.CLOUDFLARE_R2_ACCESS_KEY_ID }}
+          CLOUDFLARE_R2_SECRET_ACCESS_KEY: ${{ secrets.CLOUDFLARE_R2_SECRET_ACCESS_KEY }}
+          CLOUDFLARE_R2_BUCKET_NAME: ${{ secrets.CLOUDFLARE_R2_BUCKET_NAME }}
+          CLOUDFLARE_STATE_R2_BUCKET_NAME: ${{ secrets.CLOUDFLARE_STATE_R2_BUCKET_NAME }}
+          CLOUDFLARE_STATE_R2_ACCESS_KEY_ID: ${{ secrets.CLOUDFLARE_STATE_R2_ACCESS_KEY_ID }}
+          CLOUDFLARE_STATE_R2_SECRET_ACCESS_KEY: ${{ secrets.CLOUDFLARE_STATE_R2_SECRET_ACCESS_KEY }}
+        run: python scripts/prepare_feed_queue.py --directory "$RUNNER_TEMP/feed-queue" --target "$QUEUE_TARGET" --r2 --skip-keychain

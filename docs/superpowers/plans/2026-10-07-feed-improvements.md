@@ -47,39 +47,39 @@
 
 ## Stage 2 — Feed analytics and single-post learning
 
-- [ ] Reuse existing exact-ID Feed targets in the Insights collector; verify actual gaps before adding a second collector.
-- [ ] Collect supported Feed metrics at existing mature windows without manufacturing missing data or Reel associations.
-- [ ] Include single publications in learning with a publication-format feature and retain conservative confidence weighting.
-- [ ] Verify identity mismatches, partial/unsupported metrics, duplicate collection and Reel compatibility.
+- [x] Reuse existing exact-ID Feed targets in the Insights collector; verify actual gaps before adding a second collector.
+- [x] Collect supported Feed metrics at existing mature windows without manufacturing missing data or Reel associations.
+- [x] Include single publications in learning with a publication-format feature and retain conservative confidence weighting.
+- [x] Verify identity mismatches, partial/unsupported metrics, duplicate collection and Reel compatibility.
 
 ## Stage 3 — Prepared content queue
 
-Local implementation checkpoint, 2026-10-07: format-scoped Feed learning, missing-window reporting and equal-age comparison are implemented and tested in `codex/feed-learning-reports-queue`; see [implementation ledger](2026-10-07-feed-learning-reports-queue.md). A local filesystem queue pilot is also implemented. This stage remains incomplete until shared R2 persistence/distributed ownership and Actions integration are completed. These changes are not deployed; live main remains the Stage 1 rollout.
+Local implementation checkpoint, 2026-10-08: Stage 2 is deployed through PR #10/main `240f4a7`. Stages 3–6 are implemented locally on `codex/feed-remaining-improvements`; see [continuation ledger](2026-10-08-feed-remaining.md). R2 persistence/CAS ownership, opt-in Actions preparation/consumption, conservative fresh source rights, thematic pairs, caption-hook cohorts and consolidated status/change summaries are included. These new stages have not been deployed or activated. Live R2 interoperability and Python 3.10 CI remain rollout validation.
 
-- [ ] Prepare a bounded queue of 3–5 verified Feed packages using existing acquisition/rendering paths without publication mutation.
-- [ ] Persist package identity, content digest, creation/expiry, format and source rights in the existing storage pattern.
-- [ ] Consume only compatible, fresh packages; recheck current history/rights/format before reservation. Never reuse a package after uncertain publication.
-- [ ] Verify exhaustion/fallback, stale packages, concurrent consumers and preservation of publication locks.
+- [x] Prepare a bounded queue of 3–5 verified Feed packages using existing acquisition/rendering paths without publication mutation.
+- [x] Persist package identity, content digest, creation/expiry, format and source rights in the existing storage pattern.
+- [x] Consume only compatible, fresh packages; recheck current history/rights/format before reservation. Never reuse a package after uncertain publication.
+- [x] Verify exhaustion/fallback, stale packages, concurrent consumers and preservation of publication locks.
 
 ## Stage 4 — Connected editorial planning
 
-- [ ] Plan carousel/single thematic pairs using the existing theme registry and variety controls.
-- [ ] Persist the editorial relationship and exclude repeated artworks; preserve museum metadata and uncertainty.
-- [ ] Verify missing-theme fallback, theme repetition limits and format rotation.
+- [x] Plan carousel/single thematic pairs using the existing theme registry and variety controls.
+- [x] Persist the editorial relationship and exclude repeated artworks; preserve museum metadata and uncertainty.
+- [x] Verify missing-theme fallback, theme repetition limits and format rotation.
 
 ## Stage 5 — Controlled editorial experiments
 
-- [ ] Extend existing hook/cover taxonomy instead of creating a parallel system.
-- [ ] Assign one experimental variable per comparison and persist the assignment with the publication.
-- [ ] Evaluate mature, comparable cohorts with minimum evidence and uncertainty; do not auto-promote a winner from sparse results.
-- [ ] Verify deterministic assignment, comparable age/format groups and insufficient-data behavior.
+- [x] Extend existing hook/cover taxonomy instead of creating a parallel system.
+- [x] Assign one experimental variable per comparison and persist the assignment with the publication.
+- [x] Evaluate mature, comparable cohorts with minimum evidence and uncertainty; do not auto-promote a winner from sparse results.
+- [x] Verify deterministic assignment, comparable age/format groups and insufficient-data behavior.
 
 ## Stage 6 — Consolidated status and notifications
 
-- [ ] Extend Stage 1 status with ready queue count and analytics freshness.
-- [ ] Show last success, next opportunity and specific actionable failure; distinguish normal waiting from a blocked bot.
-- [ ] Add meaningful-change-only monitoring through the chosen channel. Codex is the proposed default; external recipients require explicit selection.
-- [ ] Verify repeated unchanged states stay quiet and failures/recovery are reported once.
+- [x] Extend Stage 1 status with ready queue count and analytics freshness.
+- [x] Show last success, next opportunity and specific actionable failure; distinguish normal waiting from a blocked bot.
+- [x] Add opt-in meaningful-change-only Actions job summaries with a separate CAS dedup key; no external recipients or Codex automation are activated.
+- [x] Verify repeated unchanged states stay quiet and failures/recovery are reported once.
 
 ## Integration
 

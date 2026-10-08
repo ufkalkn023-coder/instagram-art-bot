@@ -205,7 +205,7 @@ Komut yalnız kayıtlı history ve Insights verisini okur; Instagram sorgusu vey
 
 Karşılaştırma her hedef yaş ve format için ayrı observation, coverage, reach ve engagement oranlarını gösterir. Her metriğin paydası yalnız o metriği taşıyan gönderileri içerir; eksik değer sıfıra çevrilmez. Varsayılan asgari örnek sayısı format başına 5'tir (`--minimum-cohort-size`). Gerçek ölçüm yaşları açıklanır; yaş aralıkları ayrışırsa karşılaştırma uyarılır. Sonuçlar gözlemseldir, otomatik kazanan veya nedensellik iddiası üretilmez.
 
-### Hazır içerik kuyruğu — yerel pilot
+### Hazır içerik kuyruğu — yerel ve private R2
 
 ```console
 python3 scripts/prepare_feed_queue.py --directory /path/new-feed-queue --target 3
@@ -216,7 +216,30 @@ Hazırlama carousel/tekli sırasıyla 3–5 paket oluşturur; önceki paketlerin
 
 `main.py --prepared-queue /path/new-feed-queue` mevcut yetkili publication akışında isteğe bağlı tüketimi açar. Bu seçenek kendi başına yayınlama izni vermez. Format, süre, görsel digest/uyumluluk, kayıtlı confirmed hak bilgileri ve güncel duplicate koruması reservation öncesinde tekrar denetlenir. Paket yalnız doğrulanmış publication receipt sonrasında CONSUMED olur; belirsiz sonuç QUARANTINED olur ve otomatik yeniden kullanılmaz. Boş veya geçersiz paketleri elenmiş kuyruk normal içerik üretimine döner. Bozuk manifest ve eşzamanlı sahiplik çatışması koşuyu durdurur.
 
-Pilot Mac/Linux üzerinde aynı host/paylaşılan kalıcı dosya sistemi için `fcntl` kilidi ve atomik manifest kullanır. GitHub Actions'ta otomatik etkinleştirilmemiştir; geçici runner diski koşular arası kalıcı kuyruk değildir. Ortak R2 depolaması ve dağıtık sahiplik bağlantısı bir sonraki aşamadır. Yayın öncesi müze kaynağından yeni hak sorgusu henüz eklenmedi; kayıtlı hak kanıtı ve süre sınırı denetlenir.
+Yerel pilot Mac/Linux üzerinde `fcntl` kilidi ve atomik manifest kullanır. Actions runner'ları için private durable-state bucket'ında `feed-queue/v1/` altında kalıcı R2 kuyruk desteği vardır. JPEG'ler UUID kapsamındaki immutable nesnelerdir; manifest create-only/ETag CAS ile kurulur ve sahiplenilir. Kaybedilen veya sonucu belirsiz sahiplik yazısı yayın başlatmaz ve otomatik tekrar edilmez. CLAIMED paketler süre dolmasıyla yeniden açılmaz. Tamamlanmış veya tamamen eskimiş partiler arşivlenerek yenilenebilir; geçerli READY ve tüm CLAIMED paketler yenilemeyi durdurur. Eski paketler ve asset'ler operatör incelemesi için korunur; otomatik silme yoktur.
+
+```bash
+# Açık state-writer environment credential'larıyla private R2'ye yazılır;
+# acquisition/rendering yapar, Instagram publication yapmaz.
+python3 scripts/prepare_feed_queue.py --directory /path/new-feed-queue --target 3 --r2 --skip-keychain
+# Yalnız R2 manifest GET; mutation yapmaz.
+python3 scripts/prepare_feed_queue.py --directory /path/status-cache --r2 --status
+```
+
+`Prepare private Feed queue` workflow'u yalnız `main` üzerinden manuel `PREPARE_FEED_QUEUE` onayıyla 3–5 paket hazırlar. Instagram publish token'ı almaz. Feed tüketimi `ARTFOLIO_FEED_QUEUE_ENABLED=true` repository variable'ı veya `--prepared-queue-r2` ile isteğe bağlıdır; default kapalıdır. R2 tüketimi, mevcut adapter'larla bounded yeni müze sorgusunda **exact canonical artwork ID ve confirmed rights** ister. Eser yeniden bulunamazsa paket elenir; kayıtlı hak bilgisi güncel onay yerine geçmez. Bu konservatif kontrol geçerli paketleri de eleyebilir. Boş/elenmiş kuyruk normal acquisition'a döner; okunamayan state veya CAS çatışması durdurur. Queue kurulumu, doldurulması ve activation ayrı üretim işlemleridir; kodun mevcut olması etkin olduğu anlamına gelmez.
+
+Hazırlama, carousel'in gerçekten seçilen registry temasıyla sonraki tekli gönderiyi eşleştirir; aynı partide önceki eserleri ve carousel temalarını dışlar. Thematic tekli bulunamazsa normal tekliye döner ve `editorial_pair.status=unmatched` kaydeder. Single ile başlayan veya bilinmeyen tema kullanan paket için ilişki uydurulmaz. Pair kimliği reservation'dan confirmed publication'a ve reconciliation'a taşınır.
+
+`ARTFOLIO_CAPTION_EXPERIMENT_ENABLED=true` yalnız yeni carousel hazırlığında `caption_hook_v1` deneyini açar. İki mevcut hook türü (`question`, `visual_detail`) seed ile atanır; deterministic factual body, cover ve credits korunur. Atama, gerçekten üretilen caption hook'u ile birlikte reservation'a kaydedilir. Tekli gönderiler bu deney kapsamına girmez. Prepared paketin deneyi sonradan değiştirilmez. Workflow'da `caption_experiment` manuel input'u vardır; default false.
+
+```bash
+python3 scripts/report_feed_analytics.py --history /path/history.json --snapshots /path/snapshots.json --experiments
+python3 scripts/report_feed_status.py --r2 --expected-sha EXACT_MAIN_SHA
+```
+
+Deney raporu aynı carousel formatı/tema/cover/ölçüm yaşı için metric-specific coverage, örnek sayısı, ortalama, gözlenen aralık ve standart hata verir. Her iki kolda en az 5 ilgili ölçüm olmadığında kanıt yetersizdir. Sonuçlar observational'dır; otomatik winner/promotion yoktur.
+
+Birleşik durum raporu salt okunurdur: son Feed başarısı, sonraki fırsat, hazır/eskimiş/sahiplenilmiş paket sayıları ve kimliği doğrulanmış karşılaştırılabilir analitik ölçümünün güncelliği gösterilir. Hazır sayısı manifest süre kontrolüdür; yayın öncesi byte/hak/history doğrulaması yine gereklidir. `ARTFOLIO_FEED_STATUS_ENABLED=true` repository variable'ı, Feed workflow sonunda `--notify` çalıştırır: yalnız ayrı `feed-status/v1/notifications.json` dedup nesnesine CAS yazar ve yeni engel, toparlanma veya yeni başarılı yayını Actions job summary'sinde gösterir. Aynı durum ve normal bekleme tekrar bildirilmez. Yeni harici bildirim kanalı veya otomasyon oluşturulmaz.
 
 ## History ve duplicate koruması
 
