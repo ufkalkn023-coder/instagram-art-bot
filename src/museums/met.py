@@ -42,6 +42,8 @@ class MetAdapter(MuseumAdapter):
         limit: int = 20,
         query: str = None,
         rng: random.Random | None = None,
+        *,
+        verification_id: str | None = None,
     ) -> List[NormalizedArtwork]:
         candidates = []
         self._clear_source_failure()
@@ -68,7 +70,7 @@ class MetAdapter(MuseumAdapter):
             page_count = (
                 accessible_total + MET_SEARCH_PAGE_LIMIT - 1
             ) // MET_SEARCH_PAGE_LIMIT
-            if page_count > 1:
+            if page_count > 1 and verification_id is None:
                 page_index = random_source.randrange(page_count)
                 offset = page_index * MET_SEARCH_PAGE_LIMIT
                 if offset:
@@ -87,7 +89,8 @@ class MetAdapter(MuseumAdapter):
                     if not object_ids:
                         return candidates
 
-            sample_ids = random_source.sample(object_ids, min(limit, len(object_ids)))
+            sample_ids = (object_ids[:limit] if verification_id is not None
+                          else random_source.sample(object_ids, min(limit, len(object_ids))))
             logger.debug(
                 "[Met] Candidate pool sample_size=%s seeded=%s",
                 len(sample_ids),

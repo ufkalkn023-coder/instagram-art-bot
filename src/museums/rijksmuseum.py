@@ -566,6 +566,8 @@ class RijksmuseumAdapter(MuseumAdapter):
         limit: int = 50,
         query: str = None,
         rng: random.Random | None = None,
+        *,
+        verification_id: str | None = None,
     ) -> List[NormalizedArtwork]:
         self._clear_source_failure()
         if limit <= 0:
@@ -574,7 +576,12 @@ class RijksmuseumAdapter(MuseumAdapter):
         resolution_budget = min(MAX_RESOLUTION_ATTEMPTS, max(1, limit * 2))
         identifier_pool_target = resolution_budget * 4
         params = {"type": "painting", "imageAvailable": "true"}
-        if isinstance(query, str) and query.strip():
+        if verification_id is not None:
+            # Titles can be translated or absent from the search index. The
+            # documented objectNumber lookup retains the existing resolver and
+            # rights chain; its partial matches are checked exactly by callers.
+            params["objectNumber"] = verification_id
+        elif isinstance(query, str) and query.strip():
             # The repository query is untyped. Description is the closest safe
             # current equivalent to the removed legacy generic ``q`` search.
             params["description"] = query.strip()
@@ -617,10 +624,9 @@ class RijksmuseumAdapter(MuseumAdapter):
                 return []
 
         random_source = rng or random
-        selected_ids = random_source.sample(
-            persistent_ids,
-            min(resolution_budget, len(persistent_ids)),
-        )
+        selected_ids = (persistent_ids[:resolution_budget] if verification_id is not None
+                        else random_source.sample(
+                            persistent_ids, min(resolution_budget, len(persistent_ids))))
         candidates: list[NormalizedArtwork] = []
         seen_object_numbers: set[str] = set()
         detail_failures: list[str] = []

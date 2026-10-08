@@ -86,6 +86,8 @@ class EuropeanaAdapter(MuseumAdapter):
         limit: int = 20,
         query: str = None,
         rng: random.Random | None = None,
+        *,
+        verification_id: str | None = None,
     ) -> List[NormalizedArtwork]:
         self._clear_source_failure()
         api_key = os.environ.get("EUROPEANA_API_KEY", "").strip()
@@ -129,7 +131,8 @@ class EuropeanaAdapter(MuseumAdapter):
 
         items = payload["items"]
         random_source = rng or random
-        sampled_items = random_source.sample(items, min(requested, len(items)))
+        sampled_items = (items[:requested] if verification_id is not None
+                         else random_source.sample(items, min(requested, len(items))))
         candidates = []
         for item in sampled_items:
             if not isinstance(item, dict) or not isinstance(item.get("id"), str):

@@ -53,11 +53,16 @@ class MuseumAdapter(ABC):
         limit: int = 20,
         query: str = None,
         rng: random.Random | None = None,
+        *,
+        verification_id: str | None = None,
     ) -> List[NormalizedArtwork]:
         """
         Fetches candidates from the museum API.
         Does NOT apply quality filtering or duplicate filtering; 
         only normalizes the raw responses into NormalizedArtwork. ``rng`` is
         optional so direct adapter use retains normal random exploration.
+        ``verification_id`` supplies the museum-local identity for bounded fresh
+        verification: use first-page/source-order results and an identity search
+        where supported. Callers must still require an exact canonical ID match.
         """
         pass
