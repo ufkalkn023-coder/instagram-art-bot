@@ -25,12 +25,14 @@ class AICAdapter(MuseumAdapter):
         limit: int = 20,
         query: str = None,
         rng: random.Random | None = None,
+        *,
+        verification_id: str | None = None,
     ) -> List[NormalizedArtwork]:
         candidates = []
         self._clear_source_failure()
         try:
             random_source = rng or random
-            page = random_source.randint(1, 20)
+            page = 1 if verification_id is not None else random_source.randint(1, 20)
             logger.debug("[AIC] Candidate pool page=%s seeded=%s", page, rng is not None)
             search_query = f"painting {query}" if query else "painting"
             url = (

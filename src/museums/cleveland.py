@@ -33,11 +33,13 @@ class ClevelandAdapter(MuseumAdapter):
         limit: int = 50,
         query: str = None,
         rng: random.Random | None = None,
+        *,
+        verification_id: str | None = None,
     ) -> List[NormalizedArtwork]:
         candidates = []
         try:
             random_source = rng or random
-            skip = random_source.randint(0, 500)
+            skip = 0 if verification_id is not None else random_source.randint(0, 500)
             logger.debug("[Cleveland] Candidate pool skip=%s seeded=%s", skip, rng is not None)
             url = (
                 f"https://openaccess-api.clevelandart.org/api/artworks/"

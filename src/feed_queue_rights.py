@@ -25,7 +25,8 @@ def revalidate_source_rights(content: PreparedFeedContent, *,
         if adapter is None or not isinstance(title, str) or not title.strip():
             return False
         try:
-            candidates = adapter.fetch_candidates(limit=20, query=title[:200], rng=random.Random(identifier))
+            candidates = adapter.fetch_candidates(limit=20, query=title[:200], rng=random.Random(identifier),
+                                                  verification_id=identifier.split("_", 1)[1])
         except Exception as error:
             logger.warning("prepared_rights_unconfirmed source=%s error=%s", source, type(error).__name__)
             return False

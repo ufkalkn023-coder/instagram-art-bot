@@ -83,6 +83,8 @@ class SmithsonianAdapter(MuseumAdapter):
         limit: int = 20,
         query: str = None,
         rng: random.Random | None = None,
+        *,
+        verification_id: str | None = None,
     ) -> List[NormalizedArtwork]:
         self._clear_source_failure()
         api_key = os.environ.get("SMITHSONIAN_API_KEY", "").strip()
@@ -131,7 +133,8 @@ class SmithsonianAdapter(MuseumAdapter):
             self._record_source_failure("INVALID_RESPONSE")
             return []
         random_source = rng or random
-        sampled_rows = random_source.sample(rows, min(requested, len(rows)))
+        sampled_rows = (rows[:requested] if verification_id is not None
+                        else random_source.sample(rows, min(requested, len(rows))))
         candidates = []
         for item in sampled_rows:
             if not isinstance(item, dict):
