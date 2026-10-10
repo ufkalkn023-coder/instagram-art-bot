@@ -48,7 +48,7 @@ def test_single_prompt_enforces_artfolio_visual_editorial_contract(monkeypatch, 
     prompt = captured["contents"][1]
     for fragment in (
         "visual-first hook",
-        "80–140 words",
+        "50–80 words",
         "mobile-readable",
         "short paragraphs",
         "SUPPLIED METADATA",
@@ -83,7 +83,7 @@ def test_carousel_prompt_uses_the_same_concise_grounded_editorial_voice(monkeypa
     prompt = captured["contents"][0]
     for fragment in (
         "visual-first hook",
-        "80–140 words",
+        "50–80 words",
         "mobile-readable",
         "short paragraphs",
         "only factual grounding",

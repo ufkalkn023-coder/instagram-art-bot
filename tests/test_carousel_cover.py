@@ -245,6 +245,51 @@ def test_renderer_draws_editorial_copy_but_never_cover_identity(monkeypatch, tmp
     assert "1499" not in visible_copy
 
 
+def test_cover_keeps_artwork_bright_above_the_editorial_block(tmp_path):
+    source_path = tmp_path / "source.jpg"
+    Image.new("RGB", (1080, 1350), (200, 200, 200)).save(source_path)
+    output = carousel_cover.create_carousel_editorial_cover(
+        cover=_cover_asset(source_path, CoverMode.FULL_ARTWORK),
+        editorial_title="The Art of Stillness",
+        editorial_subtitle="Selected by Artfolio.",
+        output_path=str(tmp_path / "cover.jpg"),
+    )
+    with Image.open(output) as rendered:
+        assert min(rendered.getpixel((540, 350))) >= 190
+        assert max(rendered.getpixel((20, 1250))) < 100
+
+
+def test_cover_preserves_mixed_case_title_and_fits_all_copy(monkeypatch, tmp_path):
+    source_path = tmp_path / "source.jpg"
+    Image.new("RGB", (1080, 1350), "navy").save(source_path)
+    title = "The Changing Light of Gardens and Interiors Across European Collections"
+    subtitle = "Selected from the Art Institute of Chicago and the Cleveland Museum of Art."
+    facts = ("8 works", "8 artists", "Works from c. 1750–c. 1915")
+    drawn = []
+    original = carousel_cover.ImageDraw.ImageDraw.text
+
+    def record(draw, xy, text, *args, **kwargs):
+        bounds = draw.textbbox(xy, text, font=kwargs.get("font"), anchor=kwargs.get("anchor"))
+        drawn.append((str(text), bounds))
+        return original(draw, xy, text, *args, **kwargs)
+
+    monkeypatch.setattr(carousel_cover.ImageDraw.ImageDraw, "text", record)
+    carousel_cover.create_carousel_editorial_cover(
+        cover=_cover_asset(source_path, CoverMode.FULL_ARTWORK),
+        editorial_title=title,
+        editorial_subtitle=subtitle,
+        micro_facts=facts,
+        output_path=str(tmp_path / "cover.jpg"),
+    )
+    visible = " ".join(text for text, _ in drawn)
+    assert title in visible
+    assert subtitle in visible
+    assert all(fact in visible for fact in facts)
+    for text, (left, top, right, bottom) in drawn:
+        assert 60 <= left < right <= 1020, text
+        assert 60 <= top < bottom <= 1290, text
+
+
 def test_grounded_micro_facts_use_only_featured_metadata():
     facts = carousel_cover.derive_cover_micro_facts(_featured())
 

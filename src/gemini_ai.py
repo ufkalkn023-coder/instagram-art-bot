@@ -107,9 +107,11 @@ Do NOT use generic AI/art clichés or phrases such as "masterpiece", "timeless
 beauty", "captivating", "stunning", "window into the past", "journey through",
 "mesmerizing", "profound exploration", "testament to", or "invites the viewer
 to". Prefer concrete visual language.
-Target length: 80–140 words. Use short paragraphs that remain mobile-readable.
+Target length: 50–80 words. Use short paragraphs that remain mobile-readable.
 Do not write an unnecessary art-history lecture. Every sentence should add useful
 information.
+Use a calm editorial voice. End with a precise observation; a question is optional,
+only when it adds something specific. Avoid repeated calls to comment, save or share.
 
 ==================================================
 METADATA FIDELITY & FOOTER (STRICT ZERO EMOJI RULE)
@@ -248,12 +250,14 @@ The carousel contains the following artworks:
 ==================================================
 EDITORIAL INTRODUCTION GUIDELINES
 ==================================================
-- Write only an editorial introduction of 80–140 words for this curated theme, using
+- Write only an editorial introduction of 50–80 words for this curated theme, using
   short paragraphs that remain mobile-readable.
 - Open with a visual-first hook grounded in the supplied theme and metadata. Since
   no image is supplied here, metadata is the only factual grounding.
 - Follow the application-selected hook type. A question must be thoughtful and
   answerable from the carousel, never engagement bait.
+- Use a calm editorial voice. Do not add a closing question by default or repeated
+  calls to comment, save or share. Prefer a specific, grounded closing observation.
 - Do not generate a Featured Works heading, numbered list, artwork title, artist,
   date, or museum line. The application will generate that list itself.
 - Ground every statement in the supplied theme and artwork metadata. No visual input
@@ -283,7 +287,7 @@ EDITORIAL INTRODUCTION GUIDELINES
 SYSTEM JSON OUTPUT REQUIREMENTS
 ==================================================
 Return a JSON object satisfying this schema:
-1. editorial_intro: The 80-140 word editorial introduction only. ZERO EMOJIS.
+1. editorial_intro: The 50-80 word editorial introduction only. ZERO EMOJIS.
 2. editorial_subtitle: A short English editorial deck with no artwork identity or factual counts.
 3. hashtags: 4-7 highly relevant hashtags.
 4. recommended_font_size: An integer between 35 and 65 for the base font size.

@@ -280,6 +280,11 @@ def require_recovery_receipt_baseline(ledger: PublicationReceipts) -> None:
         raise StateValidationError("Production receipt ledger has unapproved provenance")
     recovered = [record.model_dump(mode="json") for record in ledger.records
                  if record.record_origin == "RECOVERED"]
+    # The reviewed forensic digest predates this additive optional field.
+    # Preserve its original representation; non-null additions remain hashed.
+    for record in recovered:
+        if record.get("story_delivery") is None:
+            record.pop("story_delivery", None)
     if hashlib.sha256(canonical_bytes({"records": recovered})).hexdigest() != RECOVERY_RECORDS_SHA256:
         raise StateValidationError("Recovered publication receipts differ from reviewed evidence")
 
@@ -317,6 +322,7 @@ def validate_live_receipt_coverage(
         (item["id"], item["media_id"], item["type"], item["artwork_ids"])
         for item in state.operational_projection.publications
     ]
+    feed_events = {p["id"]: p for p in state.operational_projection.publications}
     live.extend(
         (item["id"], item["media_id"], "reel", [item["artwork_id"]])
         for item in state.active_publication_state.reel_publications
@@ -329,6 +335,10 @@ def validate_live_receipt_coverage(
                 or [position.canonical_artwork_id for position in receipt.artwork_positions]
                 != artwork_ids):
             raise StateValidationError("Finalized live publication lacks an exact receipt")
+        event = feed_events.get(publication_id, {})
+        delivered = receipt.story_delivery.model_dump(mode="json") if receipt.story_delivery else None
+        if event.get("story_delivery") != delivered:
+            raise StateValidationError("Story receipt differs from finalized page delivery")
 
 
 def blocked_ids(history: Mapping[str, Any]) -> set[str]:
@@ -622,6 +632,11 @@ class PublicationStateStore:
         }
         for key, old in old_feed.items():
             new = new_feed.get(key)
+            if new is not None:
+                old_story = (old.get("publication_metadata") or {}).get("story_delivery")
+                new_story = (new.get("publication_metadata") or {}).get("story_delivery")
+                if old_story != new_story:
+                    raise StateValidationError("Reserved story delivery cannot be rewritten")
             if new is None:
                 if old["status"] != "EXPIRED":
                     raise StateValidationError("Live feed lock cannot be removed")
@@ -649,6 +664,8 @@ class PublicationStateStore:
             new = new_publications.get(publication_id)
             if new is None or any(new[field] != old[field] for field in ("media_id", "artwork_ids", "type")):
                 raise StateValidationError("Live publication identity cannot be removed or rewritten")
+            if new.get("story_delivery") != old.get("story_delivery"):
+                raise StateValidationError("Reviewed story delivery cannot be rewritten")
         old_reel_publications = {row["id"]: row for row in current.active_publication_state.reel_publications}
         new_reel_publications = {row["id"]: row for row in candidate.active_publication_state.reel_publications}
         for publication_id, old in old_reel_publications.items():
@@ -658,6 +675,8 @@ class PublicationStateStore:
         self._conditional_put(SAFETY_KEY, payload, etag)
 
     def append_receipt(self, receipt: dict[str, Any]) -> None:
+        from src.models import PublicationReceipt
+        receipt = PublicationReceipt.model_validate(receipt).model_dump(mode="json")
         for _ in range(3):
             ledger, etag = self.load_receipts()
             existing = next((item for item in ledger.records if item.publication_id == receipt["publication_id"]), None)
@@ -707,6 +726,7 @@ def _new_receipt_from_state(state: PublicationSafetyState, publication_id: str) 
             for index, artwork_id in enumerate(ids, start=1)
         ],
         "evidence_ref": f"new-publication:{publication_id}",
+        **({"story_delivery": publication["story_delivery"]} if publication.get("story_delivery") is not None else {}),
     }
 
 

@@ -24,6 +24,17 @@ Tekli gönderi, güvenli biçimde doğrulanan adaylar arasından Instagram görs
 
 Carousel koşusu bir editorial cover ve adaptive **5–8 featured eser** üretir; toplam slide sayısı 6–9'dur. En az beş güvenli, kaliteli ve temaya uyumlu featured eser ile bunlardan farklı bir cover bulunamazsa publication başlamaz. Sekize tamamlamak için zayıf aday eklenmez. Tekli koşu, mevcut güvenli tek eser seçicisiyle yalnız bir görsel seçer ve tek Instagram image container yayımlar.
 
+Editorial kapak 1080×1350 ölçüsünde Source Serif başlık ve Source Sans bilgi satırları
+kullanır. Başlığın özgün harf düzeni korunur; metin alt bölgede, kırık beyaz renkte ve
+yerel karartmayla sunulur. Başlık/alt başlık/bilgi satırları kesilmeden boyutlandırılır;
+okunabilir alanı aşan metin açık hatayla durur. Kısa alt başlık tema ve sayıları tekrar
+etmez; eser/sanatçı/koleksiyon sayıları ayrı factual satırda kalır. Fontlar ve SIL OFL
+lisansları `assets/fonts/source-serif/` ve `assets/fonts/source-sans/` altında paketlidir.
+Yeni AI caption girişlerinin hedefi 50–80 kelimedir; metadata, credits ve factual
+fallback korunur. Bu bir üretim hedefidir, model çıktısına zorunlu kelime sınırı değildir.
+Mühürlenmiş hazır kuyruk paketlerinin görselleri/metinleri sonradan değiştirilmez;
+yeni stil yalnız bu kodla yeniden hazırlanan içerikte görünür.
+
 Carousel teması doğrulanmış registry ve deterministic Theme Planner tarafından seçilir. Reel/export ve legacy history okuma altyapısı feed publisher'dan ayrıdır. CLI `carousel`, `single` ve `auto` modlarını destekler; geriye uyumluluk için açık mod verilmezse carousel çalışır.
 
 ## Artfolio Theme Registry
@@ -527,3 +538,139 @@ operator tool, cadence approval, migration and emergency stop.
 Turning the scheduler variable off does **not** stop a job already running. No production
 migration, scheduler enablement, workflow enablement or Instagram publication is
 authorized by this change.
+
+## Artfolio 2.0 yerel editoryal önizleme
+
+`src/editorial_v2.py`, üretim tema kimliğinden ayrı `public_title`,
+`editorial_angle` ve `headline_evidence` taslakları oluşturur. Bilinmeyen eser,
+doğrulanamayan müze alıntısı, düşük güven, başarısız görsel kontrol, jenerik ve
+son 100 başlığa benzer öneriler elenir. Görsel ve sanat tarihi doğruluğu insan incelemesi
+gerektirir; modelin kendi değerlendirmesi doğruluk sertifikası değildir.
+
+Üç Pillow kapak düzeni `src/editorial_design.py` içinde bulunur: Museum Journal,
+Artwork First ve Detail Study. Odak kutusu yoksa Detail Study, **FULL ARTWORK**
+etiketli tam eser alternatifi üretir. Yazı sığmazsa okunabilirliği azaltarak
+devam etmek yerine hata verir.
+
+Gemini kapalıyken gerçek yakın planları karşılaştırmak için `--detail-focus`
+ile JSON odak dosyası verilebilir: `{"cleveland_123": [0.2, 0.1, 0.7, 0.6]}`.
+Koordinatlar tam görsel üzerinde normalize edilmiş sol/üst/sağ/alt değerlerdir;
+kimlik, sınırlar ve alan doğrulanır. Bu kırpmalar `preview_focus` olarak kaydedilir,
+AI seçimi veya başlık kanıtı olarak kullanılmaz. Odak dosyası olmadan tam eser
+alternatifi korunur.
+`--detail-focus`, görselleri önceden inceleyebilmek için `--manifest` gerektirir;
+yeni eser indirme seçeneğiyle birlikte kullanılamaz.
+
+30 kullanım hakkı doğrulanmış Cleveland eseriyle 90 kapaklık yerel galeri:
+
+```bash
+python scripts/preview_editorial_v2.py \
+  --acquire-cleveland data/editorial-sources \
+  --output data/editorial-gallery --count 30
+```
+
+Var olan indirilen görsellerle tekrar üretim için `--acquire-cleveland` yerine
+`--manifest data/editorial-sources/sources.json` kullanılır. Galeri dizini boş
+olmalıdır. Manifest `artworks` listesinde `artwork` (NormalizedArtwork metadata)
+ve `image_path` içerir; görseller manifest dizini içinde kalmalıdır. Çıktılar
+`index.html`, `report.json` ve 1080×1350 JPEG kapaklardır. Müze kaynağı, hak
+durumu, AI/fallback sayısı, kontrol gerekçeleri ve kırpma temeli kaydedilir.
+
+Gemini varsayılan olarak **kapalıdır**; kaynak eser başlığı açıkça factual
+fallback olarak gösterilir. Ayrı bir canlı doğrulama için açık `--use-gemini`,
+pozitif `--max-ai-calls` (en fazla 50) ve `GOOGLE_GEMINI_API_KEY` gerekir.
+Önizleme modeli `gemini-3.8-flash`, thinking Medium; istemci 60 saniye zaman
+sınırı ve tek deneme kullanır. Görsel/metadata/model/protokol değişince yerel
+önbellek anahtarı değişir. `--history` isteğe bağlı JSON başlık listesi alır;
+üretim geçmişini okumaz veya yazmaz. Bu CLI Instagram/R2 yayını yapmaz.
+
+Kapak/başlık prototipi, aşağıdaki kalıcı hikâye sistemiyle birlikte kullanılabilir.
+Canlı editoryal model doğrulaması ve tasarım performansından öğrenme ayrı teslimatlardır.
+
+
+## Artfolio yerel hikâye sistemi
+
+`StoryPlan`, benzersiz eserleri ve sıralı sayfaları ayrı tutar. Tek eser incelemesi
+(1 eser), karşılaştırma (2 eser) ve seçki (3–8 eser) desteklenir. Kapak, tam eser,
+gerçek detay, karşılaştırma, kaynak alıntısı ve kapanış sayfaları 1080×1350 üretilir.
+Kaynak açıklaması varsa müze notu yalnızca birebir alıntı içerir; açıklama yoksa
+bu sayfa eklenmez. Başlıklar canlı AI kullanılmadan kaynak metadata'sından gelir.
+
+```bash
+python scripts/preview_story.py create \
+  --manifest data/editorial-sources/sources.json \
+  --output data/story-one --narrative single_study \
+  --artwork-ids cleveland_123 \
+  --detail-focus data/detail-focus.json
+
+python scripts/preview_story.py serve --project data/story-one --port 38129
+```
+
+`--artwork-ids` manifestteki gerçek kimliklerle doldurulur; verilmezse ilk 1/2/5
+eser seçilir. `--detail-focus` isteğe bağlıdır; önceki önizlemeyle aynı JSON biçimini
+kullanır. Verilmezse yerel kenar/doku ölçümleri en fazla 3 kırpma önerir. Bunlar
+`local_geometry` olarak işaretlenir ve görsel inceleme gerektirir; nesne tanıma veya
+sanat tarihi kanıtı değildir. Uygun çözünürlük/doku yoksa detay eklenmez. Detail Study
+kapağı mevcut gerçek detaydan üretilir; detay yoksa tam eser alternatifi kaydedilir.
+`--history` son 100 başlığın JSON listesini, `--style-history` geçmiş kapak stillerini
+alır. Üretim geçmişi okunmaz veya değiştirilmez.
+
+Yerel editörde kapak başlığı/stili, sayfa metni, sırası ve detay koordinatları
+kaydedilebilir. Kaynaklar sabittir. Hak, görsel dosyası, çözünürlük, yinelenen kırpma,
+alıntı, başlık tekrarı veya okunabilir metin kapasitesi kontrolü başarısızsa kayıt
+reddedilir ve son geçerli taslak korunur. Kaydetme, sürüm kontrolü ve süreçler arası
+kilitle korunur; tam sürüm tek atomik işaretçiyle değiştirilir. HTTP sunucusu yalnızca
+127.0.0.1 üzerinde çalışır ve yazma işlemleri origin/host/oturum kontrolünden geçer.
+
+Proje `sources/`, `pages/`, `project.json`, `report.json`, `index.html` ve geçmiş
+sürümler için `.revisions/` içerir. Son üç dosya `current` üzerinden aynı sürüme
+bağlıdır; taşırken sembolik bağlantıları koruyun. Görsel, kaynak metadata'sı, font,
+çizim kodu veya sayfa değişince önbellek geçersizleşir. Yalnızca değişen sayfalar
+tekrar çizilir; `render --project ...` mevcut planı yeniden doğrular ve kaydeder.
+Bozuk önbellek görselleri yeniden üretilir. İlk üretim geçici dizinde hazırlanır;
+başarısızsa düzeltilmiş planla yeniden denenebilir. Dolu dizinin üzerine yazılmaz.
+
+Paket benzersiz `artwork_ids` ile sıralı sayfa varlıklarını ayrı taşır. Yerel taslak
+her zaman `publication_ready=false` olarak kalır; editoryal onay ayrı bir kayıtla
+incelenen proje sürümüne, kaynak metadata/görsellerine ve sıralı sayfa byte'larına
+bağlanır. Düzenleme veya dosya değişikliği bu onayı geçersiz kılar.
+
+### İncelenmiş hikâyeyi Feed kuyruğuna hazırlama
+
+```bash
+# İncelenen project.json revision değerini kullanın.
+python scripts/preview_story.py approve --project data/story-one --expected-revision 3
+# Taşınabilir JPEG'ler ve kaynak/sayfa eşlemesi; yayın veya R2 yazısı yapmaz.
+python scripts/preview_story.py export --project data/story-one --output data/story-one-export
+# Hikâye sonraki carousel slotunu doldurur; diğer slotlar mevcut hazırlama yolunu kullanır.
+python scripts/prepare_feed_queue.py --directory data/reviewed-feed --first-format carousel \
+  --story-project data/story-one --target 3
+```
+
+`--story-project` tekrarlanabilir; carousel slot sayısını aşamaz ve aynı eser iki
+pakette kullanılamaz. Normal hazırlama, sonraki hikâyeler için ayrılmış eserleri de
+hariç tutar. Bütün hikâyeler acquisition öncesi doğrulanır. Bu seçenek status/refill
+modlarında kullanılamaz. Diğer slotların hazırlanması mevcut müze/Gemini akışını
+çalıştırabilir; hikâye onayı ve export hiçbir model isteği yapmaz.
+
+Hikâye açık `content_kind=story` ve `artfolio-story-delivery-v1` sözleşmesi taşır:
+1–8 benzersiz kaynak, 3–10 sıralı JPEG sayfası. Yerel taslakta 11–12 sayfa varsa
+export reddedilir; sayfalar otomatik kesilmez. Legacy carousel'in 6–9 ayrı eser
+sözleşmesi korunur. Tek eser incelemesi de **carousel gönderisidir**; tekli/carousel
+dönüşümü değişmez. Kapak, detay ve tam eser aynı kaynağa referans verebilir.
+
+Mevcut private R2 install/claim yolları hikâye türünü ve sayfa hash/sırasını korur;
+fresh source-rights, TTL, kaynak duplicate ve ownership kontrolleri uygulanır.
+Üretim runner'ı rezervasyon öncesi doğrulanmış özel medya kopyaları alır. Her kaynak
+bir kez kilitlenir; yayın sınırında sayfa container sayısı ayrıca doğrulanır.
+Reservation'dan itibaren story delivery değiştirilemez. Belirsiz sonuçta otomatik
+tekrar olmaz. Onay/export, production izni değildir: mevcut exact-SHA onayı,
+cooldown, safety CAS, receipt ve preflight kapıları yayın için yine zorunludur.
+
+Publication ve receipt, benzersiz kaynak üyeliğini ve ayrı sayfa eşlemesini korur.
+Insights bir parent gönderi için bir ölçüm alır; detay sayfaları örnek sayısını
+çoğaltmaz. `report_feed_analytics.py --json` içindeki `story_cohorts`, aynı yaş
+pencerelerinde anlatı/kapak/başlık kaynağına göre betimleyici sonuçları ve ölçüm
+kapsamını gösterir; otomatik kazanan ilan etmez. Öğrenme bağlamı bu özellikleri ve
+sayfa sayısını taşır. Canlı model kalitesi ve gerçek story yayın başarısı yerel
+testlerden çıkarılamaz; canlı rollout ayrı operasyonel doğrulama gerektirir.

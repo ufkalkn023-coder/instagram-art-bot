@@ -43,6 +43,7 @@ logger = logging.getLogger(__name__)
 COVER_WIDTH = 1080
 COVER_HEIGHT = 1350
 MAX_CANDIDATES_PER_ADAPTER = 24
+FONT_DIRECTORY = Path(__file__).resolve().parents[1] / "assets" / "fonts"
 
 
 class EditorialCoverSelectionError(RuntimeError):
@@ -643,18 +644,11 @@ def derive_cover_micro_facts(
     return tuple(result[:2])
 
 
-def _load_font(size: int, *, bold: bool = False) -> ImageFont.FreeTypeFont | ImageFont.ImageFont:
-    candidates = (
-        ["/System/Library/Fonts/Supplemental/Arial Bold.ttf", "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf"]
-        if bold
-        else ["/System/Library/Fonts/Supplemental/Arial.ttf", "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf"]
-    )
-    for path in candidates:
-        try:
-            return ImageFont.truetype(path, size)
-        except OSError:
-            continue
-    return ImageFont.load_default()
+def _load_font(size: int, *, serif: bool = False) -> ImageFont.FreeTypeFont:
+    # Bundled fonts keep production runners and local previews visually consistent.
+    relative = ("source-serif/SourceSerif4-Regular.otf" if serif
+                else "source-sans/SourceSans3-Regular.otf")
+    return ImageFont.truetype(str(FONT_DIRECTORY / relative), size)
 
 
 def _wrap_text(draw: ImageDraw.ImageDraw, text: str, font, max_width: int) -> list[str]:
@@ -662,6 +656,16 @@ def _wrap_text(draw: ImageDraw.ImageDraw, text: str, font, max_width: int) -> li
     lines: list[str] = []
     current = ""
     for word in words:
+        if draw.textlength(word, font=font) > max_width:
+            if current:
+                lines.append(current)
+                current = ""
+            for character in word:
+                if current and draw.textlength(current + character, font=font) > max_width:
+                    lines.append(current)
+                    current = ""
+                current += character
+            continue
         proposed = word if not current else f"{current} {word}"
         if current and draw.textbbox((0, 0), proposed, font=font)[2] > max_width:
             lines.append(current)
@@ -671,6 +675,18 @@ def _wrap_text(draw: ImageDraw.ImageDraw, text: str, font, max_width: int) -> li
     if current:
         lines.append(current)
     return lines
+
+
+def _fit_cover_copy(draw, text: str, *, size: int, minimum_size: int,
+                    max_width: int, max_height: int, serif: bool = False):
+    """Fit complete copy in a bounded block instead of silently cutting lines."""
+    for point_size in range(size, minimum_size - 1, -2):
+        font = _load_font(point_size, serif=serif)
+        lines = _wrap_text(draw, text, font, max_width)
+        line_height = round(point_size * 1.2)
+        if len(lines) * line_height <= max_height:
+            return font, lines, line_height
+    raise ValueError("Editorial cover copy exceeds the readable layout capacity")
 
 
 def _cover_background(source: Image.Image, mode: CoverMode) -> Image.Image:
@@ -711,40 +727,51 @@ def create_carousel_editorial_cover(
     with Image.open(cover.local_image_path) as source:
         canvas = _cover_background(source, cover.mode)
 
-    # A restrained top-to-bottom dark gradient protects white type while keeping
-    # the artwork visible. It is independent of cover metadata.
+    margin = 84
+    text_width = COVER_WIDTH - margin * 2
+    layout_draw = ImageDraw.Draw(canvas)
+    title = _fit_cover_copy(
+        layout_draw, editorial_title, size=100, minimum_size=60,
+        max_width=text_width, max_height=360, serif=True,
+    )
+    subtitle = _fit_cover_copy(
+        layout_draw, editorial_subtitle, size=32, minimum_size=26,
+        max_width=text_width, max_height=116,
+    )
+    facts_text = "  ·  ".join(" ".join(str(fact).split()) for fact in micro_facts[:3] if str(fact).strip())
+    facts = _fit_cover_copy(
+        layout_draw, facts_text, size=26, minimum_size=22,
+        max_width=text_width, max_height=64,
+    )
+    blocks = [block for block in (title, subtitle, facts) if block[1]]
+    block_height = sum(len(lines) * line_height for _, lines, line_height in blocks)
+    block_height += max(0, len(blocks) - 1) * 24
+    title_y = COVER_HEIGHT - 96 - block_height
+
+    # Fade only behind the bottom copy; leave the central artwork untouched.
+    # A separate shallow header fade keeps the small brand legible on light art.
+    gradient_start = max(400, title_y - 180)
     overlay = Image.new("RGBA", (COVER_WIDTH, COVER_HEIGHT), (0, 0, 0, 0))
     overlay_draw = ImageDraw.Draw(overlay)
     for y in range(COVER_HEIGHT):
-        alpha = int(82 + 82 * (y / (COVER_HEIGHT - 1)))
+        bottom = max(0.0, (y - gradient_start) / (COVER_HEIGHT - 1 - gradient_start))
+        header = max(0.0, 1 - y / 190)
+        alpha = round(max(220 * bottom ** 0.8, 80 * header ** 2))
         overlay_draw.line((0, y, COVER_WIDTH, y), fill=(0, 0, 0, alpha))
     canvas = Image.alpha_composite(canvas.convert("RGBA"), overlay)
     draw = ImageDraw.Draw(canvas)
 
-    margin = 82
-    title_font = _load_font(88, bold=True)
-    subtitle_font = _load_font(38)
-    facts_font = _load_font(28, bold=True)
-    brand_font = _load_font(25, bold=True)
-    text_width = COVER_WIDTH - margin * 2
+    paper = (246, 241, 232)
+    brand_luminance = ImageStat.Stat(ImageOps.grayscale(canvas.crop((margin, 74, margin + 160, 104)))).mean[0]
+    brand_color = (38, 36, 32) if brand_luminance > 145 else paper
+    draw.text((margin, 74), "ARTFOLIO", font=_load_font(25), fill=brand_color, anchor="lt")
+    draw.line((margin, 120, margin + 48, 120), fill=brand_color, width=1)
 
-    draw.text((margin, 74), "ARTFOLIO", font=brand_font, fill=(255, 255, 255, 230))
-    draw.line((margin, 116, margin + 86, 116), fill=(255, 255, 255, 210), width=3)
-
-    title_lines = _wrap_text(draw, editorial_title.upper(), title_font, text_width)[:3]
-    title_y = 700
-    for line in title_lines:
-        draw.text((margin, title_y), line, font=title_font, fill="white", stroke_width=1, stroke_fill=(0, 0, 0, 80))
-        title_y += 98
-
-    subtitle_y = title_y + 22
-    for line in _wrap_text(draw, editorial_subtitle, subtitle_font, text_width)[:3]:
-        draw.text((margin, subtitle_y), line, font=subtitle_font, fill=(255, 255, 255, 240))
-        subtitle_y += 50
-
-    facts = "  ·  ".join(" ".join(str(fact).split()) for fact in micro_facts[:3] if str(fact).strip())
-    if facts:
-        draw.text((margin, min(subtitle_y + 35, 1250)), facts, font=facts_font, fill=(255, 255, 255, 220))
+    for font, lines, line_height in blocks:
+        for line in lines:
+            draw.text((margin, title_y), line, font=font, fill=paper, anchor="lt")
+            title_y += line_height
+        title_y += 24
 
     canvas.convert("RGB").save(output_path, "JPEG", quality=95, optimize=True)
     logger.info(
