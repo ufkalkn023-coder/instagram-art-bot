@@ -190,7 +190,7 @@ def test_artfolio_selection_copy_is_neutral_and_claims_no_shared_subject():
     subtitle = fallback_editorial_subtitle(facts)
     intro = fallback_carousel_intro(facts)
 
-    assert subtitle == "5 works, selected by Artfolio."
+    assert subtitle == "Selected by Artfolio."
     assert intro.startswith("5 works selected by Artfolio.")
     assert "shared theme" not in intro.casefold()
     assert "around artfolio selection" not in (subtitle + intro).casefold()

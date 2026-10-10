@@ -57,6 +57,11 @@ def _prepare(format_name: str, directory: Path, excluded_ids: set[str], *, theme
         config.DATA_DIR, config.OUTPUT_RAW_IMAGE_PATH = original_data, original_raw
 
 
+def _carousel_slots(target: int, first_format: str) -> list[int]:
+    return [index for index in range(target)
+            if (first_format if index % 2 == 0 else ("single" if first_format == "carousel" else "carousel")) == "carousel"]
+
+
 def run(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--directory", required=True, type=Path)
@@ -71,7 +76,11 @@ def run(argv: list[str] | None = None) -> int:
     parser.add_argument("--github-output", action="store_true", help="Emit the read-only refill gate to GITHUB_OUTPUT")
     parser.add_argument("--r2", action="store_true", help="Explicitly install the prepared batch into private state R2")
     parser.add_argument("--skip-keychain", action="store_true", help="Use existing environment credentials instead")
+    parser.add_argument("--story-project", action="append", type=Path, default=[],
+                        help="Reviewed story project to use for the next carousel slot (repeatable)")
     args = parser.parse_args(argv)
+    if args.story_project and (args.status or args.check_refill or args.refill):
+        parser.error("--story-project cannot be used with status or refill modes")
     conditional = args.refill or args.check_refill
     if conditional and (not args.r2 or not args.skip_keychain or args.first_format != 'auto'
                         or not re.fullmatch(r'[0-9a-f]{40}', args.expected_sha or '')):
@@ -103,11 +112,38 @@ def run(argv: list[str] | None = None) -> int:
             first_format = (decision['next_format'] if decision is not None else
                             main._resolve_production_mode(SimpleNamespace(mode="auto")).value
                             if args.first_format == "auto" else args.first_format)
+            slots = _carousel_slots(args.target, first_format)
+            if len(args.story_project) > len(slots):
+                raise ValueError("More story projects were supplied than available carousel slots")
+            story_contents = []
+            story_ids = set()
+            if args.story_project:
+                from src.story_feed import prepare_story_content
+                story_contents = [prepare_story_content(path) for path in args.story_project]
+                for content in story_contents:
+                    overlap = story_ids.intersection(content.publication_ids)
+                    if overlap:
+                        raise ValueError("Story projects repeat an artwork")
+                    story_ids.update(content.publication_ids)
             from src.feed_editorial import FeedPairPlanner
             planner = FeedPairPlanner()
+            carousel_position = 0
+
+            def prepare_slot(format_name, directory, excluded):
+                nonlocal carousel_position
+                if format_name == "carousel":
+                    slot = carousel_position
+                    carousel_position += 1
+                    if slot < len(story_contents):
+                        from src.story_feed import prepare_story_content
+                        story = prepare_story_content(args.story_project[slot])
+                        if set(story.publication_ids).intersection(excluded):
+                            raise ValueError("Story repeats an artwork already used in this queue")
+                        return story
+                return planner.prepare(format_name, directory, excluded | story_ids, prepare=_prepare)
+
             queue.build(target=args.target, first_format=first_format,
-                        prepare=lambda format_name, directory, excluded: planner.prepare(
-                            format_name, directory, excluded, prepare=_prepare), ttl_hours=args.ttl_hours)
+                        prepare=prepare_slot, ttl_hours=args.ttl_hours)
         if args.r2:
             if not args.status:
                 if args.refill:

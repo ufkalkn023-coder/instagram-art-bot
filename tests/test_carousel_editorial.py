@@ -90,7 +90,7 @@ def test_exact_live_regression_is_grounded_and_excludes_cover():
     assert facts.latest_approximate is True
     assert facts.distinct_orientation_count == 3
     assert subtitle == (
-        "4 works from the Art Institute of Chicago, selected around Impressionist Light."
+        "Selected from the Art Institute of Chicago."
     )
     assert microfacts == ("4 works", "4 artists", "Works from 1893–c. 1915")
     assert "across museum collections" not in visible_copy.casefold()
@@ -124,7 +124,7 @@ def test_multi_museum_set_allows_grounded_plural_language():
     assert facts.distinct_artist_count == 5
     assert facts.distinct_museum_count == 3
     assert fallback_editorial_subtitle(facts) == (
-        "5 works across 3 museum collections, selected around Shared Light."
+        "Selected across museum collections."
     )
     assert derive_cover_micro_facts(facts) == (
         "5 works",
@@ -148,7 +148,7 @@ def test_sparse_metadata_omits_unsupported_cover_facts_and_variation_claims():
     assert facts.known_date_count == 1
     assert facts.date_span_label is None
     assert not facts.museum_metadata_complete
-    assert subtitle == "3 works selected around Strong Theme."
+    assert subtitle == "Selected by Artfolio."
     assert derive_cover_micro_facts(facts) == ("3 works",)
     assert "unknown" not in subtitle.casefold()
     assert "dates" not in intro

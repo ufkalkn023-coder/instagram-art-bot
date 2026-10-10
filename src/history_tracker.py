@@ -24,6 +24,7 @@ from src.carousel_policy import (
 from src.models import (
     CarouselExperimentMetadata,
     FeedEditorialMetadata,
+    StoryPublicationMetadata,
     PublicationRecord,
     ReelCleanupQueueEntry,
     ReelPublicationRecord,
@@ -35,6 +36,7 @@ from src.models import (
 )
 from src import r2_media, publication_state
 from src.production_authorization import ProductionAuthorization, ProductionAuthorizationError
+from src.story_delivery import StoryDelivery
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -407,6 +409,12 @@ def validate_carousel_history_for_production(history: Any) -> None:
             active_ids.add(canonical_id)
 
     publications = _validated_publications(history)
+    story_groups = {}
+    for row in history["posted_artworks"]:
+        if row.get("publication_id"):
+            story_groups.setdefault(row["publication_id"], []).append(row)
+    for records in story_groups.values():
+        _story_delivery_from_records(records)
     _grid_publication_count(history, publications)
     _validated_staging_media_cleanup_queue(history)
     _validated_reel_history(history)
@@ -2080,6 +2088,26 @@ def _require_production_authorization(
 
 
 def reserve_carousel(
+    cover_artwork: Dict[str, Any], featured_artworks: Sequence[Dict[str, Any]], *,
+    theme_id: str | None = None, theme_family: str | None = None,
+    carousel_format: str | None = None, publication_metadata: Mapping[str, Any] | None = None,
+    authorization: ProductionAuthorization | None = None,
+) -> str:
+    return _reserve_carousel_sources(cover_artwork, featured_artworks, theme_id=theme_id,
+                                    theme_family=theme_family, carousel_format=carousel_format,
+                                    publication_metadata=publication_metadata, authorization=authorization)
+
+
+def reserve_story(artworks: Sequence[Dict[str, Any]], *,
+                  publication_metadata: Mapping[str, Any],
+                  authorization: ProductionAuthorization | None = None) -> str:
+    metadata = StoryPublicationMetadata.model_validate(publication_metadata)
+    metadata.story_delivery.require_sources([art["id"] for art in artworks])
+    return _reserve_carousel_sources(artworks[0], artworks[1:], publication_metadata=publication_metadata,
+                                    authorization=authorization, story_delivery=metadata.story_delivery)
+
+
+def _reserve_carousel_sources(
     cover_artwork: Dict[str, Any],
     featured_artworks: Sequence[Dict[str, Any]],
     *,
@@ -2088,9 +2116,10 @@ def reserve_carousel(
     carousel_format: str | None = None,
     publication_metadata: Mapping[str, Any] | None = None,
     authorization: ProductionAuthorization | None = None,
+    story_delivery: StoryDelivery | None = None,
 ) -> str:
     """Atomically reserve one cover and 5–8 featured works with explicit roles."""
-    if not MIN_FEATURED_WORKS <= len(featured_artworks) <= MAX_FEATURED_WORKS:
+    if story_delivery is None and not MIN_FEATURED_WORKS <= len(featured_artworks) <= MAX_FEATURED_WORKS:
         raise ValueError(
             "Carousel history reservation requires between "
             f"{MIN_FEATURED_WORKS} and {MAX_FEATURED_WORKS} featured artworks"
@@ -2099,6 +2128,8 @@ def reserve_carousel(
     cover_id = normalize_artwork_id(cover_artwork["id"])
     featured_ids = [normalize_artwork_id(artwork["id"]) for artwork in featured_artworks]
     publication_ids = [cover_id, *featured_ids]
+    if story_delivery is not None:
+        story_delivery.require_sources(publication_ids)
     if len(set(publication_ids)) != len(publication_ids):
         raise ValueError(
             "Carousel cover and featured artwork IDs must all be distinct canonical IDs"
@@ -2117,12 +2148,13 @@ def reserve_carousel(
     validated_publication_metadata = None
     if publication_metadata is not None:
         try:
-            validated_publication_metadata = CarouselExperimentMetadata.model_validate(
+            metadata_type = StoryPublicationMetadata if story_delivery is not None else CarouselExperimentMetadata
+            validated_publication_metadata = metadata_type.model_validate(
                 publication_metadata
             )
         except ValidationError as error:
             raise ValueError("Invalid carousel experiment metadata") from error
-        if validated_publication_metadata.featured_count != len(featured_artworks):
+        if story_delivery is None and validated_publication_metadata.featured_count != len(featured_artworks):
             raise ValueError(
                 "Carousel experiment featured_count must match reserved artworks"
             )
@@ -2274,6 +2306,9 @@ def start_publication_attempt(
     started_at = _utc_timestamp()
 
     def mutation(publication_id, records):
+        story = _story_delivery_from_records(records)
+        if story is not None and (len(children) != len(story.pages) or len(set(children)) != len(children)):
+            raise RuntimeError("Story child containers must match ordered reviewed pages")
         existing_status = _uniform_status(records)
         if existing_status is PublicationStatus.PUBLISHING:
             if authorization is not None and authorization.is_scheduled_feed:
@@ -2584,14 +2619,16 @@ def _finalize_publication_history(
         raw_metadata = cover_record.get("publication_metadata")
         if raw_metadata is not None:
             try:
-                validated_metadata = CarouselExperimentMetadata.model_validate(
+                story = _story_delivery_from_records(target_records)
+                metadata_type = StoryPublicationMetadata if story is not None else CarouselExperimentMetadata
+                validated_metadata = metadata_type.model_validate(
                     raw_metadata
                 )
             except ValidationError as error:
                 raise CorruptedHistoryError(
                     "Carousel reservation has malformed experiment metadata"
                 ) from error
-            if validated_metadata.featured_count != len(featured):
+            if story is None and validated_metadata.featured_count != len(featured):
                 raise CorruptedHistoryError(
                     "Carousel experiment metadata does not match reserved roles"
                 )
@@ -2869,6 +2906,48 @@ def confirm_carousel_publication(
     return len(publication["artwork_ids"])
 
 
+def confirm_story_publication(artwork_ids: Sequence[str], media_id: str, *,
+                              publication_id: str, permalink: str | None = None):
+    return confirm_artworks_and_record_publication(
+        artwork_ids, media_id, "carousel", publication_id=publication_id,
+        content_type="STORY_CAROUSEL", permalink=permalink,
+    )
+
+
+def _story_delivery_from_records(records) -> StoryDelivery | None:
+    payloads = [r.get("publication_metadata", {}) for r in records]
+    story_payloads = [p for p in payloads if isinstance(p, dict) and "story_delivery" in p]
+    if not story_payloads:
+        return None
+    if len(story_payloads) != 1:
+        raise CorruptedHistoryError("Story has conflicting source delivery metadata")
+    try:
+        story = StoryPublicationMetadata.model_validate(story_payloads[0]).story_delivery
+        story.require_sources([r["id"] for r in records])
+    except (ValueError, KeyError) as error:
+        raise CorruptedHistoryError("Story source delivery metadata is malformed") from error
+    if (records[0].get("publication_role") != "COVER"
+            or records[0].get("publication_metadata") != story_payloads[0]
+            or any(str(r.get("publication_type", "")).upper() != "CAROUSEL"
+                   or r.get("cover_artwork_id") != story.source_ids[0]
+                   or r.get("featured_artwork_ids") != list(story.source_ids[1:]) for r in records)
+            or any(r.get("publication_role") != "FEATURED" or r.get("featured_position") != n
+                   for n, r in enumerate(records[1:], 1))):
+        raise CorruptedHistoryError("Story source reservation roles/order mismatch")
+    for record in records:
+        children = record.get("child_container_ids")
+        crossed = (record.get("status") in {"PUBLISHING", "PUBLISHED"}
+                   or any(record.get(field) for field in ("container_id", "publish_started_at",
+                                                         "publishing_at", "publish_response_media_id")))
+        if crossed and children is None:
+            raise CorruptedHistoryError("Story crossed publication boundary without child evidence")
+        if children is not None and (not isinstance(children, list)
+                or any(not isinstance(c, str) or not c for c in children)
+                or len(children) != len(story.pages) or len(set(children)) != len(children)):
+            raise CorruptedHistoryError("Story child container cardinality mismatch")
+    return story
+
+
 def list_unresolved_publication_units(
     *,
     limit: int,
@@ -2947,14 +3026,21 @@ def list_unresolved_publication_units(
             if isinstance(record.get("id"), str)
         )
         publication_type = next(iter(publication_types))
+        story_is_corrupt = False
+        try:
+            story = _story_delivery_from_records(records)
+            story_shape = story is not None
+        except CorruptedHistoryError:
+            story_shape = False
+            story_is_corrupt = True
         shape_is_valid = (
-            len(artwork_ids) == len(records)
+            not story_is_corrupt and len(artwork_ids) == len(records)
             and len(artwork_ids) == len(set(artwork_ids))
             and (
                 (publication_type == "SINGLE" and len(records) == 1)
                 or (
                     publication_type == "CAROUSEL"
-                    and MIN_TOTAL_SLIDES <= len(records) <= MAX_TOTAL_SLIDES
+                    and (story_shape or MIN_TOTAL_SLIDES <= len(records) <= MAX_TOTAL_SLIDES)
                     and sum(
                         record.get("publication_role") == "COVER"
                         for record in records

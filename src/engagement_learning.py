@@ -405,10 +405,13 @@ def _publication_feature_keys(
             "previous_post_spacing_bucket"
         ),
         "preceding_post_distance_minutes": preceding_value,
+        **({"story_delivery": publication["story_delivery"]} if publication.get("story_delivery") else {}),
     }
+    if publication.get("story_delivery"):
+        context.pop("featured_count", None)
     keys = list(context_feature_keys(context))
     for artwork in artworks:
-        if str(artwork.get("publication_role", "")).upper() == "COVER":
+        if not publication.get("story_delivery") and str(artwork.get("publication_role", "")).upper() == "COVER":
             continue
         keys.extend(candidate_feature_keys(artwork))
     return tuple(dict.fromkeys(keys))

@@ -7,6 +7,7 @@ import requests
 
 import config
 from src.carousel_policy import MAX_TOTAL_SLIDES, MIN_TOTAL_SLIDES
+from src.story_delivery import StoryDelivery
 
 logger = logging.getLogger(__name__)
 
@@ -466,12 +467,17 @@ def post_carousel_to_instagram_graph_api(
     account_id: str,
     access_token: str,
     before_publish: BeforePublishCallback | None = None,
+    *, story_delivery: StoryDelivery | None = None,
 ) -> str:
     """Publish a carousel only after every child and parent container is FINISHED."""
     account_id, access_token = validate_instagram_credentials(
         account_id, access_token
     )
-    if not MIN_CAROUSEL_ITEMS <= len(media_urls) <= MAX_CAROUSEL_ITEMS:
+    if story_delivery is not None:
+        story_delivery = StoryDelivery.model_validate(story_delivery.model_dump(mode="json"))
+        if len(media_urls) != len(story_delivery.pages):
+            raise ValueError("Story media URLs must match reviewed page count")
+    elif not MIN_CAROUSEL_ITEMS <= len(media_urls) <= MAX_CAROUSEL_ITEMS:
         raise ValueError(f"Instagram carousels require {MIN_CAROUSEL_ITEMS}-{MAX_CAROUSEL_ITEMS} media items.")
 
     child_container_ids = []

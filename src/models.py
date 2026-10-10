@@ -9,6 +9,7 @@ from uuid import UUID
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 from src.engagement_features import EngagementFeatureVector, SpacingBucket
 from src.region import REGION_UNKNOWN, normalize_region
+from src.story_delivery import StoryDelivery
 
 
 LEGACY_ARTWORK_ID_PREFIXES = {
@@ -104,6 +105,15 @@ class CarouselExperimentMetadata(BaseModel):
         return self
 
 
+class StoryPublicationMetadata(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    story_delivery: StoryDelivery
+    publish_slot: Literal["slot_1", "slot_2", "slot_3", "slot_4"] | None = None
+    preceding_post_distance_minutes: float | None = Field(default=None, ge=0)
+    previous_post_spacing_bucket: SpacingBucket | None = None
+    engagement_features: EngagementFeatureVector | None = None
+
+
 def normalize_artwork_id(artwork_id: str) -> str:
     """Return the canonical ID while preserving unknown ID formats."""
     for legacy_prefix, canonical_prefix in LEGACY_ARTWORK_ID_PREFIXES.items():
@@ -180,6 +190,7 @@ class PublicationRecord(BaseModel):
     engagement_features: Optional[EngagementFeatureVector] = None
     editorial_pair: Optional[FeedEditorialPair] = None
     controlled_experiment: Optional[ControlledCaptionExperiment] = None
+    story_delivery: StoryDelivery | None = None
 
     @model_validator(mode="after")
     def require_matching_experiment(self):
@@ -240,6 +251,11 @@ class PublicationRecord(BaseModel):
 
     @model_validator(mode="after")
     def require_type_appropriate_artwork_count(self):
+        if self.story_delivery is not None:
+            if self.type != "carousel" or self.controlled_experiment is not None:
+                raise ValueError("Reviewed story must be a carousel without legacy treatment assignment")
+            self.story_delivery.require_sources(self.artwork_ids)
+            return self
         if self.type == "single" and len(self.artwork_ids) != 1:
             raise ValueError("single publications require exactly one artwork")
         if self.type == "carousel" and len(self.artwork_ids) < 2:
@@ -738,6 +754,7 @@ class PublicationReceipt(_StrictStateModel):
     workflow_run_id: int | None
     artwork_positions: list[ReceiptPosition] = Field(min_length=1)
     evidence_ref: str
+    story_delivery: StoryDelivery | None = None
 
     @field_validator("publication_id", "instagram_media_id", "evidence_ref")
     @classmethod
@@ -789,7 +806,11 @@ class PublicationReceipt(_StrictStateModel):
             raise ValueError("duplicate artwork within one receipt")
         if self.publication_type in {"single", "reel"} and len(ids) != 1:
             raise ValueError("single/reel receipts require one artwork")
-        if self.publication_type == "carousel" and len(ids) < 2:
+        if self.story_delivery is not None:
+            if self.publication_type != "carousel" or self.record_origin != "NEW":
+                raise ValueError("Story receipt requires a new carousel publication")
+            self.story_delivery.require_sources(ids)
+        elif self.publication_type == "carousel" and len(ids) < 2:
             raise ValueError("carousel receipts require multiple positions")
         return self
 

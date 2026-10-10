@@ -9,6 +9,8 @@ from typing import Literal
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 SpacingBucket = Literal["under_3h", "3h_to_6h", "6h_to_12h", "12h_plus"]
+StoryNarrative = Literal["single_study", "comparison", "thematic_selection"]
+StoryHeadlineKind = Literal["source_title", "factual_collection", "ai_proposal", "user_edit"]
 
 _UNKNOWN_VALUES = frozenset(
     {
@@ -44,6 +46,9 @@ _CONTEXT_FEATURE_FIELDS = (
     "publish_slot",
     "weekday",
     "previous_post_spacing_bucket",
+    "narrative",
+    "headline_kind",
+    "page_count",
 )
 _SPACING_BUCKETS = frozenset({"under_3h", "3h_to_6h", "6h_to_12h", "12h_plus"})
 
@@ -116,6 +121,9 @@ class EngagementFeatureVector(BaseModel):
     publish_slot: str | None = None
     weekday: str | None = None
     previous_post_spacing_bucket: SpacingBucket | None = None
+    narrative: StoryNarrative | None = None
+    headline_kind: StoryHeadlineKind | None = None
+    page_count: int | None = Field(default=None, ge=3, le=10)
 
     @field_validator(
         "artist",
@@ -134,6 +142,8 @@ class EngagementFeatureVector(BaseModel):
         "caption_hook",
         "publish_slot",
         "weekday",
+        "narrative",
+        "headline_kind",
         mode="before",
     )
     @classmethod
@@ -231,7 +241,9 @@ class EngagementFeatureVector(BaseModel):
                 canonical.get("featured_count") or context.get("featured_count")
             ),
             cover_variant=_first_known(
-                canonical.get("cover_variant"), context.get("cover_variant")
+                _story_delivery(context).get("cover_variant"),
+                canonical.get("cover_variant"),
+                context.get("cover_variant"),
             ),
             caption_hook=_first_known(
                 canonical.get("caption_hook"),
@@ -247,6 +259,15 @@ class EngagementFeatureVector(BaseModel):
                 context.get("publication_weekday"),
             ),
             previous_post_spacing_bucket=spacing,
+            narrative=_controlled_value(
+                _story_delivery(context).get("narrative"), canonical.get("narrative"),
+                allowed={"single_study", "comparison", "thematic_selection"},
+            ),
+            headline_kind=_controlled_value(
+                _story_delivery(context).get("headline_kind"), canonical.get("headline_kind"),
+                allowed={"source_title", "factual_collection", "ai_proposal", "user_edit"},
+            ),
+            page_count=_page_count(_story_delivery(context).get("pages")),
         )
 
     def candidate_feature_keys(self) -> tuple[str, ...]:
@@ -263,3 +284,20 @@ class EngagementFeatureVector(BaseModel):
             if normalized is not None:
                 keys.append(f"{name}:{normalized.casefold()}")
         return tuple(keys)
+
+
+def _story_delivery(context: Mapping[str, object]) -> Mapping[str, object]:
+    value = context.get("story_delivery")
+    return value if isinstance(value, Mapping) and value.get("schema_version") == "artfolio-story-delivery-v1" else {}
+
+
+def _page_count(value: object) -> int | None:
+    return len(value) if isinstance(value, list) and 3 <= len(value) <= 10 else None
+
+
+def _controlled_value(*values: object, allowed: set[str]) -> str | None:
+    for value in values:
+        known = _known_text(value)
+        if known in allowed:
+            return known
+    return None

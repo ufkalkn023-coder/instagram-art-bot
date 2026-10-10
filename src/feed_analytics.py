@@ -30,9 +30,25 @@ def _feed_publications(history: Mapping[str, object], now: datetime, diagnostics
         if posted_at > now:
             diagnostics["future_publications"] += 1
             continue
+        delivery = raw.get("story_delivery")
+        story = {}
+        if isinstance(delivery, Mapping) and delivery.get("schema_version") == "artfolio-story-delivery-v1":
+            controlled = {
+                "narrative": {"single_study", "comparison", "thematic_selection"},
+                "cover_variant": {"museum_journal", "artwork_first", "detail_study"},
+                "headline_kind": {"source_title", "factual_collection", "ai_proposal", "user_edit"},
+            }
+            for field, allowed in controlled.items():
+                value = delivery.get(field)
+                if isinstance(value, str) and value.strip() in allowed:
+                    story[field] = value.strip()
+            pages = delivery.get("pages")
+            if isinstance(pages, list) and 3 <= len(pages) <= 10:
+                story["page_count"] = len(pages)
         publications.append({"publication_id": target["reel_id"],
                              "media_id": target["instagram_media_id"],
-                             "publication_format": raw["type"], "posted_at": posted_at})
+                             "publication_format": raw["type"], "posted_at": posted_at,
+                             **({"story_delivery": story} if story else {})})
     ids = Counter(pub["publication_id"] for pub in publications)
     media = Counter(pub["media_id"] for pub in publications)
     valid = []
@@ -137,12 +153,51 @@ def _window(pub: dict, target: int, attempts: list[dict], now: datetime) -> dict
         status, reason, recoverable = "pending", "target_age_not_reached", False
     return {"publication_id": pub["publication_id"], "media_id": pub["media_id"],
             "publication_format": pub["publication_format"], "posted_at": utc_timestamp(pub["posted_at"]),
+            **({"story_delivery": dict(pub["story_delivery"])} if pub.get("story_delivery") else {}),
             "publication_age_hours": age, "target_age_hours": target, "window_end_age_hours": deadline,
             "status": status, "reason": reason, "recoverable": recoverable,
             "attempt_count": len(attempts), "captured_at": selected["captured_at"] if selected else None,
             "captured_age_hours": selected["captured_age_hours"] if selected else None,
             "comparable": bool(status == "complete" and selected["in_target_window"]),
             "metrics": dict(selected["metrics"]) if selected else {}}
+
+
+def _story_cohorts(windows: list[dict], minimum: int) -> list[dict]:
+    cohorts = []
+    for target in SLOT_WINDOWS_HOURS:
+        for dimension in ("narrative", "cover_variant", "headline_kind"):
+            values = sorted({row["story_delivery"][dimension] for row in windows
+                             if row.get("story_delivery", {}).get(dimension)})
+            for value in values:
+                rows = [row for row in windows if row["target_age_hours"] == target
+                        and row.get("story_delivery", {}).get(dimension) == value]
+                usable = [row for row in rows if row["comparable"]]
+                eligible = sum(row["publication_age_hours"] >= target for row in rows)
+                rates = {}
+                for metric, rate_name in LEARNING_OUTCOME_METRICS:
+                    metric_rows = [row for row in usable if metric in row["metrics"]]
+                    values_for_metric = [row["metrics"][metric] / row["metrics"]["reach"]
+                                         for row in metric_rows]
+                    rates[rate_name] = {
+                        "observations": len(values_for_metric),
+                        "coverage": len(values_for_metric) / eligible if eligible else None,
+                        "mean_rate": mean(values_for_metric) if values_for_metric else None,
+                        "median_rate": median(values_for_metric) if values_for_metric else None,
+                        "weighted_rate": (sum(row["metrics"][metric] for row in metric_rows)
+                                          / sum(row["metrics"]["reach"] for row in metric_rows)
+                                          if metric_rows else None),
+                    }
+                cohorts.append({"dimension": dimension, "value": value,
+                                "target_age_hours": target,
+                                "window_end_age_hours": SLOT_WINDOWS_HOURS[target],
+                                "eligible_publications": eligible,
+                                "usable_publications": len(usable),
+                                "coverage": len(usable) / eligible if eligible else None,
+                                "minimum_cohort_size": minimum,
+                                "minimum_cohort_met": len(usable) >= minimum,
+                                "status": "descriptive_only" if len(usable) >= minimum else "insufficient_data",
+                                "winner": None, "rates": rates})
+    return cohorts
 
 
 def _format_cohorts(windows: list[dict], minimum: int) -> tuple[list[dict], list[dict]]:
@@ -214,9 +269,10 @@ def build_feed_analytics_report(history: Mapping[str, object], snapshots: Sequen
                for pub in publications for target in SLOT_WINDOWS_HOURS]
     counts = Counter(row["status"] for row in windows)
     cohorts, comparisons = _format_cohorts(windows, minimum_cohort_size)
+    story_cohorts = _story_cohorts(windows, minimum_cohort_size)
     return {"schema_version": 1, "generated_at": utc_timestamp(timestamp),
             "comparison_basis": "Same target-age windows; actual capture-age ranges are disclosed. Descriptive observational results do not establish a winner or causality.",
-            "cohorts": cohorts, "comparisons": comparisons,
+            "cohorts": cohorts, "comparisons": comparisons, "story_cohorts": story_cohorts,
             "summary": {"feed_publications": len(publications), "total_windows": len(windows),
                         **{f"{name}_windows": counts[name]
                            for name in ("complete", "partial", "unavailable", "missed", "due", "pending")},

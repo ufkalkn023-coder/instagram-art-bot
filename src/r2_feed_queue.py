@@ -119,7 +119,7 @@ class R2PreparedFeedQueue(PreparedFeedQueue):
 
     def _content(self, package: dict):
         assets = package["content"].get("assets")
-        if not isinstance(assets, list) or not 1 <= len(assets) <= 9:
+        if not isinstance(assets, list) or not 1 <= len(assets) <= (10 if package["content"].get("content_kind") == "story" else 9):
             raise ValueError("Invalid prepared R2 asset list")
         for asset in assets:
             path = self._asset_path(package["id"], asset["path"])

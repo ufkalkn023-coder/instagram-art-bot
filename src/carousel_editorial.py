@@ -188,18 +188,16 @@ def derive_carousel_editorial_facts(
 
 
 def fallback_editorial_subtitle(facts: CarouselEditorialFacts) -> str:
-    """Write a grounded cover deck without strengthening the registry label."""
-    works = format_count(facts.featured_count, "work")
+    """Write a short grounded deck; the title and fact row carry theme and counts."""
     if facts.theme_id == "artfolio_selection":
-        return f"{works.capitalize()}, selected by Artfolio."
+        return "Selected by Artfolio."
     if facts.all_same_museum:
         museum_name = facts.museum_names[0]
         article = "" if museum_name.casefold().startswith("the ") else "the "
-        return f"{works} from {article}{museum_name}, selected around {facts.theme_title}."
+        return f"Selected from {article}{museum_name}."
     if facts.museum_metadata_complete and facts.distinct_museum_count > 1:
-        collections = format_count(facts.distinct_museum_count, "museum collection")
-        return f"{works} across {collections}, selected around {facts.theme_title}."
-    return f"{works} selected around {facts.theme_title}."
+        return "Selected across museum collections."
+    return "Selected by Artfolio."
 
 
 def derive_cover_micro_facts(facts: CarouselEditorialFacts) -> tuple[str, ...]:

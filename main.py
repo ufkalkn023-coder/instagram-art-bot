@@ -60,7 +60,7 @@ from src.engagement_features import (
     previous_post_spacing_bucket,
 )
 from src.engagement_learning import EngagementModel, analyze_engagement_learning
-from src.feed_content import PreparedFeedContent
+from src.feed_content import PreparedFeedContent, PreparedStoryContent
 from src.insights_storage import InsightsStorage
 from src.carousel_themes import (
     CarouselFormat,
@@ -1154,6 +1154,16 @@ def prepare_carousel_content(args, *, excluded_ids: set[str] | None = None) -> P
 def run_carousel_post(args, authorization: ProductionAuthorization | None = None, *,
                       prepared_content: PreparedFeedContent | None = None):
     content = prepared_content or prepare_carousel_content(args)
+    if isinstance(content, PreparedStoryContent):
+        from src.story_feed import snapshot_story_media
+        with snapshot_story_media(content) as frozen:
+            return _run_carousel_post(args, authorization, prepared_content=frozen)
+    return _run_carousel_post(args, authorization, prepared_content=content)
+
+
+def _run_carousel_post(args, authorization: ProductionAuthorization | None = None, *,
+                       prepared_content: PreparedFeedContent):
+    content = prepared_content
     if content.publication_format != "carousel":
         raise ValueError("Carousel runner requires carousel prepared content")
     if args.dry_run:
@@ -1161,15 +1171,17 @@ def run_carousel_post(args, authorization: ProductionAuthorization | None = None
     output_media_paths = content.media_paths
     # All selection, copy, validation, and rendering has succeeded. Reserve the
     # all variable-length canonical IDs together before any Instagram media operation.
-    publication_id = history_tracker.reserve_carousel(
-        dict(content.artworks[0]),
-        [dict(art) for art in content.artworks[1:]],
-        theme_id=content.theme_id,
-        theme_family=content.theme_family,
-        carousel_format=content.carousel_format,
-        publication_metadata=content.publication_metadata,
-        authorization=authorization,
-    )
+    if isinstance(content, PreparedStoryContent):
+        from src.story_feed import validate_story_media
+        validate_story_media(content)
+        publication_id = history_tracker.reserve_story(content.artworks,
+            publication_metadata=content.publication_metadata, authorization=authorization)
+    else:
+        publication_id = history_tracker.reserve_carousel(
+            dict(content.artworks[0]), [dict(art) for art in content.artworks[1:]],
+            theme_id=content.theme_id, theme_family=content.theme_family,
+            carousel_format=content.carousel_format,
+            publication_metadata=content.publication_metadata, authorization=authorization)
     logger.info("reservation_complete mode=carousel count=%s", len(content.publication_ids))
     media_uploads: list[r2_media.TempMediaUpload] = []
     try:
@@ -1208,6 +1220,7 @@ def run_carousel_post(args, authorization: ProductionAuthorization | None = None
             account_id=account_id,
             access_token=access_token,
             before_publish=before_publish,
+            **({"story_delivery": content.story_delivery} if isinstance(content, PreparedStoryContent) else {}),
         )
         if not publish_attempt_started:
             history_tracker.mark_artworks_ambiguous(
@@ -1275,13 +1288,13 @@ def run_carousel_post(args, authorization: ProductionAuthorization | None = None
         )
     permalink = _get_published_instagram_permalink(carousel_id, access_token)
     finalization_kwargs = {"permalink": permalink} if permalink is not None else {}
-    history_tracker.confirm_carousel_publication(
-        content.publication_ids[0],
-        content.featured_ids,
-        carousel_id,
-        publication_id=publication_id,
-        **finalization_kwargs,
-    )
+    if isinstance(content, PreparedStoryContent):
+        history_tracker.confirm_story_publication(content.publication_ids, carousel_id,
+            publication_id=publication_id, **finalization_kwargs)
+    else:
+        history_tracker.confirm_carousel_publication(
+            content.publication_ids[0], content.featured_ids, carousel_id,
+            publication_id=publication_id, **finalization_kwargs)
     logger.info("history_confirmed mode=carousel count=%s", len(content.publication_ids))
     return publication_id
 

@@ -19,7 +19,8 @@ from pathlib import Path
 from typing import Callable
 from uuid import UUID, uuid4
 
-from src.feed_content import PreparedFeedContent
+from src.feed_content import PreparedFeedContent, PreparedStoryContent
+from src.story_delivery import StoryDelivery
 from src.insights_storage import parse_aware_timestamp, utc_timestamp
 from src.instagram_image import inspect_instagram_image_publishability
 from src.models import CONFIRMED_RIGHTS_STATUSES, require_canonical_artwork_id
@@ -142,7 +143,10 @@ class PreparedFeedQueue:
     def _content(self, package: dict) -> PreparedFeedContent:
         content = package["content"]
         assets = content.get("assets")
-        if not isinstance(assets, list) or not 1 <= len(assets) <= 9:
+        kind = content.get("content_kind", "legacy")
+        if kind not in {"legacy", "story"}:
+            raise ValueError("Unknown prepared content kind")
+        if not isinstance(assets, list) or not 1 <= len(assets) <= (10 if kind == "story" else 9):
             raise ValueError("Invalid prepared asset list")
         paths = []
         for asset in assets:
@@ -154,11 +158,16 @@ class PreparedFeedQueue:
             if not inspect_instagram_image_publishability(str(path)).publishable:
                 raise ValueError("Prepared media is not Instagram-compatible")
             paths.append(str(path))
-        result = PreparedFeedContent(
+        delivery = StoryDelivery.model_validate(content["story_delivery"]) if kind == "story" else None
+        if delivery is not None and [a["sha256"] for a in assets] != [p.sha256 for p in delivery.pages]:
+            raise ValueError("Prepared story differs from reviewed page order/digests")
+        content_type = PreparedStoryContent if kind == "story" else PreparedFeedContent
+        result = content_type(
             content["publication_format"], tuple(content["artworks"]), tuple(paths), content["caption"],
             alt_text=content.get("alt_text"), publication_metadata=content.get("publication_metadata", {}),
             theme_id=content.get("theme_id"), theme_family=content.get("theme_family"),
             carousel_format=content.get("carousel_format"),
+            **({"story_delivery": delivery} if delivery is not None else {}),
         )
         ids = [require_canonical_artwork_id(identifier) for identifier in result.publication_ids]
         if len(ids) != len(set(ids)):
@@ -204,6 +213,9 @@ class PreparedFeedQueue:
                         "publication_metadata": prepared.publication_metadata,
                         "theme_id": prepared.theme_id, "theme_family": prepared.theme_family,
                         "carousel_format": prepared.carousel_format}
+                if isinstance(prepared, PreparedStoryContent):
+                    data.update(content_kind="story",
+                                story_delivery=prepared.story_delivery.model_dump(mode="json"))
                 package = {"id": package_id, "state": "READY", "owner": None, "reason": None,
                            "created_at": utc_timestamp(timestamp),
                            "expires_at": utc_timestamp(timestamp + timedelta(hours=ttl_hours)),
@@ -218,6 +230,7 @@ class PreparedFeedQueue:
 
     def status(self) -> list[dict]:
         return [{"id": package["id"], "publication_format": package["content"]["publication_format"],
+                 **({"content_kind": "story"} if package["content"].get("content_kind") == "story" else {}),
                  "state": package["state"], "reason": package["reason"], "created_at": package["created_at"],
                  "expires_at": package["expires_at"], "owner": package.get("owner")}
                 for package in self._load()["packages"]]
