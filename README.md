@@ -428,6 +428,7 @@ saklayarak görünen iddiaların seçilen setle karşılaştırılmasını sağl
 | `CLOUDFLARE_R2_CONTROL_PLANE_ACCESS_KEY_ID` / `CLOUDFLARE_R2_CONTROL_PLANE_SECRET_ACCESS_KEY` | Yalnız `control-plane-s3` bootstrap audit seçeneğinde gerekli | Ayrı bucket lifecycle okuma credential'ı; runtime workflow'larına verilmez |
 | `CLOUDFLARE_R2_PUBLIC_URL` | R2 media upload kullanılıyorsa gerekli | Instagram’ın erişeceği R2 public URL tabanı |
 | `GOOGLE_GEMINI_API_KEY` | Opsiyonel | Gemini caption/alt-text üretimi; yoksa fallback kullanılır |
+| `ARTFOLIO_GEMINI_ENABLED` | Feed Actions için açık opt-in | Repository variable tam `true` olduğunda Feed yayınlama/hazırlama adımları Gemini secret'ını alır. Eksik veya `false` olduğunda yerel fallback kullanılır; secret silinmez. Yerel CLI kendi environment ayarlarını kullanır. |
 | `SMITHSONIAN_API_KEY` | Opsiyonel | Smithsonian Open Access adapter'ını etkinleştirir |
 | `EUROPEANA_API_KEY` | Opsiyonel | Europeana adapter'ını etkinleştirir |
 | `ARTFOLIO_SELECTION_SEED` | Opsiyonel | Seçim RNG’si için açık seed |
