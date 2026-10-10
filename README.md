@@ -675,3 +675,29 @@ pencerelerinde anlatı/kapak/başlık kaynağına göre betimleyici sonuçları 
 kapsamını gösterir; otomatik kazanan ilan etmez. Öğrenme bağlamı bu özellikleri ve
 sayfa sayısını taşır. Canlı model kalitesi ve gerçek story yayın başarısı yerel
 testlerden çıkarılamaz; canlı rollout ayrı operasyonel doğrulama gerektirir.
+
+### Salt okunur Feed durum panosu
+
+Her çalıştırmada yeni bir HTML çıktı yolu seçin; var olan çıktıların üzerine yazılmaz.
+R2 modu mevcut çağıran ortam ayarlarını kullanır, açık SHA ister ve yalnızca okuma
+çağrıları yapar:
+
+```bash
+python scripts/report_feed_dashboard.py --r2 --expected-sha "$GITHUB_SHA" \
+  --output /tmp/feed-dashboard-r2.html
+```
+
+Çevrimdışı kullanımda schedule, history ve snapshots JSON dosyalarını verin. Kuyruk
+için yerel `queue.json` dizini veya önceden alınmış, bounded queue report JSON'u
+kullanılabilir; hikâye projesi her onay için tekrarlanabilir. `--now` zaman dilimi
+taşımalıdır ve rapor zamanını sabitler:
+
+```bash
+python scripts/report_feed_dashboard.py --schedule schedule.json --history history.json \
+  --snapshots snapshots.json --queue-report queue-report.json \
+  --story-project data/story-one --now 2026-10-11T12:00:00+03:00 \
+  --output /tmp/feed-dashboard-local.html
+```
+
+Pano bir anlık görüntüdür. En erken uygunluk zamanı yayın zamanı garantisi vermez;
+Insights grupları gözlemseldir ve küçük örneklemler ayrıca işaretlenir.
