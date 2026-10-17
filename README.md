@@ -701,3 +701,34 @@ python scripts/report_feed_dashboard.py --schedule schedule.json --history histo
 
 Pano bir anlık görüntüdür. En erken uygunluk zamanı yayın zamanı garantisi vermez;
 Insights grupları gözlemseldir ve küçük örneklemler ayrıca işaretlenir.
+
+### Güncellenebilir yerel panel ve içerik takvimi
+
+Aynı girdi seçenekleriyle salt okunur yerel sunucuyu açın:
+
+```bash
+python scripts/serve_feed_dashboard.py --r2 --expected-sha EXACT_APPROVED_MAIN_SHA --port 38143
+# Veya ağ/Keychain erişimi olmadan yerel JSON/queue dosyalarıyla:
+python scripts/serve_feed_dashboard.py --schedule schedule.json --history history.json \
+  --snapshots snapshots.json --queue /path/feed-queue --port 38143
+```
+
+Tarayıcıda `http://127.0.0.1:38143/` adresini açıp **Verileri yenile** düğmesini
+kullanın. Sunucu yalnız loopback üzerinde dinler; yenileme origin/host/oturum
+kontrolünden geçer ve en sık 5 saniyede bir yapılır. Hata olursa mevcut rapor
+korunur ve yeni deneme için açıklama gösterilir. R2 erişim anahtarları tarayıcıya
+aktarılmaz; panel queue, publication, receipt veya analytics verisi yazmaz.
+R2 ortam ayarları çağıran süreçte açıkça bulunmalıdır; otomatik profil fallback'i yoktur.
+
+Takvim, manifest sırasını ve tekli/carousel dönüşümünü korur. Görseller ilk paket
+JPEG'inin digest kontrolünden geçirilmiş küçük, gömülü önizlemeleridir; kaynaklar
+ve özel R2 bağlantıları sunulmaz. Görsel yoksa yer tutucu gösterilir. Tarihler,
+önceki paketlerin belirtilen alt sınırda başarıyla tamamlandığı varsayımına bağlıdır;
+yayın saati garantisi vermez. Duraklatma/sürüm uyuşmazlığı, belirsiz sahiplik,
+karantina, format veya son kullanma sorunu olan paketlere tarih atanmaz.
+
+Hikâye tablosu gerçek kayıtlı anlatım/kapak gruplarını aynı hedef yaşta karşılaştırır.
+Her parent bir gözlemdir; sayfalar bağımsız örnek sayılmaz. Kapsama, gözlem sayısı,
+kaydetme/beğeni oranı ve yetersiz örneklem açıkça gösterilir. Eksik metrik sıfır
+olarak doldurulmaz ve otomatik kazanan seçilmez. Statik HTML çıktısı çalışmaya
+devam eder; yenileme düğmesi yalnız yerel sunucu üzerinden etkinleşir.
