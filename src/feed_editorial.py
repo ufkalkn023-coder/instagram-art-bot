@@ -6,6 +6,7 @@ from uuid import uuid4
 
 from src.carousel_themes import ThemeEvidenceMode, get_default_theme_registry
 from src.feed_content import PreparedFeedContent
+from src.feed_variety import context_from_content, variety_enabled
 
 logger = logging.getLogger(__name__)
 
@@ -15,11 +16,26 @@ class ThematicSingleUnavailable(RuntimeError):
 
 
 class FeedPairPlanner:
-    def __init__(self):
+    def __init__(self, *, inventory_context=()):
+        self._inventory = list(inventory_context)
+        self._prepared_count = 0
         self._anchor = None
         self._seen_themes = set()
 
+    def remember(self, content: PreparedFeedContent) -> None:
+        self._prepared_count += 1
+        self._inventory.extend(context_from_content(content, f'planned:{self._prepared_count}'))
+
     def prepare(self, format_name, directory, excluded, *, prepare) -> PreparedFeedContent:
+        original = prepare
+        if variety_enabled() and self._inventory:
+            def prepare(*args, **kwargs):
+                return original(*args, inventory_context=tuple(self._inventory), **kwargs)
+        result = self._prepare_pair(format_name, directory, excluded, prepare=prepare)
+        self.remember(result)
+        return result
+
+    def _prepare_pair(self, format_name, directory, excluded, *, prepare) -> PreparedFeedContent:
         if format_name == "carousel":
             result = prepare(format_name, directory, excluded,
                              **({"excluded_theme_ids": set(self._seen_themes)} if self._seen_themes else {}))

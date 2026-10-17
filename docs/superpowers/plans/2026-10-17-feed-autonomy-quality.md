@@ -46,12 +46,27 @@
 
 ## Task3 — Queue-aware variety
 
-- [ ] Map existing history-based diversity and preparation boundaries; detail minimal interface before implementation.
+**Files:** new src/feed_variety.py and tests/test_feed_variety.py; src/art_fetcher.py, src/feed_editorial.py, scripts/prepare_feed_queue.py, main.py, Feed/queue workflows, README.
+**Interfaces:** variety_enabled() reads explicit ARTFOLIO_FEED_VARIETY_ENABLED; context_from_inventory(packages,*,now) and context_from_content(content,group_id) produce selection-only metadata rows carrying inventory_group, never published timestamps/claims. variety_adjustment(candidate,context) returns bounded negativefloat: artist4,museum2,period1,color1 per matching group, max12, recent12groups; unknown metadata neutral. Published rows retain their real publication_id and aliases; planned rows remain separate context.
+Single iter_single_post_candidates gains optional inventory_context; final measured rescore preserves adjustment in SelectionScoreBreakdown optionalfield. Carousel selection passes published+planned context under flag into _select_acquired_theme_artworks and applies after validation/blending; raw quality/relevance and all acceptance gates unchanged. FeedPairPlanner remembers every prepared result and seeds retainedREADY context; Story contents observed without any modification. Main _prepare passes optional context only for real preparation. Workflow flag remains explicit; activation recorded separately.
+
+- [ ] RED identity normalization/unknown neutrality/12group bound and deterministic pressure across artist/museum/period/color.
+- [ ] RED later planned package receives earlier source context, existing ready context participates, actual single ranking changes without extra downloads; carousel adjustment preservesquality/relevance.
+- [ ] Implement context and pipeline wiring, verify fixtures/backward compatibility withflagoff, target/fulltests and commit.
 - [ ] RED queued context changes later selection while unknown metadata remains neutral; implement shared context with preserved minima, validate and commit.
 
 ## Task4 — Controlled presentation experiments
 
-- [ ] Map actual cover rendering, experiment schema and report consumers; detail compatible one-factor contracts before implementation.
+**Files:** src/models.py, src/editorial_experiments.py, src/carousel_cover.py, src/feed_experiment_report.py, main.py, Feed/queue workflows; tests/test_cover_experiments.py and existingexperiment/history/render tests; README.
+**Interfaces:** frozen ControlledCoverExperiment(idcover_treatment_v1,variablecover_variant,armeditorial|editorial_panel,theme_id,fixedcaption_hook_typevisual_detail), optional controlled_cover_experiment alongside unchangedcaption schema. Reservation/publication validators forbid simultaneous assignments, mismatched theme/deliveredhook/cover and assignments onStoryDelivery.
+assign_presentation_experiment(theme,run_seed,caption_enabled,cover_enabled) deterministically selects one family when both flags aretrue, otherwise the enabled family. Eachfamily retains deterministictwo-arm assignment, never changes bothfactors. Existingcaption flag remainsbackward compatible. Newcoverflag explicit inworkflows; no activation beforeverifieddeployment.
+Renderer create_carousel_editorial_cover gains defaulteditorial cover_variant arg; neweditorial_panel alters onlybottomcopy background (opaque panel versusexistinggradient). Source, crop, text, fonts, featuredpages and factualcaption remainunchanged acrosscoverarms. Coverexperiment forces groundedvisual_detail caption identically acrossarms; captionexperiment keepseditorial cover. Main recordsactualrenderedcover inplan/finalfeatures/persistedassignment. Report branchesbytypedfamily andgroupsbytheme,targetage,fixedcounterpart; winnerNone/autopromotefalse.
+
+- [ ] RED typedroundtrip/mismatch/bothassignment/storyrejection, deterministicfamily/arm assignment.
+- [ ] RED actualrenderer variants differatbottom andpreservecentralart/sourcebytes/1080×1350 publishability; unknownvariant rejectedbeforeoutput.
+- [ ] RED preparationpassesactualvariant toRenderer andmetadata, fixedcaption acrosscoverarms; persistnewassignmentthroughreservation/finalization.
+- [ ] RED cohortseparationbyvariable/theme/age/fixedfactor withmissingmetriccounts/minN5, noautopromote.
+- [ ] Implement compatible schema, choice/render/report/wiring, verifyalltarget/fulltests, visualpreview andcommit.
 - [ ] RED deterministic mutually-exclusive assignment/real-render treatment/typed evidence/equal-age report and stale sealed-content protections; implement, validate and commit.
 
 ## Integration

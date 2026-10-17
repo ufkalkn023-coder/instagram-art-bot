@@ -9,6 +9,7 @@ import os
 import re
 import sys
 from pathlib import Path
+from datetime import datetime, timezone
 from types import SimpleNamespace
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -43,7 +44,7 @@ def _refill_decision(remote: R2PreparedFeedQueue, expected_sha: str, *, early: b
 
 
 def _prepare(format_name: str, directory: Path, excluded_ids: set[str], *, theme_definition=None,
-             excluded_theme_ids=None):
+             excluded_theme_ids=None, inventory_context=()):
     # This CLI owns its process. Isolate the existing acquisition paths as well
     # as rendered outputs so preparing another package cannot overwrite one.
     original_data, original_raw = config.DATA_DIR, config.OUTPUT_RAW_IMAGE_PATH
@@ -51,7 +52,8 @@ def _prepare(format_name: str, directory: Path, excluded_ids: set[str], *, theme
         config.DATA_DIR = str(directory)
         config.OUTPUT_RAW_IMAGE_PATH = str(directory / "source-artwork.jpg")
         args = SimpleNamespace(dry_run=True, prepare_only=True, preparation_directory=directory,
-                               image_url=None, pinterest=False, excluded_theme_ids=excluded_theme_ids or set())
+                               image_url=None, pinterest=False, excluded_theme_ids=excluded_theme_ids or set(),
+                               inventory_context=inventory_context)
         prepare = main.prepare_single_content if format_name == "single" else main.prepare_carousel_content
         return prepare(args, excluded_ids=excluded_ids,
                        **({"theme_definition": theme_definition} if theme_definition is not None else {}))
@@ -131,7 +133,11 @@ def run(argv: list[str] | None = None) -> int:
                         raise ValueError("Story projects repeat an artwork")
                     story_ids.update(content.publication_ids)
             from src.feed_editorial import FeedPairPlanner
-            planner = FeedPairPlanner()
+            from src.feed_variety import context_from_inventory, variety_enabled
+            inventory = ()
+            if args.early and remote is not None and variety_enabled():
+                inventory = context_from_inventory(remote._read_manifest()[0]['packages'], now=datetime.now(timezone.utc))
+            planner = FeedPairPlanner(inventory_context=inventory)
             carousel_position = 0
 
             def prepare_slot(format_name, directory, excluded):
@@ -144,6 +150,7 @@ def run(argv: list[str] | None = None) -> int:
                         story = prepare_story_content(args.story_project[slot])
                         if set(story.publication_ids).intersection(excluded):
                             raise ValueError("Story repeats an artwork already used in this queue")
+                        planner.remember(story)
                         return story
                 return planner.prepare(format_name, directory, excluded | story_ids | set((decision or {}).get("excluded_artwork_ids", [])), prepare=_prepare)
 

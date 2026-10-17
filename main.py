@@ -356,6 +356,7 @@ def prepare_single_content(args, *, excluded_ids: set[str] | None = None,
         max_candidates=art_fetcher.SINGLE_DIVERSITY_FINALIST_TARGET,
         **({"theme_definition": theme_definition} if theme_definition is not None else {}),
         **learning_kwargs,
+        **({"inventory_context": args.inventory_context} if getattr(args,"inventory_context",()) else {}),
     )
     artwork = None
     path = None
@@ -709,6 +710,7 @@ def prepare_carousel_content(args, *, excluded_ids: set[str] | None = None) -> P
                 engagement_context=engagement_context,
                 exploration_selected=exploration_selected,
                 adapters=museum_adapters,
+                **({"inventory_context": args.inventory_context} if getattr(args,"inventory_context",()) else {}),
             )
             if isinstance(selection, art_fetcher.ThemedArtworkSelection):
                 candidate_artworks = list(selection.artworks)

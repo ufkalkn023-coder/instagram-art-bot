@@ -786,3 +786,18 @@ JSON dosyası oluşturur; görsel indirmez, Instagram/Gemini çağırmaz, R2 ver
 mutasyona uğratmaz. Rapor Actions özetine eklenir ve30gün indirilebilir artifact
 olarak tutulur; harici mesaj/bildirim kanalı açılmaz. Artifact saklama sözleşmesi:
 [GitHub workflow artifacts](https://docs.github.com/en/actions/tutorials/store-and-share-data).
+
+### Yayın ve hazır stok arasında çeşitlilik
+
+`ARTFOLIO_FEED_VARIETY_ENABLED=true`, yalnız seçim puanında sınırlı tekrar baskısını
+açar. Son12 gerçek yayın ve kuyrukta bekleyen/aynı partide hazırlanan içerikler
+birlikte değerlendirilir. Sanatçı4, müze2, dönem1, renk1 puan/grup; toplam etki en
+fazla−12'dir. Her carousel/story kaynak grubu bir kez sayılır; çok sayfalı içerik
+etkiyi çoğaltmaz. Bilinmeyen metadata tarafsızdır; yeni renk verisi yalnız mevcut
+indirilmiş görselden çıkarılır, ek indirme/AI yoktur.
+
+Tekli ve carousel adayları bu bağlamı kullanır; ham kalite, tema uygunluğu, hak ve
+minimum kabul eşikleri değişmez. Sonuç `feed_variety_adjustment` alanında görünür.
+Hazır içerik yalnız seçim bağlamıdır, başarılı yayın geçmişine yazılmaz. Daha önce
+mühürlenmiş paket/inceleme onayı değiştirilmez. Bayrak kapalıyken önceki sıralama
+korunur; üretim aktivasyonu yalnız onaylanan yeni main sürümüyle yapılır.

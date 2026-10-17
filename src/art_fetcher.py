@@ -26,6 +26,7 @@ from src.aic_image_policy import (
     is_aic_iiif_url,
 )
 from src import history_tracker
+from src.feed_variety import apply_variety, variety_adjustment, variety_enabled
 from src import content_diversity
 from src.region import normalize_region
 from src.carousel_themes import CarouselThemeDefinition, ThemeEvidenceMode, primary_search_query
@@ -191,6 +192,7 @@ class SelectionScoreBreakdown:
     serendipity_adjustment: float
     regional_adjustment: float = 0.0
     single_diversity: SinglePostDiversityScore | None = None
+    feed_variety_adjustment: float = 0.0
 
     @property
     def selection_score(self) -> float:
@@ -206,6 +208,7 @@ class SelectionScoreBreakdown:
             + self.discovery_adjustment
             + self.serendipity_adjustment
             + self.regional_adjustment
+            + self.feed_variety_adjustment
         )
 
 
@@ -432,6 +435,7 @@ def iter_single_post_candidates(
     engagement_model: "EngagementModel | None" = None,
     engagement_context: Mapping[str, object] | None = None,
     theme_definition: CarouselThemeDefinition | None = None,
+    inventory_context: Sequence[Mapping[str, object]] = (),
 ) -> Iterator[Dict[str, Any]]:
     """
     Yield securely validated single-post candidates in deterministic score order.
@@ -535,6 +539,7 @@ def iter_single_post_candidates(
 
     # 3. Score candidates with Diversity Penalty
     recent_history = history_tracker.get_recent_history()
+    variety_context = [*recent_history, *inventory_context] if variety_enabled() else []
     recent_single_history = recent_single_publications(recent_history)
         
     scored_candidates = []
@@ -573,6 +578,7 @@ def iter_single_post_candidates(
             serendipity_adjustment=serendipity_bonus,
             regional_adjustment=regional_adjustment,
             single_diversity=single_diversity,
+            feed_variety_adjustment=variety_adjustment(c,variety_context),
         )
         c.selection_score = breakdown.selection_score
 
@@ -689,6 +695,7 @@ def iter_single_post_candidates(
                     published_features,
                     recent_single_history,
                 ),
+                feed_variety_adjustment=variety_adjustment(best_candidate,variety_context,visual_features=visual_features),
             )
             best_candidate._single_diversity_features = published_features
             best_candidate._selection_breakdown = breakdown
@@ -827,6 +834,7 @@ def iter_single_post_candidates(
                 "quality_score": best_candidate.quality_score,
                 "measurement_coverage": best_candidate.measurement_coverage,
                 "selection_score": best_candidate.selection_score,
+                "feed_variety_adjustment": breakdown.feed_variety_adjustment,
                 "_single_selection_breakdown": selection_breakdown,
                 "description": best_candidate.description,
                 # Passed down to reserve_artwork
@@ -1134,6 +1142,7 @@ def _select_acquired_theme_artworks(
     engagement_model: "EngagementModel | None" = None,
     engagement_context: Mapping[str, object] | None = None,
     exploration_selected: bool = False,
+    variety_context: Sequence[Mapping[str, object]] = (),
 ) -> tuple[
     list[Dict[str, Any]],
     CarouselSetOptimizationResult,
@@ -1285,6 +1294,9 @@ def _select_acquired_theme_artworks(
                     "engagement_applied": True,
                 }
             )
+        if variety_enabled():
+            candidate_dict['visual_color_family'] = visual_features.dominant_color_family.value
+            candidate_dict = apply_variety(candidate_dict,variety_context)
         validated_artworks.append(candidate_dict)
         if len(validated_artworks) == FINALIST_POOL_SIZE:
             break
@@ -1519,6 +1531,7 @@ def fetch_themed_artworks(
     engagement_context: Mapping[str, object] | None = None,
     exploration_selected: bool = False,
     adapters: Sequence[object] | None = None,
+    inventory_context: Sequence[Mapping[str, object]] = (),
 ) -> List[Dict[str, Any]] | ThemedArtworkSelection:
     """Select legacy query artwork or a structured, multi-query themed carousel."""
     if theme_definition is None:
@@ -1561,6 +1574,7 @@ def fetch_themed_artworks(
         engagement_model=engagement_model,
         engagement_context=engagement_context,
         exploration_selected=exploration_selected,
+        variety_context=[*history_tracker.get_recent_history(), *inventory_context] if variety_enabled() else (),
     )
     if return_acquisition:
         return ThemedArtworkSelection(tuple(artworks), acquisition, optimization)
