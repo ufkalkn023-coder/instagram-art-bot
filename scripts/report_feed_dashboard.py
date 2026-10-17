@@ -179,7 +179,7 @@ def parse_dashboard_args(argv=None, *, serving=False):
     return args, timestamp
 
 
-def load_dashboard_inputs(args, *, now: datetime):
+def load_dashboard_inputs(args, *, now: datetime, include_thumbnails: bool = True):
     """Read a fresh bounded snapshot without any storage mutation."""
     timestamp = now
     if args.r2:
@@ -204,7 +204,7 @@ def load_dashboard_inputs(args, *, now: datetime):
             queue_store = R2PreparedFeedQueue(directory)
             queue_store.client = ReadOnlyClient(queue_store.client)
             document = queue_store._read_manifest()[0]
-            queue = _queue_details(document["packages"], lambda package: _package_thumbnail(queue_store, package, remote=True))
+            queue = _queue_details(document["packages"], (lambda package: _package_thumbnail(queue_store, package, remote=True)) if include_thumbnails else None)
     else:
         schedule = _read_json(args.schedule)
         history = _read_json(args.history)
@@ -214,7 +214,7 @@ def load_dashboard_inputs(args, *, now: datetime):
         elif args.queue:
             queue_store = PreparedFeedQueue(args.queue)
             document = queue_store._load()
-            queue = _queue_details(document["packages"], lambda package: _package_thumbnail(queue_store, package))
+            queue = _queue_details(document["packages"], (lambda package: _package_thumbnail(queue_store, package)) if include_thumbnails else None)
         else:
             queue = []
 

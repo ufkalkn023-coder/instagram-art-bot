@@ -37,7 +37,7 @@ ARTWORK_FIELDS = frozenset({
     "semantic_family", "published_orientation", "visual_tone", "luminance_bucket", "visual_color_family",
     "orientation", "dominant_color", "engagement_features", "engagement_applied", "learned_score",
     "engagement_confidence", "quality_component", "engagement_component", "diversity_component",
-    "exploration_component", "exploration_selected",
+    "exploration_component", "exploration_selected", "feed_variety_adjustment",
 })
 
 

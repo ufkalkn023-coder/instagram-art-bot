@@ -61,7 +61,7 @@ jobs:
           CLOUDFLARE_STATE_R2_BUCKET_NAME: ${{ secrets.CLOUDFLARE_STATE_R2_BUCKET_NAME }}
           CLOUDFLARE_STATE_R2_ACCESS_KEY_ID: ${{ secrets.CLOUDFLARE_STATE_R2_ACCESS_KEY_ID }}
           CLOUDFLARE_STATE_R2_SECRET_ACCESS_KEY: ${{ secrets.CLOUDFLARE_STATE_R2_SECRET_ACCESS_KEY }}
-        run: python scripts/prepare_feed_queue.py --directory "$RUNNER_TEMP/feed-queue" --r2 --skip-keychain --check-refill --expected-sha "$GITHUB_SHA" --github-output
+        run: python scripts/prepare_feed_queue.py --directory "$RUNNER_TEMP/feed-queue" --r2 --skip-keychain --check-refill --early --expected-sha "$GITHUB_SHA" --github-output
       - name: Verify queue implementation
         if: github.event_name == 'workflow_dispatch' || steps.refill.outputs.refill_needed == 'true'
         run: pytest -q tests/test_feed_queue.py tests/test_r2_feed_queue.py tests/test_feed_queue_refill.py tests/test_feed_queue_rights.py tests/test_feed_queue_runtime.py
@@ -69,8 +69,10 @@ jobs:
         if: github.event_name == 'workflow_dispatch' || steps.refill.outputs.refill_needed == 'true'
         env:
           QUEUE_TARGET: ${{ inputs.target || '3' }}
-          ARTFOLIO_CAPTION_EXPERIMENT_ENABLED: ${{ inputs.caption_experiment || false }}
+          ARTFOLIO_CAPTION_EXPERIMENT_ENABLED: ${{ inputs.caption_experiment || vars.ARTFOLIO_CAPTION_EXPERIMENT_ENABLED == 'true' }}
+          ARTFOLIO_COVER_EXPERIMENT_ENABLED: ${{ vars.ARTFOLIO_COVER_EXPERIMENT_ENABLED }}
           ARTFOLIO_RIGHTS_POLICY: strict_public_domain
+          ARTFOLIO_FEED_VARIETY_ENABLED: ${{ vars.ARTFOLIO_FEED_VARIETY_ENABLED }}
           GOOGLE_GEMINI_API_KEY: ${{ vars.ARTFOLIO_GEMINI_ENABLED == 'true' && secrets.GOOGLE_GEMINI_API_KEY || '' }}
           SMITHSONIAN_API_KEY: ${{ secrets.SMITHSONIAN_API_KEY }}
           EUROPEANA_API_KEY: ${{ secrets.EUROPEANA_API_KEY }}
@@ -83,7 +85,7 @@ jobs:
           CLOUDFLARE_STATE_R2_SECRET_ACCESS_KEY: ${{ secrets.CLOUDFLARE_STATE_R2_SECRET_ACCESS_KEY }}
         run: |
           if [ "$GITHUB_EVENT_NAME" = "schedule" ]; then
-            python scripts/prepare_feed_queue.py --directory "$RUNNER_TEMP/feed-queue" --target "$QUEUE_TARGET" --r2 --skip-keychain --refill --expected-sha "$GITHUB_SHA"
+            python scripts/prepare_feed_queue.py --directory "$RUNNER_TEMP/feed-queue" --target "$QUEUE_TARGET" --r2 --skip-keychain --refill --early --expected-sha "$GITHUB_SHA"
           else
             python scripts/prepare_feed_queue.py --directory "$RUNNER_TEMP/feed-queue" --target "$QUEUE_TARGET" --r2 --skip-keychain
           fi

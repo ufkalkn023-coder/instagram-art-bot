@@ -70,6 +70,15 @@ class ControlledCaptionExperiment(BaseModel):
     cover_variant: Literal["editorial"] = "editorial"
 
 
+class ControlledCoverExperiment(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+    experiment_id: Literal["cover_treatment_v1"] = "cover_treatment_v1"
+    variable: Literal["cover_variant"] = "cover_variant"
+    variant: Literal["editorial", "editorial_panel"]
+    theme_id: str = Field(min_length=1, max_length=100)
+    caption_hook_type: Literal["visual_detail"] = "visual_detail"
+
+
 class CarouselExperimentMetadata(BaseModel):
     """Compact, publication-level explanation of one carousel strategy."""
 
@@ -93,9 +102,18 @@ class CarouselExperimentMetadata(BaseModel):
     engagement_features: Optional[EngagementFeatureVector] = None
     editorial_pair: Optional[FeedEditorialPair] = None
     controlled_experiment: Optional[ControlledCaptionExperiment] = None
+    controlled_cover_experiment: Optional[ControlledCoverExperiment] = None
 
     @model_validator(mode="after")
     def require_matching_assignment(self):
+        cover = self.controlled_cover_experiment
+        if cover is not None and self.controlled_experiment is not None:
+            raise ValueError("Only one presentation factor may vary per publication")
+        if cover is not None and (
+            cover.theme_id != self.carousel_theme or cover.variant != self.cover_variant
+            or cover.caption_hook_type != self.caption_hook_type
+        ):
+            raise ValueError("Cover experiment must match delivered theme, cover and fixed hook")
         assignment = self.controlled_experiment
         if assignment is not None and (
             assignment.theme_id != self.carousel_theme or assignment.variant != self.caption_hook_type
@@ -190,10 +208,21 @@ class PublicationRecord(BaseModel):
     engagement_features: Optional[EngagementFeatureVector] = None
     editorial_pair: Optional[FeedEditorialPair] = None
     controlled_experiment: Optional[ControlledCaptionExperiment] = None
+    controlled_cover_experiment: Optional[ControlledCoverExperiment] = None
     story_delivery: StoryDelivery | None = None
 
     @model_validator(mode="after")
     def require_matching_experiment(self):
+        cover = self.controlled_cover_experiment
+        if cover is not None and self.type != "carousel":
+            raise ValueError("Cover experiment requires a carousel publication")
+        if cover is not None and self.controlled_experiment is not None:
+            raise ValueError("Only one presentation factor may vary per publication")
+        if cover is not None and (
+            cover.theme_id != self.carousel_theme or cover.variant != self.cover_variant
+            or cover.caption_hook_type != self.caption_hook_type
+        ):
+            raise ValueError("Cover experiment must match delivered theme, cover and fixed hook")
         assignment = self.controlled_experiment
         if assignment is not None and (
             self.type != "carousel" or assignment.theme_id != self.carousel_theme
@@ -252,7 +281,7 @@ class PublicationRecord(BaseModel):
     @model_validator(mode="after")
     def require_type_appropriate_artwork_count(self):
         if self.story_delivery is not None:
-            if self.type != "carousel" or self.controlled_experiment is not None:
+            if self.type != "carousel" or self.controlled_experiment is not None or self.controlled_cover_experiment is not None:
                 raise ValueError("Reviewed story must be a carousel without legacy treatment assignment")
             self.story_delivery.require_sources(self.artwork_ids)
             return self

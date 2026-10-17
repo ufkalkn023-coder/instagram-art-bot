@@ -752,3 +752,75 @@ Her parent bir gözlemdir; sayfalar bağımsız örnek sayılmaz. Kapsama, gözl
 kaydetme/beğeni oranı ve yetersiz örneklem açıkça gösterilir. Eksik metrik sıfır
 olarak doldurulmaz ve otomatik kazanan seçilmez. Statik HTML çıktısı çalışmaya
 devam eder; yenileme düğmesi yalnız yerel sunucu üzerinden etkinleşir.
+
+### Kuyruk tükenmeden erken stok hazırlama
+
+Zamanlanmış hazırlama `--check-refill --early` ve `--refill --early` kullanır.
+En fazla iki geçerli READY paket kaldığında üç yeni paket hazırlanır; üç veya
+fazla READY varken hazırlama yapılmaz. Mevcut tüm kaynak kimlikleri dışlanır,
+format sırası hazır kuyruğun sonundan devam eder. Yeni parti oluşturulurken
+exact-SHA üretim onayı, mevcut sıradaki format ve manifest ETag yeniden doğrulanır.
+
+Eski manifest önce değişmez arşive alınır. Geçerli READY kayıtları byte düzeyinde
+korunarak yeni üç paket sonlarına eklenir; toplam en fazla beş paket olur.
+CLAIMED, belirsiz yayın sonucu, bozuk kayıt veya eşzamanlı manifest değişikliği
+sessizce onarılmaz. Koşullu yazma çatışması/belirsizliği tekrar denenmez. Hazırlama
+yayın yetkisi vermez; tüketimdeki güncel hak, geçmiş, TTL ve48saat kontrolleri sürer.
+Eski `--refill` davranışı `--early` olmadan yalnız tükenmiş/eskimiş partiyi değiştirir.
+
+### Haftalık otomatik rapor
+
+`Weekly Feed report` her pazartesi06:23UTC (09:23Türkiye) salt okunur rapor üretir.
+Son yedi günün `[başlangıç,bitiş)` yayınları, aynı hedef yaştaki gerçek metrikler,
+ölçüm kapsamı ve mevcut kuyruk/sistem durumu ayrı gösterilir. Story parent'ı bir
+örnektir; eksik veri sıfır değildir. Tam geçmişteki kimlik çakışmaları hafta
+filtrelenmeden elenir. Yeni yayınların henüz vadesi gelmeyen ölçümleri beklemededir.
+
+```bash
+python scripts/report_feed_weekly.py --r2 --expected-sha EXACT_APPROVED_MAIN_SHA --output /tmp/weekly-feed/report.md
+# Çevrimdışı: --r2 yerine --schedule schedule.json --history history.json --snapshots snapshots.json
+```
+
+Komut mevcut girdilerin veya çıktının üzerine yazmadan Markdown ve aynı isimli
+JSON dosyası oluşturur; görsel indirmez, Instagram/Gemini çağırmaz, R2 verisi
+mutasyona uğratmaz. Rapor Actions özetine eklenir ve30gün indirilebilir artifact
+olarak tutulur; harici mesaj/bildirim kanalı açılmaz. Artifact saklama sözleşmesi:
+[GitHub workflow artifacts](https://docs.github.com/en/actions/tutorials/store-and-share-data).
+
+### Yayın ve hazır stok arasında çeşitlilik
+
+`ARTFOLIO_FEED_VARIETY_ENABLED=true`, yalnız seçim puanında sınırlı tekrar baskısını
+açar. Gerçek yayınlar ve kuyrukta bekleyen/aynı partide hazırlanan içeriklerden
+oluşan son12 grup birlikte değerlendirilir. Sanatçı4, müze2, dönem1, renk1 puan/grup; toplam etki en
+fazla−12'dir. Her carousel/story kaynak grubu bir kez sayılır; çok sayfalı içerik
+etkiyi çoğaltmaz. Bilinmeyen metadata tarafsızdır; yeni renk verisi yalnız mevcut
+indirilmiş görselden çıkarılır, ek indirme/AI yoktur.
+
+Tekli ve carousel adayları bu bağlamı kullanır; ham kalite, tema uygunluğu, hak ve
+minimum kabul eşikleri değişmez. Sonuç `feed_variety_adjustment` alanında görünür.
+Hazır içerik yalnız seçim bağlamıdır, başarılı yayın geçmişine yazılmaz. Daha önce
+mühürlenmiş paket/inceleme onayı değiştirilmez. Bayrak kapalıyken önceki sıralama
+korunur; üretim aktivasyonu yalnız onaylanan yeni main sürümüyle yapılır.
+
+### Tek değişkenli kapak ve açıklama deneyleri
+
+Yeni hazırlanan legacy carousel için `ARTFOLIO_CAPTION_EXPERIMENT_ENABLED=true`
+mevcut iki açıklama girişini (`question`, `visual_detail`) sabit `editorial` kapakla
+dener. `ARTFOLIO_COVER_EXPERIMENT_ENABLED=true` aynı kaynak/crop/yazı düzeni üzerinde
+`editorial` alt gradyanı ile `editorial_panel` koyu metin panelini karşılaştırır;
+kapak deneyinde açıklama her iki kolda aynı factual `visual_detail` girişini kullanır.
+İki bayrak açıkken seed bir aile seçer: tek gönderide iki değişken birlikte değişmez.
+Atama deterministiktir; kendiliğinden kazanan seçimi veya modele terfi yapılmaz.
+
+Tipli `controlled_cover_experiment` ve mevcut `controlled_experiment` birbirini
+dışlar; atama gerçek tema, render edilen kapak ve teslim edilen açıklamayla
+uyuşmalıdır. İncelenmiş story'lere uygulanmaz ve mühürlenmiş hazır paketler sonradan
+farklı bir kola geçirilmez. Gemini kapalı çalışır; deney için AI çağrısı gerekmez.
+
+`report_feed_analytics.py --experiments` eski `comparisons` açıklama alanını korur;
+kapak kolları ayrı `cover_comparisons` içindedir. Haftalık rapor da bu iki aileyi
+ayrı sunar. Karşılaştırmalar tema, aynı hedef yaş ve sabit karşı faktöre göre ayrılır;
+her metrik için kol başına gözlem/kapsama gösterilir, eksik metrik sıfır yapılmaz.
+Minimum beş gözlem yoksa kanıt yetersizdir; farklı eserler/zaman/kitle nedensel
+bir A/B sonucu çıkarmayı sınırlar. Üretimde aktivasyon yalnız doğrulanmış yeni
+exact-main onayıyla ve açık bayraklarla yapılır.

@@ -7,7 +7,7 @@ from datetime import datetime, timezone
 from enum import Enum
 
 from src.carousel_themes import CarouselFormat, CarouselThemeDefinition
-from src.models import ControlledCaptionExperiment
+from src.models import ControlledCaptionExperiment, ControlledCoverExperiment
 
 
 SELECTION_MODEL_VERSION = "carousel_learning_v1"
@@ -18,6 +18,7 @@ class CoverVariant(str, Enum):
     """Current cover treatment plus a stable seam for future visual variants."""
 
     EDITORIAL = "editorial"
+    EDITORIAL_PANEL = "editorial_panel"
 
 
 class CaptionHookType(str, Enum):
@@ -92,9 +93,27 @@ def assign_caption_experiment(theme: CarouselThemeDefinition, *, run_seed: str) 
     return ControlledCaptionExperiment(variant=variants[index].value, theme_id=theme.id)
 
 
-def controlled_caption_intro(assignment: ControlledCaptionExperiment, *, featured_count: int, body: str) -> str:
+def controlled_caption_intro(assignment: ControlledCaptionExperiment | ControlledCoverExperiment, *, featured_count: int, body: str) -> str:
     if type(featured_count) is not int or not 5 <= featured_count <= 8:
         raise ValueError("Controlled hook requires 5–8 featured works")
-    lead = (f"What connects these {featured_count} works?" if assignment.variant == CaptionHookType.QUESTION.value
+    hook = assignment.caption_hook_type if isinstance(assignment, ControlledCoverExperiment) else assignment.variant
+    lead = (f"What connects these {featured_count} works?" if hook == CaptionHookType.QUESTION.value
             else f"Look closely at these {featured_count} works.")
     return f"{lead}\n\n{body}"
+
+
+def assign_cover_experiment(theme: CarouselThemeDefinition, *, run_seed: str) -> ControlledCoverExperiment:
+    material = f"cover_treatment_v1\x1f{theme.id}\x1f{run_seed}".encode()
+    index = int.from_bytes(hashlib.sha256(material).digest(), "big") % 2
+    return ControlledCoverExperiment(variant=("editorial", "editorial_panel")[index], theme_id=theme.id)
+
+
+def assign_presentation_experiment(theme: CarouselThemeDefinition, *, run_seed: str,
+                                   caption_enabled: bool, cover_enabled: bool):
+    if not caption_enabled and not cover_enabled:
+        return None
+    cover = cover_enabled
+    if caption_enabled and cover_enabled:
+        material = f"presentation_family_v1\x1f{theme.id}\x1f{run_seed}".encode()
+        cover = int.from_bytes(hashlib.sha256(material).digest(), "big") % 2 == 1
+    return (assign_cover_experiment if cover else assign_caption_experiment)(theme, run_seed=run_seed)

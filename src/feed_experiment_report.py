@@ -8,7 +8,7 @@ from pydantic import ValidationError
 
 from src.feed_analytics import build_feed_analytics_report
 from src.insights_snapshot import LEARNING_OUTCOME_METRICS
-from src.models import ControlledCaptionExperiment
+from src.models import ControlledCaptionExperiment, PublicationRecord
 
 
 def build_experiment_report(history, snapshots, *, now=None, minimum_cohort_size=5):
@@ -19,24 +19,26 @@ def build_experiment_report(history, snapshots, *, now=None, minimum_cohort_size
         if not isinstance(pub, dict) or pub.get("id") not in eligible_ids or pub.get("type") != "carousel":
             continue
         try:
-            assignment = ControlledCaptionExperiment.model_validate(pub.get("controlled_experiment"))
+            validated = PublicationRecord.model_validate(pub)
+            assignment = validated.controlled_experiment or validated.controlled_cover_experiment
         except ValidationError:
             continue
-        if (pub.get("carousel_theme") != assignment.theme_id or pub.get("caption_hook_type") != assignment.variant
-                or pub.get("cover_variant") != assignment.cover_variant):
+        if assignment is None:
             continue
         assignments[pub["id"]] = assignment
     groups = defaultdict(lambda: defaultdict(list))
     for row in report["windows"]:
         assignment = assignments.get(row["publication_id"])
         if assignment is not None and row["publication_age_hours"] >= row["target_age_hours"]:
-            key = (assignment.experiment_id, assignment.theme_id, assignment.cover_variant, row["target_age_hours"])
+            fixed = assignment.cover_variant if isinstance(assignment, ControlledCaptionExperiment) else assignment.caption_hook_type
+            key = (assignment.experiment_id, assignment.variable, assignment.theme_id, fixed, row["target_age_hours"])
             groups[key][assignment.variant].append(row)
     comparisons = []
-    for (experiment_id, theme_id, cover, target), variants in sorted(groups.items()):
+    for (experiment_id, variable, theme_id, fixed, target), variants in sorted(groups.items()):
         arms = {}
         sufficient = False
-        for variant in ("question", "visual_detail"):
+        choices = ("question", "visual_detail") if variable == "caption_hook_type" else ("editorial", "editorial_panel")
+        for variant in choices:
             rows = variants[variant]
             rates = {}
             for metric, rate in LEARNING_OUTCOME_METRICS:
@@ -54,9 +56,11 @@ def build_experiment_report(history, snapshots, *, now=None, minimum_cohort_size
             metric_status[rate] = "descriptive_comparison" if comparable else "insufficient_evidence"
             sufficient = sufficient or comparable
         comparisons.append({"experiment_id": experiment_id, "publication_format": "carousel",
-                            "theme_id": theme_id, "cover_variant": cover, "target_age_hours": target,
+                            "theme_id": theme_id, "variable": variable, "target_age_hours": target,
+                            **({"cover_variant": fixed} if variable == "caption_hook_type" else {"caption_hook_type": fixed}),
                             "status": "descriptive_comparison" if sufficient else "insufficient_evidence",
                             "metric_status": metric_status, "arms": arms, "winner": None})
     return {"schema_version": 1, "generated_at": report["generated_at"], "auto_promote": False,
-            "comparisons": comparisons,
-            "limitations": "Observational cohorts. Standard errors describe sample variation; theme, timing and audience confounding prevent causal winner claims."}
+            "comparisons": [row for row in comparisons if row["variable"] == "caption_hook_type"],
+            "cover_comparisons": [row for row in comparisons if row["variable"] == "cover_variant"],
+            "limitations": "Observational cohorts. Standard errors describe sample variation; artwork, theme, timing and audience confounding prevent causal winner claims."}
