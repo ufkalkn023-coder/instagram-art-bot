@@ -4,12 +4,18 @@
 from __future__ import annotations
 
 import argparse
+import base64
+import hashlib
+import io
+import logging
 import json
 import sys
 import tempfile
 from datetime import datetime
 from unittest.mock import patch
 from pathlib import Path
+
+from PIL import Image, ImageOps
 
 ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
@@ -21,6 +27,8 @@ from src.feed_schedule import FeedScheduleManager  # noqa: E402
 from src.insights_storage import InsightsStorage, parse_aware_timestamp  # noqa: E402
 from src.r2_feed_queue import R2PreparedFeedQueue  # noqa: E402
 
+logger = logging.getLogger(__name__)
+MAX_ASSET_BYTES = 8_000_000
 MAX_INPUT_BYTES = 16_000_000
 ALLOWED_READS = frozenset({"get_object", "head_object", "list_objects_v2"})
 
@@ -55,9 +63,15 @@ def _story_summary(directory: Path) -> dict:
             "source_count": len(delivery["source_ids"]), "page_count": len(delivery["pages"])}
 
 
-def _queue_details(packages):
+def _queue_details(packages, thumbnail_loader=None):
     rows = []
     for package in packages:
+        thumbnail = None
+        if thumbnail_loader is not None and package.get("state") != "CONSUMED":
+            try:
+                thumbnail = thumbnail_loader(package)
+            except (OSError, ValueError, RuntimeError, Image.DecompressionBombError) as error:
+                logger.warning("dashboard_thumbnail_unavailable error_type=%s", type(error).__name__)
         content = package.get("content", {})
         story = content.get("story_delivery", {})
         sources = story.get("source_ids") or content.get("source_ids")
@@ -70,7 +84,7 @@ def _queue_details(packages):
                      "publication_format": content.get("publication_format"),
                      "expires_at": package.get("expires_at"), "reason": package.get("reason"),
                      "title": story.get("public_title") or (caption.splitlines()[0] if isinstance(caption, str) and caption else ""),
-                     "source_count": len(sources) if isinstance(sources, list) else None,
+                     "thumbnail": thumbnail, "source_count": len(sources) if isinstance(sources, list) else None,
                      "page_count": len(assets) if isinstance(assets, list) else None})
     return rows
 
@@ -103,7 +117,34 @@ def _queue_report_rows(document):
     return rows
 
 
-def run(argv=None) -> int:
+def _thumbnail(data: bytes, expected_sha: str) -> str | None:
+    if len(data) > MAX_ASSET_BYTES or hashlib.sha256(data).hexdigest() != expected_sha:
+        return None
+    with Image.open(io.BytesIO(data)) as opened:
+        if opened.format != "JPEG" or opened.width * opened.height > 8_000_000:
+            return None
+        image = ImageOps.exif_transpose(opened).convert("RGB")
+        image.thumbnail((320, 320), Image.Resampling.LANCZOS)
+        output = io.BytesIO()
+        image.save(output, "JPEG", quality=75)
+    return "data:image/jpeg;base64," + base64.b64encode(output.getvalue()).decode("ascii")
+
+
+def _package_thumbnail(store, package, *, remote=False):
+    assets = package["content"].get("assets", [])
+    if not assets:
+        return None
+    asset = assets[0]
+    path = store._asset_path(package["id"], asset["path"])
+    if remote:
+        data, _ = store._read_object("feed-queue/v1/packages/" + asset["path"], MAX_ASSET_BYTES)
+    else:
+        with path.open("rb") as source:
+            data = source.read(MAX_ASSET_BYTES + 1)
+    return _thumbnail(data, asset["sha256"])
+
+
+def parse_dashboard_args(argv=None, *, serving=False):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--r2", action="store_true", help="Read the existing caller-configured R2 state")
     parser.add_argument("--expected-sha", help="Expected workflow SHA for schedule readiness")
@@ -114,7 +155,10 @@ def run(argv=None) -> int:
     parser.add_argument("--queue-report", type=Path, help="Use an existing bounded queue status snapshot")
     parser.add_argument("--story-project", type=Path, action="append", default=[])
     parser.add_argument("--now", help="Timezone-aware report time")
-    parser.add_argument("--output", type=Path, required=True)
+    if serving:
+        parser.add_argument("--port", type=int, default=38143)
+    else:
+        parser.add_argument("--output", type=Path, required=True)
     args = parser.parse_args(argv)
     if args.queue and args.queue_report:
         parser.error("Select one local queue source")
@@ -130,50 +174,64 @@ def run(argv=None) -> int:
         parser.error("--now must include a valid timezone")
     timestamp = timestamp or datetime.now().astimezone()
 
-    try:
-        if args.r2:
-            schedule_manager = FeedScheduleManager()
-            schedule_manager.store.client = ReadOnlyClient(schedule_manager.store.client)
-            from src import r2_media
-            media_client_factory = r2_media._get_s3_client
-            with patch.object(r2_media, "_get_s3_client",
-                              side_effect=lambda config: ReadOnlyClient(media_client_factory(config))):
-                schedule = schedule_manager.status(expected_sha=args.expected_sha, now=timestamp)
-            from src import publication_state
-            safety_state = schedule_manager.store.load_safety()[0]
-            if (schedule.get("generation") is not None
-                    and schedule["generation"] != safety_state.generation):
-                raise RuntimeError("Schedule and publication-state snapshots changed during read")
-            history = publication_state.history_view(safety_state)
-            media_configuration = r2_media._load_configuration(require_public_url=False)
-            read_client = ReadOnlyClient(r2_media._get_s3_client(media_configuration))
-            insights = InsightsStorage(read_client, media_configuration.bucket_name)
-            snapshots = insights.load_all_snapshots()
-            with tempfile.TemporaryDirectory(prefix="artfolio-feed-dashboard-") as directory:
-                queue_store = R2PreparedFeedQueue(directory)
-                queue_store.client = ReadOnlyClient(queue_store.client)
-                document = queue_store._read_manifest()[0]
-                queue = _queue_details(document["packages"])
-        else:
-            schedule = _read_json(args.schedule)
-            history = _read_json(args.history)
-            snapshots = _read_json(args.snapshots)
-            if args.queue_report:
-                queue = _queue_report_rows(_read_json(args.queue_report))
-            elif args.queue:
-                queue_store = PreparedFeedQueue(args.queue)
-                document = queue_store._load()
-                queue = _queue_details(document["packages"])
-            else:
-                queue = []
+    if serving and not 0 <= args.port <= 65535:
+        parser.error("--port must be between 0 and 65535")
+    return args, timestamp
 
-        stories = []
-        for project_dir in args.story_project:
-            try:
-                stories.append(_story_summary(project_dir))
-            except Exception as error:
-                stories.append({"title": project_dir.name, "approved": False,
-                                "error": type(error).__name__})
+
+def load_dashboard_inputs(args, *, now: datetime):
+    """Read a fresh bounded snapshot without any storage mutation."""
+    timestamp = now
+    if args.r2:
+        schedule_manager = FeedScheduleManager()
+        schedule_manager.store.client = ReadOnlyClient(schedule_manager.store.client)
+        from src import r2_media
+        media_client_factory = r2_media._get_s3_client
+        with patch.object(r2_media, "_get_s3_client",
+                          side_effect=lambda config: ReadOnlyClient(media_client_factory(config))):
+            schedule = schedule_manager.status(expected_sha=args.expected_sha, now=timestamp)
+        from src import publication_state
+        safety_state = schedule_manager.store.load_safety()[0]
+        if (schedule.get("generation") is not None
+                and schedule["generation"] != safety_state.generation):
+            raise RuntimeError("Schedule and publication-state snapshots changed during read")
+        history = publication_state.history_view(safety_state)
+        media_configuration = r2_media._load_configuration(require_public_url=False)
+        read_client = ReadOnlyClient(r2_media._get_s3_client(media_configuration))
+        insights = InsightsStorage(read_client, media_configuration.bucket_name)
+        snapshots = insights.load_all_snapshots()
+        with tempfile.TemporaryDirectory(prefix="artfolio-feed-dashboard-") as directory:
+            queue_store = R2PreparedFeedQueue(directory)
+            queue_store.client = ReadOnlyClient(queue_store.client)
+            document = queue_store._read_manifest()[0]
+            queue = _queue_details(document["packages"], lambda package: _package_thumbnail(queue_store, package, remote=True))
+    else:
+        schedule = _read_json(args.schedule)
+        history = _read_json(args.history)
+        snapshots = _read_json(args.snapshots)
+        if args.queue_report:
+            queue = _queue_report_rows(_read_json(args.queue_report))
+        elif args.queue:
+            queue_store = PreparedFeedQueue(args.queue)
+            document = queue_store._load()
+            queue = _queue_details(document["packages"], lambda package: _package_thumbnail(queue_store, package))
+        else:
+            queue = []
+
+    stories = []
+    for project_dir in args.story_project:
+        try:
+            stories.append(_story_summary(project_dir))
+        except Exception as error:
+            stories.append({"title": project_dir.name, "approved": False,
+                            "error": type(error).__name__})
+    return schedule, queue, history, snapshots, stories
+
+
+def run(argv=None) -> int:
+    args, timestamp = parse_dashboard_args(argv)
+    try:
+        schedule, queue, history, snapshots, stories = load_dashboard_inputs(args, now=timestamp)
         page = render_feed_dashboard(schedule, queue, history, snapshots,
                                      now=timestamp, stories=stories)
         args.output.parent.mkdir(parents=True, exist_ok=True)
