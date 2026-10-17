@@ -767,3 +767,22 @@ CLAIMED, belirsiz yayın sonucu, bozuk kayıt veya eşzamanlı manifest değişi
 sessizce onarılmaz. Koşullu yazma çatışması/belirsizliği tekrar denenmez. Hazırlama
 yayın yetkisi vermez; tüketimdeki güncel hak, geçmiş, TTL ve48saat kontrolleri sürer.
 Eski `--refill` davranışı `--early` olmadan yalnız tükenmiş/eskimiş partiyi değiştirir.
+
+### Haftalık otomatik rapor
+
+`Weekly Feed report` her pazartesi06:23UTC (09:23Türkiye) salt okunur rapor üretir.
+Son yedi günün `[başlangıç,bitiş)` yayınları, aynı hedef yaştaki gerçek metrikler,
+ölçüm kapsamı ve mevcut kuyruk/sistem durumu ayrı gösterilir. Story parent'ı bir
+örnektir; eksik veri sıfır değildir. Tam geçmişteki kimlik çakışmaları hafta
+filtrelenmeden elenir. Yeni yayınların henüz vadesi gelmeyen ölçümleri beklemededir.
+
+```bash
+python scripts/report_feed_weekly.py --r2 --expected-sha EXACT_APPROVED_MAIN_SHA --output /tmp/weekly-feed/report.md
+# Çevrimdışı: --r2 yerine --schedule schedule.json --history history.json --snapshots snapshots.json
+```
+
+Komut mevcut girdilerin veya çıktının üzerine yazmadan Markdown ve aynı isimli
+JSON dosyası oluşturur; görsel indirmez, Instagram/Gemini çağırmaz, R2 verisi
+mutasyona uğratmaz. Rapor Actions özetine eklenir ve30gün indirilebilir artifact
+olarak tutulur; harici mesaj/bildirim kanalı açılmaz. Artifact saklama sözleşmesi:
+[GitHub workflow artifacts](https://docs.github.com/en/actions/tutorials/store-and-share-data).
