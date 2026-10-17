@@ -1,6 +1,8 @@
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
 
 import pytest
+import yaml
 
 from src.insights_collector import InsightsCollector, manual_association, select_due_slot
 from src.insights_storage import InsightsConcurrencyError, InsightsStorageError
@@ -82,6 +84,31 @@ def test_due_policy_prefers_highest_defensible_slot_and_expires_old_gaps():
     assert select_due_slot(72, {1, 6, 24}) == (72, 0)
     assert select_due_slot(168, {1, 6, 24, 72}) == (168, 0)
     assert select_due_slot(800, set()) == (None, 5)
+
+
+def test_cloud_cadence_captures_early_windows_once_for_orchid_publication():
+    """Replay the real publication against the configured cloud schedule."""
+    workflow = yaml.safe_load(Path('.github/workflows/instagram_insights.yml').read_text())
+    triggers = workflow.get('on', workflow.get(True))
+    minute, hours, day, month, weekday = triggers['schedule'][0]['cron'].split()
+    assert (day, month, weekday) == ('*', '*', '*')
+    permitted_hours = set(range(24)) if hours == '*' else {int(h) for h in hours.split(',')}
+    published = datetime(2026, 10, 14, 6, 14, 23, tzinfo=timezone.utc)
+    publication = _publication('orchid', 0, 'orchid-parent')
+    publication['posted_at'] = published.isoformat()
+    storage = FakeStorage([publication])
+    metrics = {'views': 7, 'reach': 3, 'likes': 1, 'comments': 0, 'saved': 0, 'shares': 0}
+    client = FakeClient([_response(metrics)] * 3)
+    first = published.replace(hour=0, minute=int(minute), second=0)
+    for hour in range(34):
+        now = first + timedelta(hours=hour)
+        if now.hour in permitted_hours:
+            InsightsCollector(storage, client, now).run()
+    collected = [row for row in storage.appended if row.get('metrics')]
+    assert [row['target_age_hours'] for row in collected] == [1, 6, 24]
+    assert client.media_ids == ['orchid-parent'] * 3
+    assert not any(row.get('failure_category') == 'missed_collection_window'
+                   for row in storage.appended)
 
 
 def test_collector_writes_one_snapshot_for_carousel_parent_and_never_changes_history():

@@ -18,7 +18,7 @@ EXPECTED_INSIGHTS_SECRETS = {
 
 def test_insights_workflow_is_separate_and_uses_only_required_secrets():
     workflow = Path(".github/workflows/instagram_insights.yml").read_text()
-    assert 'cron: "0 3 * * *"' in workflow
+    assert 'cron: "43 * * * *"' in workflow
     assert 'python-version: "3.10"' in workflow
     assert "group: instagram-insights" in workflow
     assert "python scripts/collect_insights.py" in workflow
