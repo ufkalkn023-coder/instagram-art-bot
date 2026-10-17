@@ -790,8 +790,8 @@ olarak tutulur; harici mesaj/bildirim kanalı açılmaz. Artifact saklama sözle
 ### Yayın ve hazır stok arasında çeşitlilik
 
 `ARTFOLIO_FEED_VARIETY_ENABLED=true`, yalnız seçim puanında sınırlı tekrar baskısını
-açar. Son12 gerçek yayın ve kuyrukta bekleyen/aynı partide hazırlanan içerikler
-birlikte değerlendirilir. Sanatçı4, müze2, dönem1, renk1 puan/grup; toplam etki en
+açar. Gerçek yayınlar ve kuyrukta bekleyen/aynı partide hazırlanan içeriklerden
+oluşan son12 grup birlikte değerlendirilir. Sanatçı4, müze2, dönem1, renk1 puan/grup; toplam etki en
 fazla−12'dir. Her carousel/story kaynak grubu bir kez sayılır; çok sayfalı içerik
 etkiyi çoğaltmaz. Bilinmeyen metadata tarafsızdır; yeni renk verisi yalnız mevcut
 indirilmiş görselden çıkarılır, ek indirme/AI yoktur.
@@ -801,3 +801,26 @@ minimum kabul eşikleri değişmez. Sonuç `feed_variety_adjustment` alanında g
 Hazır içerik yalnız seçim bağlamıdır, başarılı yayın geçmişine yazılmaz. Daha önce
 mühürlenmiş paket/inceleme onayı değiştirilmez. Bayrak kapalıyken önceki sıralama
 korunur; üretim aktivasyonu yalnız onaylanan yeni main sürümüyle yapılır.
+
+### Tek değişkenli kapak ve açıklama deneyleri
+
+Yeni hazırlanan legacy carousel için `ARTFOLIO_CAPTION_EXPERIMENT_ENABLED=true`
+mevcut iki açıklama girişini (`question`, `visual_detail`) sabit `editorial` kapakla
+dener. `ARTFOLIO_COVER_EXPERIMENT_ENABLED=true` aynı kaynak/crop/yazı düzeni üzerinde
+`editorial` alt gradyanı ile `editorial_panel` koyu metin panelini karşılaştırır;
+kapak deneyinde açıklama her iki kolda aynı factual `visual_detail` girişini kullanır.
+İki bayrak açıkken seed bir aile seçer: tek gönderide iki değişken birlikte değişmez.
+Atama deterministiktir; kendiliğinden kazanan seçimi veya modele terfi yapılmaz.
+
+Tipli `controlled_cover_experiment` ve mevcut `controlled_experiment` birbirini
+dışlar; atama gerçek tema, render edilen kapak ve teslim edilen açıklamayla
+uyuşmalıdır. İncelenmiş story'lere uygulanmaz ve mühürlenmiş hazır paketler sonradan
+farklı bir kola geçirilmez. Gemini kapalı çalışır; deney için AI çağrısı gerekmez.
+
+`report_feed_analytics.py --experiments` eski `comparisons` açıklama alanını korur;
+kapak kolları ayrı `cover_comparisons` içindedir. Haftalık rapor da bu iki aileyi
+ayrı sunar. Karşılaştırmalar tema, aynı hedef yaş ve sabit karşı faktöre göre ayrılır;
+her metrik için kol başına gözlem/kapsama gösterilir, eksik metrik sıfır yapılmaz.
+Minimum beş gözlem yoksa kanıt yetersizdir; farklı eserler/zaman/kitle nedensel
+bir A/B sonucu çıkarmayı sınırlar. Üretimde aktivasyon yalnız doğrulanmış yeni
+exact-main onayıyla ve açık bayraklarla yapılır.

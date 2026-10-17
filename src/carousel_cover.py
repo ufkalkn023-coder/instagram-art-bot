@@ -22,6 +22,7 @@ from src.art_fetcher import (
     resolve_selection_run_seed,
 )
 from src.carousel_plan import CoverAsset, CoverMode, CoverScoreBreakdown
+from src.editorial_experiments import CoverVariant
 from src.carousel_editorial import (
     derive_carousel_editorial_facts,
     format_count,
@@ -719,8 +720,10 @@ def create_carousel_editorial_cover(
     editorial_subtitle: str,
     micro_facts: Sequence[str] = (),
     output_path: str | None = None,
+    cover_variant: str = "editorial",
 ) -> str:
     """Render a dedicated 1080x1350 editorial opener without artwork identity text."""
+    variant = CoverVariant(cover_variant)
     output_path = output_path or os.path.join(config.DATA_DIR, "carousel_cover.jpg")
     Path(output_path).parent.mkdir(parents=True, exist_ok=True)
 
@@ -756,7 +759,8 @@ def create_carousel_editorial_cover(
     for y in range(COVER_HEIGHT):
         bottom = max(0.0, (y - gradient_start) / (COVER_HEIGHT - 1 - gradient_start))
         header = max(0.0, 1 - y / 190)
-        alpha = round(max(220 * bottom ** 0.8, 80 * header ** 2))
+        bottom_alpha = (232 if y >= title_y - 36 else 0) if variant is CoverVariant.EDITORIAL_PANEL else 220 * bottom ** 0.8
+        alpha = round(max(bottom_alpha, 80 * header ** 2))
         overlay_draw.line((0, y, COVER_WIDTH, y), fill=(0, 0, 0, alpha))
     canvas = Image.alpha_composite(canvas.convert("RGBA"), overlay)
     draw = ImageDraw.Draw(canvas)

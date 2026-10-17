@@ -69,7 +69,8 @@ jobs:
         if: github.event_name == 'workflow_dispatch' || steps.refill.outputs.refill_needed == 'true'
         env:
           QUEUE_TARGET: ${{ inputs.target || '3' }}
-          ARTFOLIO_CAPTION_EXPERIMENT_ENABLED: ${{ inputs.caption_experiment || false }}
+          ARTFOLIO_CAPTION_EXPERIMENT_ENABLED: ${{ inputs.caption_experiment || vars.ARTFOLIO_CAPTION_EXPERIMENT_ENABLED == 'true' }}
+          ARTFOLIO_COVER_EXPERIMENT_ENABLED: ${{ vars.ARTFOLIO_COVER_EXPERIMENT_ENABLED }}
           ARTFOLIO_RIGHTS_POLICY: strict_public_domain
           ARTFOLIO_FEED_VARIETY_ENABLED: ${{ vars.ARTFOLIO_FEED_VARIETY_ENABLED }}
           GOOGLE_GEMINI_API_KEY: ${{ vars.ARTFOLIO_GEMINI_ENABLED == 'true' && secrets.GOOGLE_GEMINI_API_KEY || '' }}

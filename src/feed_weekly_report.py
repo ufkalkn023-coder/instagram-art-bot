@@ -1,9 +1,11 @@
 """Weekly stored-evidence report; no collection, notification or publication."""
+import html
 from collections import Counter
 from datetime import datetime, timedelta, timezone
 
 from src.feed_analytics import build_feed_analytics_report
 from src.feed_operations import build_feed_operations
+from src.feed_experiment_report import build_experiment_report
 from src.insights_storage import parse_aware_timestamp, utc_timestamp
 
 
@@ -28,6 +30,7 @@ def build_weekly_report(schedule, queue, history, snapshots, *, now: datetime) -
                        'basis': 'Published in [start, end); stored measurements available at generation time'},
             'publication_counts': {name: counts[name] for name in ('single', 'carousel')},
             'analytics': analytics, 'source_diagnostics': complete['diagnostics'],
+            'experiments': build_experiment_report({'publications': publications}, selected_snapshots, now=timestamp),
             'operations': build_feed_operations(schedule, queue, history, snapshots, now=timestamp),
             'winner': None, 'auto_promote': False}
 
@@ -60,4 +63,19 @@ def render_weekly_markdown(report: dict) -> str:
               f"Ölçüm güncelliği: {operations['analytics']['freshness']}",
               'Kuyruk sayıları manifest durumudur; gerçek tüketimde haklar, görseller ve geçmiş yeniden doğrulanır.', '',
               'Rapor yalnız kayıtlı verileri okur; yayın veya yeni ölçüm başlatmaz.']
+    experiments = report.get('experiments', {})
+    comparisons = [*experiments.get('comparisons', []), *experiments.get('cover_comparisons', [])]
+    lines += ['', '## Deney gözlemleri', '',
+              'Kapak ve açıklama ayrı deneylerdir. Aynı tema, hedef yaş ve sabit karşı faktör korunur; her kolda minimum 5 gözlem gerekir. Otomatik kazanan seçilmez.']
+    if not comparisons:
+        lines += ['', 'Henüz kayıtlı karşılaştırılabilir deney ataması yok.']
+    else:
+        lines += ['', '| Değişken | Tema | Hedef yaş | Kol | Kaydetme oranı / gözlem |',
+                  '| --- | --- | --- | --- | --- |']
+        for comparison in comparisons:
+            theme = html.escape(comparison['theme_id']).replace('|', '\\|').replace('\n', ' ').replace('\r', ' ')
+            for arm, rates in comparison['arms'].items():
+                rate = rates['save_rate']
+                value = 'kullanılamıyor' if rate['mean_rate'] is None else f"{rate['mean_rate']:.1%}"
+                lines.append(f"| {comparison['variable']} | {theme} | {comparison['target_age_hours']} saat | {arm} | {value} / {rate['observations']} |")
     return '\n'.join(lines) + '\n'

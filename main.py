@@ -52,7 +52,7 @@ from src.editorial_experiments import (
     CoverVariant,
     canonical_publish_slot,
     select_caption_hook_type,
-    assign_caption_experiment,
+    assign_presentation_experiment,
     controlled_caption_intro,
 )
 from src.engagement_features import (
@@ -990,11 +990,22 @@ def prepare_carousel_content(args, *, excluded_ids: set[str] | None = None) -> P
         (ai_analysis or {}).get("editorial_intro"), editorial_facts, fallback_intro
     )
     controlled_experiment = None
-    if os.environ.get("ARTFOLIO_CAPTION_EXPERIMENT_ENABLED") == "true":
-        controlled_experiment = assign_caption_experiment(theme_definition, run_seed=selection_run_seed.value)
-        caption_hook_type = CaptionHookType(controlled_experiment.variant)
-        editorial_intro = controlled_caption_intro(controlled_experiment,
-                                                  featured_count=len(artworks), body=fallback_intro)
+    controlled_cover_experiment = None
+    selected_cover_variant = CoverVariant.EDITORIAL.value
+    assignment = assign_presentation_experiment(
+        theme_definition, run_seed=selection_run_seed.value,
+        caption_enabled=os.environ.get("ARTFOLIO_CAPTION_EXPERIMENT_ENABLED") == "true",
+        cover_enabled=os.environ.get("ARTFOLIO_COVER_EXPERIMENT_ENABLED") == "true",
+    )
+    if assignment is not None:
+        if assignment.variable == "caption_hook_type":
+            controlled_experiment = assignment
+            caption_hook_type = CaptionHookType(assignment.variant)
+        else:
+            controlled_cover_experiment = assignment
+            selected_cover_variant = assignment.variant
+            caption_hook_type = CaptionHookType(assignment.caption_hook_type)
+        editorial_intro = controlled_caption_intro(assignment, featured_count=len(artworks), body=fallback_intro)
     hashtags = (
         ai_analysis.get("hashtags", "#Art #Artfolio #ClassicArt #MuseumArt")
         if ai_analysis else "#Art #Artfolio #ClassicArt #MuseumArt"
@@ -1020,7 +1031,7 @@ def prepare_carousel_content(args, *, excluded_ids: set[str] | None = None) -> P
         cover=cover,
         featured_artworks=artworks,
         caption=final_caption,
-        cover_variant=CoverVariant.EDITORIAL.value,
+        cover_variant=selected_cover_variant,
         caption_hook_type=caption_hook_type.value,
         set_optimization=set_optimization,
         sequence=sequence,
@@ -1029,6 +1040,7 @@ def prepare_carousel_content(args, *, excluded_ids: set[str] | None = None) -> P
     output_media_paths = [
         create_carousel_editorial_cover(
             cover=plan.cover,
+            cover_variant=plan.cover_variant,
             editorial_title=plan.editorial_title,
             editorial_subtitle=plan.editorial_subtitle,
             micro_facts=plan.cover_micro_facts,
@@ -1070,6 +1082,7 @@ def prepare_carousel_content(args, *, excluded_ids: set[str] | None = None) -> P
         "carousel_theme": plan.theme.id,
         "carousel_format": plan.theme.format.value,
         "caption_hook_type": plan.caption_hook_type,
+        "cover_variant": plan.cover_variant,
         "featured_count": len(plan.featured_artworks),
     }
     set_prediction = engagement_model.score_set(
@@ -1104,6 +1117,7 @@ def prepare_carousel_content(args, *, excluded_ids: set[str] | None = None) -> P
     )
     publication_metadata = {
         **({"controlled_experiment": controlled_experiment.model_dump()} if controlled_experiment is not None else {}),
+        **({"controlled_cover_experiment": controlled_cover_experiment.model_dump()} if controlled_cover_experiment is not None else {}),
         "selection_model_version": SELECTION_MODEL_VERSION,
         "engagement_model_version": ENGAGEMENT_MODEL_VERSION,
         "carousel_theme": plan.theme.id,
