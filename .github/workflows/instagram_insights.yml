@@ -2,7 +2,8 @@ name: Instagram Insights Collector
 
 on:
   schedule:
-    - cron: "0 3 * * *"
+    # Early 1h/6h collection windows cannot rely on one daily run.
+    - cron: "43 * * * *"
   workflow_dispatch:
 
 permissions:

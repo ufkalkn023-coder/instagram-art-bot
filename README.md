@@ -118,6 +118,15 @@ feed history lifecycle'ını mutate etmez.
 
 ### Instagram Insights collector
 
+Cloud collector her saatin 43. dakikasında çalışır; tamamlanmış hedef yaş
+ölçümleri yeniden sorgulanmaz. Böylece günlük koşular arasındaki boşluk yüzünden
+1h/6h ölçüm pencerelerinin kapanması riski azaltılır. GitHub zamanlaması yine
+gecikebilir; geçmişte kapanmış pencereler bugünkü verilerle doldurulmaz.
+Yerel saatlik collector ek bir toplama yoludur. `--health-check`, collector
+profilindeki ayrı state-bucket yapılandırması dahil erişimi ve son başarıyı
+kontrol eder; eksik yapılandırma giderilmeden yerel toplama başlamaz.
+[GitHub schedule gecikme açıklaması](https://docs.github.com/en/actions/reference/workflows-and-actions/events-that-trigger-workflows#schedule).
+
 Artfolio Reel analitiği posting akışından tamamen ayrıdır ve yalnız GET çağrıları yapar. Yerel `artfolio-reels` production history, ReelData ve `output/social` caption dosyaları okunur; son sahipli Instagram medyası içinden yalnız Reels/video kayıtları alınır. Tam veya normalize caption eşleşmesi önceliklidir. Caption dosyası yoksa artwork title + artist + üretim/yayın zamanı birlikte ikincil kanıt olabilir. Birden fazla aday asla otomatik bağlanmaz.
 
 ```console
