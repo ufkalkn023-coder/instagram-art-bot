@@ -61,7 +61,7 @@ jobs:
           CLOUDFLARE_STATE_R2_BUCKET_NAME: ${{ secrets.CLOUDFLARE_STATE_R2_BUCKET_NAME }}
           CLOUDFLARE_STATE_R2_ACCESS_KEY_ID: ${{ secrets.CLOUDFLARE_STATE_R2_ACCESS_KEY_ID }}
           CLOUDFLARE_STATE_R2_SECRET_ACCESS_KEY: ${{ secrets.CLOUDFLARE_STATE_R2_SECRET_ACCESS_KEY }}
-        run: python scripts/prepare_feed_queue.py --directory "$RUNNER_TEMP/feed-queue" --r2 --skip-keychain --check-refill --expected-sha "$GITHUB_SHA" --github-output
+        run: python scripts/prepare_feed_queue.py --directory "$RUNNER_TEMP/feed-queue" --r2 --skip-keychain --check-refill --early --expected-sha "$GITHUB_SHA" --github-output
       - name: Verify queue implementation
         if: github.event_name == 'workflow_dispatch' || steps.refill.outputs.refill_needed == 'true'
         run: pytest -q tests/test_feed_queue.py tests/test_r2_feed_queue.py tests/test_feed_queue_refill.py tests/test_feed_queue_rights.py tests/test_feed_queue_runtime.py
@@ -83,7 +83,7 @@ jobs:
           CLOUDFLARE_STATE_R2_SECRET_ACCESS_KEY: ${{ secrets.CLOUDFLARE_STATE_R2_SECRET_ACCESS_KEY }}
         run: |
           if [ "$GITHUB_EVENT_NAME" = "schedule" ]; then
-            python scripts/prepare_feed_queue.py --directory "$RUNNER_TEMP/feed-queue" --target "$QUEUE_TARGET" --r2 --skip-keychain --refill --expected-sha "$GITHUB_SHA"
+            python scripts/prepare_feed_queue.py --directory "$RUNNER_TEMP/feed-queue" --target "$QUEUE_TARGET" --r2 --skip-keychain --refill --early --expected-sha "$GITHUB_SHA"
           else
             python scripts/prepare_feed_queue.py --directory "$RUNNER_TEMP/feed-queue" --target "$QUEUE_TARGET" --r2 --skip-keychain
           fi

@@ -25,8 +25,8 @@ from src.local_credentials import ENGAGEMENT_AUDIT_PROFILE, credential_variables
 from src.rights_policy import RIGHTS_POLICY_ENV, RightsPolicyMode  # noqa: E402
 
 
-def _refill_decision(remote: R2PreparedFeedQueue, expected_sha: str) -> dict:
-    decision = remote.refill_status()
+def _refill_decision(remote: R2PreparedFeedQueue, expected_sha: str, *, early: bool = False) -> dict:
+    decision = remote.stock_status() if early else remote.refill_status()
     if not decision['refill_needed']:
         return decision
     store = PublicationStateStore(config=remote.config, client=remote.client)
@@ -37,7 +37,9 @@ def _refill_decision(remote: R2PreparedFeedQueue, expected_sha: str) -> dict:
         return {'refill_needed': False, 'reason': f'SCHEDULE_{status or "UNKNOWN"}'}
     if schedule.get('next_format') not in {'single', 'carousel'}:
         raise RuntimeError('Refill has no verified next Feed format')
-    return {**decision, 'next_format': schedule['next_format']}
+    if early and decision.get('first_retained_format') not in {None, schedule['next_format']}:
+        return {'refill_needed': False, 'reason': 'SCHEDULE_RETAINED_FORMAT_MISMATCH'}
+    return {**decision, 'next_format': decision.get('next_format') or schedule['next_format']}
 
 
 def _prepare(format_name: str, directory: Path, excluded_ids: set[str], *, theme_definition=None,
@@ -72,6 +74,7 @@ def run(argv: list[str] | None = None) -> int:
     modes.add_argument("--status", action="store_true", help="Read the manifest only")
     modes.add_argument("--check-refill", action="store_true", help="Read-only R2 queue and exact-SHA schedule gate")
     modes.add_argument("--refill", action="store_true", help="Prepare only an empty, exhausted or expired R2 batch")
+    parser.add_argument("--early", action="store_true", help="Keep fresh READY entries and add three packages when at most two remain")
     parser.add_argument("--expected-sha", default=os.environ.get('GITHUB_SHA'))
     parser.add_argument("--github-output", action="store_true", help="Emit the read-only refill gate to GITHUB_OUTPUT")
     parser.add_argument("--r2", action="store_true", help="Explicitly install the prepared batch into private state R2")
@@ -82,6 +85,8 @@ def run(argv: list[str] | None = None) -> int:
     if args.story_project and (args.status or args.check_refill or args.refill):
         parser.error("--story-project cannot be used with status or refill modes")
     conditional = args.refill or args.check_refill
+    if args.early and (not conditional or args.target != 3):
+        parser.error("--early requires refill/check-refill mode with target3")
     if conditional and (not args.r2 or not args.skip_keychain or args.first_format != 'auto'
                         or not re.fullmatch(r'[0-9a-f]{40}', args.expected_sha or '')):
         parser.error('Refill requires --r2 --skip-keychain, auto format and an exact --expected-sha')
@@ -93,7 +98,7 @@ def run(argv: list[str] | None = None) -> int:
         if args.r2 and not args.status and not args.skip_keychain:
             raise ValueError("R2 installation requires explicitly supplied state-writer credentials; use --skip-keychain")
         remote = R2PreparedFeedQueue(args.directory / '.remote-read') if args.r2 else None
-        decision = _refill_decision(remote, args.expected_sha) if conditional else None
+        decision = _refill_decision(remote, args.expected_sha, early=args.early) if conditional else None
         if decision is not None and (args.check_refill or not decision['refill_needed']):
             if args.github_output:
                 output = os.environ.get('GITHUB_OUTPUT')
@@ -140,18 +145,22 @@ def run(argv: list[str] | None = None) -> int:
                         if set(story.publication_ids).intersection(excluded):
                             raise ValueError("Story repeats an artwork already used in this queue")
                         return story
-                return planner.prepare(format_name, directory, excluded | story_ids, prepare=_prepare)
+                return planner.prepare(format_name, directory, excluded | story_ids | set((decision or {}).get("excluded_artwork_ids", [])), prepare=_prepare)
 
             queue.build(target=args.target, first_format=first_format,
                         prepare=prepare_slot, ttl_hours=args.ttl_hours)
         if args.r2:
             if not args.status:
                 if args.refill:
-                    latest = _refill_decision(remote, args.expected_sha)
+                    latest = _refill_decision(remote, args.expected_sha, early=args.early)
                     if (not latest['refill_needed']
-                            or latest.get('next_format') != decision['next_format']):
+                            or latest.get('next_format') != decision['next_format']
+                            or args.early and latest.get('queue_etag') != decision.get('queue_etag')):
                         raise RuntimeError('Refill authorization or queue changed during preparation')
-                remote.install(queue)
+                if args.early:
+                    remote.replenish(queue, expected_etag=decision["queue_etag"])
+                else:
+                    remote.install(queue)
             result = remote.status()
         else:
             result = queue.status()

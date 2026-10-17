@@ -752,3 +752,18 @@ Her parent bir gözlemdir; sayfalar bağımsız örnek sayılmaz. Kapsama, gözl
 kaydetme/beğeni oranı ve yetersiz örneklem açıkça gösterilir. Eksik metrik sıfır
 olarak doldurulmaz ve otomatik kazanan seçilmez. Statik HTML çıktısı çalışmaya
 devam eder; yenileme düğmesi yalnız yerel sunucu üzerinden etkinleşir.
+
+### Kuyruk tükenmeden erken stok hazırlama
+
+Zamanlanmış hazırlama `--check-refill --early` ve `--refill --early` kullanır.
+En fazla iki geçerli READY paket kaldığında üç yeni paket hazırlanır; üç veya
+fazla READY varken hazırlama yapılmaz. Mevcut tüm kaynak kimlikleri dışlanır,
+format sırası hazır kuyruğun sonundan devam eder. Yeni parti oluşturulurken
+exact-SHA üretim onayı, mevcut sıradaki format ve manifest ETag yeniden doğrulanır.
+
+Eski manifest önce değişmez arşive alınır. Geçerli READY kayıtları byte düzeyinde
+korunarak yeni üç paket sonlarına eklenir; toplam en fazla beş paket olur.
+CLAIMED, belirsiz yayın sonucu, bozuk kayıt veya eşzamanlı manifest değişikliği
+sessizce onarılmaz. Koşullu yazma çatışması/belirsizliği tekrar denenmez. Hazırlama
+yayın yetkisi vermez; tüketimdeki güncel hak, geçmiş, TTL ve48saat kontrolleri sürer.
+Eski `--refill` davranışı `--early` olmadan yalnız tükenmiş/eskimiş partiyi değiştirir.

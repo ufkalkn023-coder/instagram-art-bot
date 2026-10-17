@@ -16,6 +16,7 @@ from pathlib import Path
 from botocore.exceptions import BotoCoreError, ClientError
 
 from src.feed_queue import MAX_MANIFEST_BYTES, MAX_PACKAGE_AGE_HOURS, PreparedFeedQueue, _now
+from src.models import require_canonical_artwork_id
 from src.insights_storage import parse_aware_timestamp
 from src import publication_state
 from src.publication_state import StateConfiguration, canonical_bytes, seal
@@ -162,7 +163,47 @@ class R2PreparedFeedQueue(PreparedFeedQueue):
         return {'refill_needed': True,
                 'reason': 'EXPIRED' if expired else 'EXHAUSTED' if packages else 'EMPTY'}
 
+    def stock_status(self, *, now: datetime | None = None) -> dict:
+        """Plan early additions without mutating active packages or downloading assets."""
+        document, etag = self._read_manifest()
+        return self._stock_status(document, etag, _now(now))
+
+    @staticmethod
+    def _stock_status(document: dict, etag: str | None, timestamp: datetime) -> dict:
+        replacement = R2PreparedFeedQueue._replacement_status(document, timestamp)
+        packages = document['packages']
+        if any(p['state'] == 'CLAIMED' for p in packages):
+            return {**replacement, 'queue_etag': etag}
+        safe_rejections = {'expired', 'invalid_age', 'protected_artwork',
+                           'fresh_rights_unconfirmed', 'invalid_content'}
+        if any(p['state'] == 'QUARANTINED' and p.get('reason') not in safe_rejections for p in packages):
+            return {'refill_needed': False, 'reason': 'QUARANTINED_PRESENT', 'queue_etag': etag}
+        ready = [p for p in packages if p['state'] == 'READY'
+                 and parse_aware_timestamp(p['expires_at']) > timestamp]
+        formats = [p['content'].get('publication_format') for p in ready]
+        if any(f not in {'single', 'carousel'} for f in formats):
+            raise RuntimeError('Prepared stock has an invalid format')
+        if any(a == b for a, b in zip(formats, formats[1:])):
+            return {'refill_needed': False, 'reason': 'RETAINED_FORMAT_ORDER_INVALID', 'queue_etag': etag}
+        excluded = sorted({require_canonical_artwork_id(art['id'])
+                           for p in packages for art in p['content']['artworks']})
+        return {'refill_needed': len(ready) <= 2,
+                'reason': ('LOW_STOCK' if ready else replacement['reason']) if len(ready) <= 2 else 'READY_PRESENT',
+                'queue_etag': etag, 'ready_count': len(ready),
+                'excluded_artwork_ids': excluded,
+                'first_retained_format': formats[0] if formats else None,
+                'next_format': ('single' if formats[-1] == 'carousel' else 'carousel') if formats else None}
+
+    def replenish(self, local: PreparedFeedQueue, *, expected_etag: str | None,
+                  now: datetime | None = None):
+        """Archive terminal evidence, keep fresh READY bytes and append under one CAS."""
+        return self._install(local, now=now, retain_ready=True, expected_etag=expected_etag)
+
     def install(self, local: PreparedFeedQueue, *, now: datetime | None = None):
+        return self._install(local, now=now)
+
+    def _install(self, local: PreparedFeedQueue, *, now: datetime | None = None,
+                 retain_ready: bool = False, expected_etag: str | None = None):
         timestamp = _now(now)
         document = local._load()
         if not document["packages"]:
@@ -188,7 +229,22 @@ class R2PreparedFeedQueue(PreparedFeedQueue):
                           for asset in package["content"]["assets"])
         with self._lock():
             existing = self._load()
-            if not self._replacement_status(existing, timestamp)['refill_needed']:
+            retained = []
+            if retain_ready:
+                if self._etag != expected_etag:
+                    raise RuntimeError('Prepared stock changed during acquisition')
+                stock = self._stock_status(existing, self._etag, timestamp)
+                if not stock['refill_needed']:
+                    raise RuntimeError('Prepared stock is no longer eligible')
+                retained = [copy.deepcopy(p) for p in existing['packages']
+                            if p['state'] == 'READY' and parse_aware_timestamp(p['expires_at']) > timestamp]
+                if len(retained) + len(document['packages']) > 5:
+                    raise ValueError('Prepared stock exceeds five packages')
+                if ids.intersection(stock['excluded_artwork_ids']):
+                    raise ValueError('Prepared stock repeats an existing source')
+                if retained and document['packages'][0]['content']['publication_format'] != stock['next_format']:
+                    raise ValueError('Prepared stock does not continue format alternation')
+            elif not self._replacement_status(existing, timestamp)['refill_needed']:
                 raise RuntimeError("Prepared R2 batch contains unfinished packages")
             for item in existing["packages"]:
                 expiry = parse_aware_timestamp(item.get("expires_at"))
@@ -204,4 +260,4 @@ class R2PreparedFeedQueue(PreparedFeedQueue):
                     raise RuntimeError("Prepared R2 archive identity conflict")
             for key, data in assets:
                 self._put(key, data, etag=None, content_type="image/jpeg")
-            self._write(document)
+            self._write({**document, "packages": retained + document["packages"]})
