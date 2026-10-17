@@ -632,6 +632,17 @@ reddedilir ve son geçerli taslak korunur. Kaydetme, sürüm kontrolü ve süre�
 kilitle korunur; tam sürüm tek atomik işaretçiyle değiştirilir. HTTP sunucusu yalnızca
 127.0.0.1 üzerinde çalışır ve yazma işlemleri origin/host/oturum kontrolünden geçer.
 
+Detay sayfalarında özgün eser önizlemesi üzerinde fare veya dokunmayla yeni bir
+alan seçilebilir. Seçim çerçevesi, dört sayısal koordinat ve kırpılmış önizleme
+birlikte güncellenir; koordinatlar klavyeyle de düzenlenebilir. İptal edilen veya
+sıfır alanlı sürükleme önceki seçimi korur. Geçersiz koordinatlar önizlemede
+işaretlenir ve kayıt engellenir; çözünürlük ve içerik kontrolleri kayıt sırasında
+yeniden uygulanır. Görsel önizlemeler yönü düzeltilmiş küçük JPEG'ler olarak
+HTML'e gömülür; TIFF kaynaklar da çevrimdışı görüntülenir, özgün dosyalar değişmez.
+Statik galeride alan denenebilir; kalıcı kayıt için yerel editör sunucusu gerekir.
+Eski projelerde yeni kontrolleri görmek için `render --project ...` çalıştırın;
+bu işlem yeni sürüm oluşturur ve varsa önceki editoryal onayı geçersiz kılar.
+
 Proje `sources/`, `pages/`, `project.json`, `report.json`, `index.html` ve geçmiş
 sürümler için `.revisions/` içerir. Son üç dosya `current` üzerinden aynı sürüme
 bağlıdır; taşırken sembolik bağlantıları koruyun. Görsel, kaynak metadata'sı, font,
