@@ -1,6 +1,7 @@
 """Early stock keeps active ownership and sources intact while adding future posts."""
 import copy
 import json
+from datetime import timedelta
 
 import pytest
 
@@ -69,6 +70,25 @@ def test_replenishment_preserves_ready_entries_archives_and_appends(tmp_path):
     assert [p['content']['publication_format'] for p in after['packages']] == ['single','carousel','single','carousel','single']
     archives = [json.loads(data) for key,data in queue.client.objects.items() if '/archives/' in key]
     assert before in archives
+
+
+
+def test_early_replenishment_archives_original_expired_and_fresh_entries(tmp_path):
+    queue = low_stock(tmp_path)
+    document, _ = queue._read_manifest()
+    document['packages'][1].update(
+        created_at=(NOW - timedelta(days=2)).isoformat(),
+        expires_at=(NOW - timedelta(hours=1)).isoformat(),
+    )
+    original = canonical_bytes(seal(document))
+    queue.client.objects[queue.manifest_key] = original
+    before, etag = queue._read_manifest()
+    queue.replenish(next_batch(tmp_path), expected_etag=etag, now=NOW)
+    archives = [data for key, data in queue.client.objects.items() if '/archives/' in key]
+    assert original in archives
+    after, _ = queue._read_manifest()
+    assert after['packages'][0] == before['packages'][2]
+    assert len(after['packages']) == 4
 
 
 def test_stale_etag_rejects_before_asset_upload_or_manifest_change(tmp_path):

@@ -246,10 +246,13 @@ class R2PreparedFeedQueue(PreparedFeedQueue):
                     raise ValueError('Prepared stock does not continue format alternation')
             elif not self._replacement_status(existing, timestamp)['refill_needed']:
                 raise RuntimeError("Prepared R2 batch contains unfinished packages")
-            for item in existing["packages"]:
-                expiry = parse_aware_timestamp(item.get("expires_at"))
-                if item["state"] == "READY" and expiry is not None and expiry <= timestamp:
-                    item.update(state="QUARANTINED", reason="expired")
+            # Early stock archives the exact observed manifest, including expired entries.
+            # Keep the legacy full-replacement expiry annotation unchanged.
+            if not retain_ready:
+                for item in existing["packages"]:
+                    expiry = parse_aware_timestamp(item.get("expires_at"))
+                    if item["state"] == "READY" and expiry is not None and expiry <= timestamp:
+                        item.update(state="QUARANTINED", reason="expired")
             if existing["packages"]:
                 archive = canonical_bytes(seal(existing))
                 key = f"{QUEUE_PREFIX}/archives/{hashlib.sha256(archive).hexdigest()}.json"
