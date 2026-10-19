@@ -22,6 +22,7 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from src.feed_dashboard import render_feed_dashboard  # noqa: E402
+from src.feed_selection_report import selection_metadata  # noqa: E402
 from src.feed_queue import PreparedFeedQueue  # noqa: E402
 from src.feed_schedule import FeedScheduleManager  # noqa: E402
 from src.insights_storage import InsightsStorage, parse_aware_timestamp  # noqa: E402
@@ -85,7 +86,8 @@ def _queue_details(packages, thumbnail_loader=None):
                      "expires_at": package.get("expires_at"), "reason": package.get("reason"),
                      "title": story.get("public_title") or (caption.splitlines()[0] if isinstance(caption, str) and caption else ""),
                      "thumbnail": thumbnail, "source_count": len(sources) if isinstance(sources, list) else None,
-                     "page_count": len(assets) if isinstance(assets, list) else None})
+                     "page_count": len(assets) if isinstance(assets, list) else None,
+                     "selection_metadata": selection_metadata(content.get("publication_metadata"))})
     return rows
 
 
@@ -113,7 +115,8 @@ def _queue_report_rows(document):
                      "publication_format": row["publication_format"],
                      "expires_at": row.get("expires_at"), "source_count": count,
                      "page_count": page_count,
-                     "title": row.get("title") or row.get("public_title") or ""})
+                     "title": row.get("title") or row.get("public_title") or "",
+                     "selection_metadata": selection_metadata(row.get("selection_metadata"))})
     return rows
 
 
@@ -154,6 +157,7 @@ def parse_dashboard_args(argv=None, *, serving=False):
     parser.add_argument("--queue", type=Path)
     parser.add_argument("--queue-report", type=Path, help="Use an existing bounded queue status snapshot")
     parser.add_argument("--story-project", type=Path, action="append", default=[])
+    parser.add_argument("--feasibility", type=Path, help="Optional retained local theme_feasibility.json snapshot")
     parser.add_argument("--now", help="Timezone-aware report time")
     if serving:
         parser.add_argument("--port", type=int, default=38143)
@@ -233,7 +237,8 @@ def run(argv=None) -> int:
     try:
         schedule, queue, history, snapshots, stories = load_dashboard_inputs(args, now=timestamp)
         page = render_feed_dashboard(schedule, queue, history, snapshots,
-                                     now=timestamp, stories=stories)
+                                     now=timestamp, stories=stories,
+                                     feasibility=_read_json(args.feasibility) if args.feasibility else None)
         args.output.parent.mkdir(parents=True, exist_ok=True)
         with args.output.open("x", encoding="utf-8") as output:
             output.write(page)

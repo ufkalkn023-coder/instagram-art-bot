@@ -24,6 +24,8 @@ from src.publication_state import PublicationStateStore  # noqa: E402
 from src.r2_feed_queue import R2PreparedFeedQueue  # noqa: E402
 from src.local_credentials import ENGAGEMENT_AUDIT_PROFILE, credential_variables, load_keychain_credentials  # noqa: E402
 from src.rights_policy import RIGHTS_POLICY_ENV, RightsPolicyMode  # noqa: E402
+from src.feed_content_policy import resolve_content_mode  # noqa: E402
+from src.editorial_feed import EditorialStockUnavailable, editorial_readiness  # noqa: E402
 
 
 def _refill_decision(remote: R2PreparedFeedQueue, expected_sha: str, *, early: bool = False) -> dict:
@@ -76,14 +78,23 @@ def run(argv: list[str] | None = None) -> int:
     modes.add_argument("--status", action="store_true", help="Read the manifest only")
     modes.add_argument("--check-refill", action="store_true", help="Read-only R2 queue and exact-SHA schedule gate")
     modes.add_argument("--refill", action="store_true", help="Prepare only an empty, exhausted or expired R2 batch")
+    modes.add_argument('--check-editorial', action='store_true', help='Read-only approval and format readiness; never builds a queue')
+    parser.add_argument('--content-mode', choices=('editorial', 'legacy'), help='Default: reviewed editorial stock')
+    parser.add_argument('--editorial-workspace', type=Path, help='Select reviewed v2 projects from this local workspace')
     parser.add_argument("--early", action="store_true", help="Keep fresh READY entries and add three packages when at most two remain")
     parser.add_argument("--expected-sha", default=os.environ.get('GITHUB_SHA'))
     parser.add_argument("--github-output", action="store_true", help="Emit the read-only refill gate to GITHUB_OUTPUT")
     parser.add_argument("--r2", action="store_true", help="Explicitly install the prepared batch into private state R2")
     parser.add_argument("--skip-keychain", action="store_true", help="Use existing environment credentials instead")
     parser.add_argument("--story-project", action="append", type=Path, default=[],
-                        help="Reviewed story project to use for the next carousel slot (repeatable)")
+                        help="Reviewed story project for the next matching single/carousel slot (repeatable)")
     args = parser.parse_args(argv)
+    if args.editorial_workspace and args.story_project:
+        parser.error('Select an editorial workspace or explicit story projects')
+    if args.editorial_workspace and args.status:
+        parser.error('--editorial-workspace cannot be used with --status')
+    if args.check_editorial and (args.r2 or not (args.editorial_workspace or args.story_project)):
+        parser.error('--check-editorial requires local project input and cannot use --r2')
     if args.story_project and (args.status or args.check_refill or args.refill):
         parser.error("--story-project cannot be used with status or refill modes")
     conditional = args.refill or args.check_refill
@@ -97,10 +108,29 @@ def run(argv: list[str] | None = None) -> int:
     queue = PreparedFeedQueue(args.directory)
     original_policy = os.environ.get(RIGHTS_POLICY_ENV)
     try:
+        content_mode = resolve_content_mode(args.content_mode)
+        if args.editorial_workspace and content_mode != 'editorial' or args.check_editorial and content_mode != 'editorial':
+            raise ValueError('Editorial workspace checks require editorial content mode')
+        if content_mode == 'editorial' and not (args.status or conditional or args.editorial_workspace or args.story_project):
+            raise EditorialStockUnavailable('EDITORIAL_REVIEW_REQUIRED: supply --editorial-workspace or reviewed --story-project inputs')
         if args.r2 and not args.status and not args.skip_keychain:
             raise ValueError("R2 installation requires explicitly supplied state-writer credentials; use --skip-keychain")
         remote = R2PreparedFeedQueue(args.directory / '.remote-read') if args.r2 else None
         decision = _refill_decision(remote, args.expected_sha, early=args.early) if conditional else None
+        if (decision is not None and content_mode == 'editorial'
+                and decision['reason'] in {'READY_PRESENT', 'LOW_STOCK'}):
+            packages = remote._read_manifest()[0]['packages']
+            ready = [item for item in packages if item['state'] == 'READY']
+            editorial_ready = [item for item in ready if item['content'].get('content_kind') == 'story'
+                               and item['content'].get('story_delivery', {}).get('schema_version') == 'artfolio-story-delivery-v2']
+            if len(editorial_ready) != len(ready):
+                decision = {**decision, 'refill_needed': False, 'reason': 'EDITORIAL_REVIEW_REQUIRED',
+                            'requires_editorial_review': True, 'editorial_ready_count': len(editorial_ready),
+                            'legacy_stock_preserved': True}
+        if (decision is not None and decision['refill_needed'] and content_mode == 'editorial'
+                and not (args.editorial_workspace or args.story_project)):
+            decision = {**decision, 'refill_needed': False, 'reason': 'EDITORIAL_REVIEW_REQUIRED',
+                        'requires_editorial_review': True}
         if decision is not None and (args.check_refill or not decision['refill_needed']):
             if args.github_output:
                 output = os.environ.get('GITHUB_OUTPUT')
@@ -111,7 +141,7 @@ def run(argv: list[str] | None = None) -> int:
             print(json.dumps(decision, indent=2))
             return 0
         if not args.status:
-            if not args.skip_keychain:
+            if content_mode == 'legacy' and not args.skip_keychain:
                 status = load_keychain_credentials(ENGAGEMENT_AUDIT_PROFILE)
                 if any(not status[name] for name in credential_variables(ENGAGEMENT_AUDIT_PROFILE)):
                     raise ValueError("Read-only engagement-audit credentials are incomplete")
@@ -119,39 +149,61 @@ def run(argv: list[str] | None = None) -> int:
             first_format = (decision['next_format'] if decision is not None else
                             main._resolve_production_mode(SimpleNamespace(mode="auto")).value
                             if args.first_format == "auto" else args.first_format)
+            if content_mode == 'editorial':
+                if args.editorial_workspace:
+                    from src.editorial_workspace import load_workspace
+                    entries = load_workspace(args.editorial_workspace)['projects']
+                else:
+                    entries = [dict(id=f'project-{n}', directory=str(path)) for n, path in enumerate(args.story_project, 1)]
+                readiness = editorial_readiness(entries, target=args.target, first_format=first_format,
+                                                excluded_ids=(decision or {}).get('excluded_artwork_ids', []))
+                if args.check_editorial:
+                    print(json.dumps(readiness, ensure_ascii=False, indent=2))
+                    return 0
+                if not readiness['ready']:
+                    missing = readiness['missing']
+                    raise EditorialStockUnavailable(f'EDITORIAL_REVIEW_REQUIRED: missing reviewed single={missing["single"]}, carousel={missing["carousel"]}; use --check-editorial for details')
+                args.story_project = [Path(row['directory']) for row in readiness['selected']]
             slots = _carousel_slots(args.target, first_format)
-            if len(args.story_project) > len(slots):
-                raise ValueError("More story projects were supplied than available carousel slots")
             story_contents = []
             story_ids = set()
             if args.story_project:
                 from src.story_feed import prepare_story_content
                 story_contents = [prepare_story_content(path) for path in args.story_project]
+                if content_mode == 'editorial' and any(content.story_delivery.reviewed_digest != row['digest']
+                                                       for content, row in zip(story_contents, readiness['selected'])):
+                    raise EditorialStockUnavailable('EDITORIAL_REVIEW_REQUIRED: selected project changed during preparation')
                 for content in story_contents:
                     overlap = story_ids.intersection(content.publication_ids)
                     if overlap:
                         raise ValueError("Story projects repeat an artwork")
                     story_ids.update(content.publication_ids)
+            matching_stories = {'single': [], 'carousel': []}
+            for path, content in zip(args.story_project, story_contents):
+                matching_stories[content.publication_format].append((path, content.story_delivery))
+            capacity = {'carousel': len(slots), 'single': args.target - len(slots)}
+            for format_name, stories in matching_stories.items():
+                if len(stories) > capacity[format_name]:
+                    raise ValueError(f'More story projects were supplied than available {format_name} slots')
             from src.feed_editorial import FeedPairPlanner
             from src.feed_variety import context_from_inventory, variety_enabled
             inventory = ()
             if args.early and remote is not None and variety_enabled():
                 inventory = context_from_inventory(remote._read_manifest()[0]['packages'], now=datetime.now(timezone.utc))
             planner = FeedPairPlanner(inventory_context=inventory)
-            carousel_position = 0
-
             def prepare_slot(format_name, directory, excluded):
-                nonlocal carousel_position
-                if format_name == "carousel":
-                    slot = carousel_position
-                    carousel_position += 1
-                    if slot < len(story_contents):
-                        from src.story_feed import prepare_story_content
-                        story = prepare_story_content(args.story_project[slot])
-                        if set(story.publication_ids).intersection(excluded):
-                            raise ValueError("Story repeats an artwork already used in this queue")
-                        planner.remember(story)
-                        return story
+                if matching_stories[format_name]:
+                    from src.story_feed import prepare_story_content
+                    path, expected_delivery = matching_stories[format_name].pop(0)
+                    story = prepare_story_content(path)
+                    if story.story_delivery != expected_delivery:
+                        raise ValueError('Reviewed story changed during queue preparation')
+                    if set(story.publication_ids).intersection(excluded):
+                        raise ValueError("Story repeats an artwork already used in this queue")
+                    planner.remember(story)
+                    return story
+                if content_mode == 'editorial':
+                    raise EditorialStockUnavailable('EDITORIAL_REVIEW_REQUIRED: no reviewed project for this slot')
                 return planner.prepare(format_name, directory, excluded | story_ids | set((decision or {}).get("excluded_artwork_ids", [])), prepare=_prepare)
 
             queue.build(target=args.target, first_format=first_format,
@@ -172,6 +224,8 @@ def run(argv: list[str] | None = None) -> int:
         else:
             result = queue.status()
         print(json.dumps(result, indent=2))
+    except EditorialStockUnavailable as error:
+        parser.exit(1, str(error) + '\n')
     except (OSError, ValueError, RuntimeError) as error:
         parser.exit(1, f"Feed queue preparation failed ({type(error).__name__}); existing artifacts are preserved\n")
     finally:

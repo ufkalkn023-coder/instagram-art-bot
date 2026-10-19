@@ -21,6 +21,7 @@ from src import story_design, editorial_design, carousel_cover
 from src.story_design import RENDERER_VERSION, render_story_slide
 from src.story_plan import StoryPlan
 from src.story_quality import StoryIssue, StoryQuality, assess_story
+from src.editorial_story import EditorialStoryPlan, assess_editorial_story
 
 
 class RevisionConflict(ValueError):
@@ -40,7 +41,7 @@ class StoryProject(StrictModel):
     schema_version: str = "artfolio-project-v1"
     revision: int = Field(ge=1)
     sources: tuple[SourceArtwork, ...] = Field(min_length=1, max_length=8)
-    plan: StoryPlan
+    plan: StoryPlan | EditorialStoryPlan = Field(discriminator='schema_version')
     headline_history: tuple[str, ...] = Field(default=(), max_length=100)
 
     @model_validator(mode="after")
@@ -94,14 +95,23 @@ def _fingerprint(path: Path) -> str:
     return hashlib.sha256(path.read_bytes()).hexdigest()
 
 
+def project_quality(plan, sources, *, headline_history=None):
+    if isinstance(plan, EditorialStoryPlan):
+        return assess_editorial_story(plan, sources, headline_history=headline_history)
+    return assess_story(plan, sources, headline_history=headline_history)
+
+
 def _render_project(directory: Path, project: StoryProject, *, verify_only: bool = False) -> dict:
-    quality = assess_story(
+    quality = project_quality(
         project.plan,
         list(project.sources),
         headline_history=list(project.headline_history),
     )
     if not quality.can_render:
         raise QualityBlocked(quality)
+    if isinstance(project.plan, EditorialStoryPlan):
+        from src.editorial_story import render_editorial_project
+        return render_editorial_project(directory, project, verify_only=verify_only)
     registry = {s.artwork.canonical_id: s for s in project.sources}
     fingerprints = {
         identity: _fingerprint(Path(source.image_path))
@@ -259,6 +269,11 @@ def _persist(directory: Path, project: StoryProject, report: dict) -> None:
     snapshots.mkdir(exist_ok=True)
     snapshot = snapshots / f"{project.revision:06d}-{uuid4().hex}"
     snapshot.mkdir()
+    if (directory / 'current').exists():
+        previous = (directory / 'current').resolve()
+        if not previous.is_relative_to(snapshots):
+            raise ValueError('Previous revision escaped project')
+        _atomic(snapshot / '.previous.json', json.dumps({'snapshot': previous.relative_to(directory).as_posix()}))
     for name, content in documents.items():
         _atomic(snapshot / name, content)
     for name in documents:
@@ -288,12 +303,12 @@ def _project_lock(directory: Path):
 def _create_project(
     directory: Path,
     sources: list[SourceArtwork],
-    plan: StoryPlan,
+    plan: StoryPlan | EditorialStoryPlan,
     *,
     headline_history: list[str] | None = None,
 ) -> dict:
     directory = directory.resolve()
-    quality = assess_story(plan, sources, headline_history=headline_history)
+    quality = project_quality(plan, sources, headline_history=headline_history)
     if not quality.can_render:
         raise QualityBlocked(quality)
     directory.mkdir(parents=True, exist_ok=True)
@@ -323,7 +338,10 @@ def _update_project(
     project = load_project(directory)
     if type(expected_revision) is not int or project.revision != expected_revision:
         raise RevisionConflict("Project changed; reload before saving")
-    plan = StoryPlan.model_validate(plan_data)
+    plan_type = EditorialStoryPlan if plan_data.get('schema_version') == 'artfolio-editorial-story-v2' else StoryPlan
+    plan = plan_type.model_validate(plan_data)
+    if type(plan) is not type(project.plan):
+        raise ValueError('A saved project cannot switch plan schema versions')
     updated = StoryProject(
         revision=project.revision + 1,
         sources=project.sources,
@@ -338,14 +356,14 @@ def _update_project(
 def create_project(
     directory: Path,
     sources: list[SourceArtwork],
-    plan: StoryPlan,
+    plan: StoryPlan | EditorialStoryPlan,
     *,
     headline_history: list[str] | None = None,
 ) -> dict:
     directory = directory.resolve()
     if directory.exists() and (not directory.is_dir() or any(directory.iterdir())):
         raise ValueError("Project directory must be empty")
-    quality = assess_story(plan, sources, headline_history=headline_history)
+    quality = project_quality(plan, sources, headline_history=headline_history)
     if not quality.can_render:
         raise QualityBlocked(quality)
     directory.parent.mkdir(parents=True, exist_ok=True)
@@ -372,7 +390,7 @@ def update_project(directory: Path, plan_data: dict, *, expected_revision: int) 
         )
 
 
-def approve_story(directory: Path, *, expected_revision: int) -> dict:
+def approve_story(directory: Path, *, expected_revision: int, expected_digest: str | None = None) -> dict:
     """Record explicit editorial acceptance of exact local source/page bytes."""
     from datetime import datetime, timezone
     from src.story_feed import review_snapshot
@@ -383,6 +401,8 @@ def approve_story(directory: Path, *, expected_revision: int) -> dict:
         if type(expected_revision) is not int or project.revision != expected_revision:
             raise RevisionConflict("Project changed; review the current revision")
         snapshot = review_snapshot(directory, project)
+        if expected_digest is not None and expected_digest != snapshot['digest']:
+            raise RevisionConflict('Project bytes changed; review the displayed content again')
         review = dict(schema_version="artfolio-story-review-v1",
                       revision=project.revision, digest=snapshot["digest"],
                       reviewed_at=datetime.now(timezone.utc).isoformat())

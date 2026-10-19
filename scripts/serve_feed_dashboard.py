@@ -10,7 +10,7 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from scripts.report_feed_dashboard import load_dashboard_inputs, parse_dashboard_args  # noqa: E402
+from scripts.report_feed_dashboard import _read_json, load_dashboard_inputs, parse_dashboard_args  # noqa: E402
 from src.feed_dashboard import render_feed_dashboard  # noqa: E402
 from src.feed_dashboard_server import dashboard_server  # noqa: E402
 
@@ -21,7 +21,8 @@ def run(argv=None) -> int:
     def load_page():
         now = fixed_time if args.now else datetime.now().astimezone()
         schedule, queue, history, snapshots, stories = load_dashboard_inputs(args, now=now)
-        return render_feed_dashboard(schedule, queue, history, snapshots, now=now, stories=stories)
+        return render_feed_dashboard(schedule, queue, history, snapshots, now=now, stories=stories,
+                                     feasibility=_read_json(args.feasibility) if args.feasibility else None)
 
     try:
         with dashboard_server(load_page, port=args.port) as server:

@@ -1,6 +1,5 @@
 import pytest
 from src import content_diversity
-from src.models import NormalizedArtwork
 
 def test_extract_century():
     assert content_diversity._extract_century("c. 1850") == "1800s"

@@ -19,8 +19,9 @@ from src.story_project import (
     _project_lock,
     _render_project,
     load_project,
+    project_quality,
 )
-from src.story_quality import assess_story
+from src.editorial_story import EditorialStoryPlan
 
 
 def _hash(path: Path) -> str:
@@ -28,7 +29,7 @@ def _hash(path: Path) -> str:
 
 
 def review_snapshot(directory: Path, project) -> dict:
-    quality = assess_story(
+    quality = project_quality(
         project.plan,
         list(project.sources),
         headline_history=list(project.headline_history),
@@ -53,6 +54,8 @@ def review_snapshot(directory: Path, project) -> dict:
     verified = _render_project(directory, project, verify_only=True)
     if verified["package"]["slides"] != slides:
         raise ValueError("Story review render no longer matches the current plan")
+    if isinstance(project.plan, EditorialStoryPlan) and report.get('caption') != verified['caption']:
+        raise ValueError('Editorial review caption differs from the rendered brief')
     paths, pages = [], []
     for slide, rendered in zip(project.plan.slides, slides):
         if (
@@ -98,7 +101,7 @@ def review_snapshot(directory: Path, project) -> dict:
     digest = hashlib.sha256(
         json.dumps(identity, sort_keys=True, ensure_ascii=False).encode()
     ).hexdigest()
-    return dict(digest=digest, paths=paths, pages=pages, sources=sources)
+    return dict(digest=digest, paths=paths, pages=pages, sources=sources, caption=verified.get('caption'))
 
 
 def _artwork(source) -> dict:
@@ -155,7 +158,11 @@ def prepare_story_content(directory: Path) -> PreparedStoryContent:
             )
             if p
         )
+        editorial = isinstance(project.plan, EditorialStoryPlan)
+        if editorial:
+            caption = snapshot['caption']
         delivery = StoryDelivery(
+            schema_version='artfolio-story-delivery-v2' if editorial else 'artfolio-story-delivery-v1',
             reviewed_revision=project.revision,
             reviewed_digest=snapshot["digest"],
             source_ids=project.plan.artwork_ids,
@@ -174,7 +181,7 @@ def prepare_story_content(directory: Path) -> PreparedStoryContent:
         )
         metadata = dict(story_delivery=delivery.model_dump(mode="json"))
         return PreparedStoryContent(
-            "carousel",
+            delivery.publication_format,
             artworks,
             tuple(snapshot["paths"]),
             caption,
@@ -207,7 +214,7 @@ def export_story_content(directory: Path, output: Path) -> dict:
             assets.append(dict(path=target.name, sha256=page.sha256))
         manifest = dict(
             content_kind="story",
-            publication_format="carousel",
+            publication_format=content.publication_format,
             artworks=content.artworks,
             assets=assets,
             caption=content.caption,

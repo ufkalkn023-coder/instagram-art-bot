@@ -15,6 +15,8 @@ from src.story_editor import editor_server
 from src.story_plan import build_story_plan
 from src.story_project import approve_story, create_project, load_project, update_project
 from src.story_feed import export_story_content
+from src.editorial_story import EditorialStoryPlan
+from scripts.preview_editorial_story import _json
 
 
 def main() -> None:
@@ -40,6 +42,13 @@ def main() -> None:
         nargs="*",
         choices=("museum_journal", "artwork_first", "detail_study"),
     )
+    editorial = commands.add_parser('create-editorial')
+    editorial.add_argument('--manifest', type=Path, required=True)
+    editorial.add_argument('--brief', type=Path, required=True)
+    editorial.add_argument('--output', type=Path, required=True)
+    editorial.add_argument('--theme-id', required=True)
+    editorial.add_argument('--theme-title', required=True)
+    editorial.add_argument('--style', choices=('journal', 'artwork_led', 'detail_study'), default='journal')
     render = commands.add_parser("render")
     render.add_argument("--project", type=Path, required=True)
     serve = commands.add_parser("serve")
@@ -62,7 +71,16 @@ def main() -> None:
         finally:
             server.server_close()
         return
-    if args.command == "render":
+    if args.command == 'create-editorial':
+        manifest = _json(args.manifest, 2_000_000)
+        if not isinstance(manifest, dict) or not isinstance(manifest.get('artworks'), list):
+            parser.error('Manifest requires an artworks list')
+        sources = load_sources(args.manifest, count=len(manifest['artworks']))
+        plan = EditorialStoryPlan(theme_id=args.theme_id, theme_title=args.theme_title,
+                                  brief=_json(args.brief, 128_000), style=args.style)
+        selected = [source for source in sources if source.artwork.canonical_id in plan.artwork_ids]
+        report = create_project(args.output, selected, plan)
+    elif args.command == "render":
         project = load_project(args.project)
         report = update_project(
             args.project,

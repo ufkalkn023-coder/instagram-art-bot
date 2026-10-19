@@ -5,7 +5,7 @@ import math
 import re
 import unicodedata
 from dataclasses import dataclass
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any
 

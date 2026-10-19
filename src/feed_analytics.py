@@ -32,7 +32,7 @@ def _feed_publications(history: Mapping[str, object], now: datetime, diagnostics
             continue
         delivery = raw.get("story_delivery")
         story = {}
-        if isinstance(delivery, Mapping) and delivery.get("schema_version") == "artfolio-story-delivery-v1":
+        if isinstance(delivery, Mapping) and delivery.get("schema_version") in {"artfolio-story-delivery-v1", "artfolio-story-delivery-v2"}:
             controlled = {
                 "narrative": {"single_study", "comparison", "thematic_selection"},
                 "cover_variant": {"museum_journal", "artwork_first", "detail_study"},
@@ -43,7 +43,8 @@ def _feed_publications(history: Mapping[str, object], now: datetime, diagnostics
                 if isinstance(value, str) and value.strip() in allowed:
                     story[field] = value.strip()
             pages = delivery.get("pages")
-            if isinstance(pages, list) and 3 <= len(pages) <= 10:
+            minimum = 1 if delivery['schema_version'] == 'artfolio-story-delivery-v2' else 3
+            if isinstance(pages, list) and minimum <= len(pages) <= 10:
                 story["page_count"] = len(pages)
         publications.append({"publication_id": target["reel_id"],
                              "media_id": target["instagram_media_id"],

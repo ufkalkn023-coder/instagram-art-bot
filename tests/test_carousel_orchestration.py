@@ -403,6 +403,44 @@ def test_main_no_longer_owns_a_hardcoded_random_theme_list():
     assert "plan_carousel_theme" in source
 
 
+@pytest.mark.parametrize('prepare_only', [False, True])
+def test_preparation_preserves_order_paths_metadata_and_has_no_publication_writes(monkeypatch, tmp_path, prepare_only):
+    calls = []
+    featured, cover = _install_reads_and_selection(monkeypatch, calls)
+    _install_copy_and_render(monkeypatch, calls)
+    monkeypatch.setattr(main, '_load_engagement_model', main.EngagementModel.cold_start)
+    monkeypatch.setattr(main, '_preceding_post_distance_minutes', lambda *args, **kwargs: 3000.25)
+    monkeypatch.setenv('ARTFOLIO_CAPTION_EXPERIMENT_ENABLED', 'false')
+    monkeypatch.setenv('ARTFOLIO_COVER_EXPERIMENT_ENABLED', 'false')
+    for name in ('reserve_carousel', 'confirm_carousel_publication'):
+        monkeypatch.setattr(main.history_tracker, name,
+                            lambda *args, **kwargs: pytest.fail('Preparation mutated publication state'))
+    monkeypatch.setattr(main.image_processor, 'upload_temp_media',
+                        lambda *args, **kwargs: pytest.fail('Preparation uploaded media'))
+    monkeypatch.setattr(main.instagram_poster, 'post_carousel_to_instagram_graph_api',
+                        lambda *args, **kwargs: pytest.fail('Preparation published media'))
+
+    result = main.prepare_carousel_content(SimpleNamespace(
+        dry_run=True, prepare_only=prepare_only, preparation_directory=str(tmp_path)),
+        excluded_ids={'aic_reserved'})
+
+    assert result.publication_format == 'carousel'
+    assert result.publication_ids[0] == cover.canonical_id
+    assert set(result.featured_ids) == {art['id'] for art in featured}
+    assert result.media_paths == tuple(str(tmp_path / filename) for filename in (
+        'carousel_cover.jpg', *(f'carousel_{index:02d}.jpg' for index in range(1, 9))))
+    assert calls[:4] == ['featured_selection', 'cover_selection', 'gemini', 'cover_render']
+    assert 'Featured Title 1' in result.caption and 'COVER IDENTITY TITLE' in result.caption
+    if prepare_only:
+        assert result.theme_id == 'women_reading'
+        assert result.publication_metadata['featured_count'] == 8
+        assert result.publication_metadata['preceding_post_distance_minutes'] == 3000.25
+        assert result.publication_metadata['engagement_features']['publication_format'] == 'carousel'
+        assert result.publication_metadata['cover_variant'] == 'editorial'
+    else:
+        assert result.publication_metadata == {}
+
+
 def test_cover_selection_failure_precedes_gemini_reservation_and_instagram(monkeypatch):
     calls = []
     _install_reads_and_selection(monkeypatch, calls)

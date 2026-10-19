@@ -281,8 +281,8 @@ class PublicationRecord(BaseModel):
     @model_validator(mode="after")
     def require_type_appropriate_artwork_count(self):
         if self.story_delivery is not None:
-            if self.type != "carousel" or self.controlled_experiment is not None or self.controlled_cover_experiment is not None:
-                raise ValueError("Reviewed story must be a carousel without legacy treatment assignment")
+            if self.type != self.story_delivery.publication_format or self.controlled_experiment is not None or self.controlled_cover_experiment is not None:
+                raise ValueError("Reviewed story must match its delivery format without legacy treatment assignment")
             self.story_delivery.require_sources(self.artwork_ids)
             return self
         if self.type == "single" and len(self.artwork_ids) != 1:
@@ -836,8 +836,8 @@ class PublicationReceipt(_StrictStateModel):
         if self.publication_type in {"single", "reel"} and len(ids) != 1:
             raise ValueError("single/reel receipts require one artwork")
         if self.story_delivery is not None:
-            if self.publication_type != "carousel" or self.record_origin != "NEW":
-                raise ValueError("Story receipt requires a new carousel publication")
+            if self.publication_type != self.story_delivery.publication_format or self.record_origin != "NEW":
+                raise ValueError("Story receipt requires a new publication matching the reviewed format")
             self.story_delivery.require_sources(ids)
         elif self.publication_type == "carousel" and len(ids) < 2:
             raise ValueError("carousel receipts require multiple positions")

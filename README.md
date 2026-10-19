@@ -2,6 +2,254 @@
 
 Bu proje, müze API'lerinden gelen eserleri hak bilgisini koruyarak seçer, güvenli biçimde indirir ve resmi Meta Instagram Graph API üzerinden sırayla editorial carousel ve tekli görsel gönderisi olarak paylaşır. GitHub Actions zamanlaması, aynı checkout üzerinde önce compile ve test doğrulamasını tamamlar; yalnız ardından production bot çalışır.
 
+## Düzenli paylaşım: onaylı editoryal içerik
+
+Normal Feed akışının varsayılanı `editorial` modudur: eseri öne çıkaran v2
+taslaklar, ayrı sürüm onayından sonra mevcut yayın kuyruğuna hazırlanır. Tekli ve
+carousel sırası korunur. Uygun onaylı paket yoksa `EDITORIAL_REVIEW_REQUIRED`
+ile durur; eski şablona, otomatik metin üretimine veya model çağrısına dönmez.
+
+```bash
+# Önce masada görselleri ve açıklamayı inceleyip her projeyi ayrı onaylayın.
+python scripts/review_editorial_workspace.py serve --workspace data/editorial-workspace
+# Yerel, salt okunur stok kontrolü; bu örnekte sıra single ile başlar.
+python scripts/prepare_feed_queue.py --directory data/editorial-queue --target 4 \
+  --first-format single --editorial-workspace data/editorial-workspace --check-editorial
+# Yalnız yeterli onaylı stok varsa yeni yerel kuyruk oluşturur.
+python scripts/prepare_feed_queue.py --directory data/editorial-queue --target 4 \
+  --first-format single --editorial-workspace data/editorial-workspace
+```
+
+`--check-editorial` seçilenleri, yeniden inceleme isteyenleri ve eksik gönderi
+türlerini listeler. Hazırlama 3–5 dönüşümlü slotu yalnız güncel onaylı v2 projelerden
+doldurur; aynı eseri tekrar seçmez. Sonraki değişiklik onayı geçersiz kılar.
+Geçerli legacy/v1 paketler yerinde korunur; normal yayında seçilmez. Legacy stok
+yeni biçime otomatik çevrilmez veya silinmez; varsa stok kontrolü geçiş gerektiğini
+belirtir. `--status` genel envanterdir, editoryal uygunluk onayı değildir.
+
+Canlı sisteme kurulum ayrıca açık `--r2 --skip-keychain` ve süreçte sağlanmış R2
+yetkileri gerektirir. R2 kurulumunda `--first-format auto` sonraki türü kayıtlı
+geçmişten/schedule durumundan alır. Bu komut Instagram'a yayın yapmaz. Normal
+`main.py --mode auto`, açık yerel kuyruk verilmediyse private R2 kuyruğunu kullanır.
+Mevcut exact-SHA, kaynak hakkı, TTL, tekrar koruması, yayın yetkisi ve belirsiz sonuç
+kilitleri sürer. Henüz onaylanmamış pilotlar otomatik onaylanmaz.
+
+Yayın workflow'u editoryal modu sabitler. `Check editorial Feed stock` workflow'u
+yalnız private stok kontrolü yapar; manuel kontrol `CHECK_EDITORIAL_FEED` ister.
+Yeni onaylı girdi yokken `EDITORIAL_REVIEW_REQUIRED` bildirir ve acquisition/R2
+yazısı yapmaz. Onaylı kuyruk yerel CLI üzerinden açık `--r2` ile kurulur; workspace
+yerel mutlak proje yollarını tuttuğundan klasörü kopyalamak GitHub runner'ına
+taşımak için yeterli değildir. Workflow yerel dosyaları otomatik taşımaz.
+İncelenmiş stok ve mevcut deployment onayı olmadan yayın başlatılmaz.
+
+Eski hazırlama/karışık v1 akışı yalnız açık `--content-mode legacy` veya
+`ARTFOLIO_FEED_CONTENT_MODE=legacy` ile kullanılabilir; CLI seçimi ortamdan önceliklidir.
+Eski acquisition dry-run örneklerine `--content-mode legacy` ekleyin. Editoryal
+önizleme için yukarıdaki masayı kullanın. Aşağıdaki eski 6–9 eserli carousel,
+AI önerisi ve otomatik refill açıklamaları bu uyumluluk yoluna aittir.
+
+## Esere özel editoryal taslak
+
+Kaynakları açık bir bakış açısı, kısa giriş ve esere özel gözlemlerle hazırlayın:
+
+```bash
+python scripts/preview_editorial_story.py \
+  --manifest data/editorial-sources/sources.json \
+  --brief data/editorial-brief.json --output data/editorial-review
+```
+
+Brief örneği (`artwork_id`, manifestteki gerçek canonical kimliktir):
+
+```json
+{
+  "narrative": "single_study",
+  "source_ids": ["cleveland_173665"],
+  "title": "An orchid, a distant forest",
+  "angle": "The change in scale between a suspended blossom and a distant forest.",
+  "lead": "The pale blossom fills the upper half of the painting. Below it, the forest recedes into smaller, darker marks.",
+  "notes": [{
+    "id": "flower-centre", "artwork_id": "cleveland_173665", "kind": "visual_note",
+    "heading": "The dark centre",
+    "text": "Pale petals surround a darker, densely marked centre.",
+    "focus": [0.36, 0.19, 0.94, 0.59]
+  }]
+}
+```
+
+`index.html`, `draft.json`, `caption.txt`, kaynak kopyaları/SHA-256 ve 1080×1350
+JPEG sayfalar oluşur. `artwork_led` tam eseri büyük gösterir; `journal` başlık ve
+kısa gözleme yer açar; `detail_study` yalnız açıklanmış uygun bir crop varsa
+oluşur ve tam eseri de içerir. Görsel renkleri ve tam eser oranı korunur.
+Sayfalar içeriğe göre 1–10 adettir; zorunlu teaser/CTA/kapanış eklenmez.
+Okunabilir alana sığmayan metin kesilmez, çıktı reddedilir.
+
+`museum_quote` gerçek kaynak açıklamasından birebir alıntı, `catalogue_fact`
+ise `field` (`title`, `artist`, `date`, `medium`) ile eşleşen kayıtlı değerdir.
+`visual_note` insanın doğrulayacağı görsel gözlemdir; tarihsel doğruluk veya
+sanatçı niyeti otomatik onaylanmaz. Detayda heading, metin ve normalize
+`[left,top,right,bottom]` focus gerekir; düşük çözünürlük, boş veya tekrar eden
+kırpmalar reddedilir. Kalıp İngilizce övgü/hook/CTA ve kayıtlı başlık tekrarı
+engellenir; bu sınırlı kontrol tüm klişeleri veya yanlış iddiaları yakalayamaz.
+`--history` isteğe bağlı en fazla 100 başlık içeren JSON listesidir.
+
+`comparison` iki kaynak, `comparison_aspect` (composition/gesture/light/medium/date)
+ve `comparison_rationale` gerektirir. Her iki eserin seçilen yöne ait farklı
+dayanağı bulunmalıdır; aynı sanatçı bilgisi yeterli değildir. `thematic_selection`
+en az üç kaynak ve her eser için gözlem gerektirir.
+
+Yeni hedef klasör zorunludur; mevcut çıktı değiştirilmez. Bu araç yerel tasarım
+incelemesidir, mevcut `StoryDelivery`/editör projesi değildir. AI, müze veya
+Instagram çağrısı, yayın onayı, export ya da kuyruk kaydı oluşturmaz. Otomatik
+yayın akışı bu değişiklikle farklılaşmaz.
+
+## Editoryal pilot, editör ve onaylı teslim
+
+Beş gerçek eseri dört taslakta deneyen örnek seri
+`data/editorial_pilot_series.json` içindedir. Manifest, örnekteki beş canonical kimliğin
+hakları açık yerel kaynaklarını içermelidir; görsel dosyaları manifestin altında kalır.
+
+```bash
+python scripts/build_editorial_pilot.py --manifest data/pilot-sources/sources.json \
+  --series data/editorial_pilot_series.json --output data/editorial-pilot
+# İsteğe bağlı: --history history.json --now 2026-10-18T12:00:00+03:00
+python scripts/preview_story.py serve --project data/editorial-pilot/story-02/project
+```
+
+Pilot, beş kaynağı tam birer kez kullanır. Dört inceleme projesi, tasarım
+alternatifleri ve `rhythm.html`/`rhythm.json` oluşturur. Geçmiş verilmezse ritim
+boş örnek geçmişe dayanır; mevcut hesabın gerçek yayın sırası olduğu iddia edilmez.
+Özgün görseller proje içinde saklanır. Pilot kendiliğinden onaylanmaz.
+
+Tek bir brief'i de mevcut sürümlü editöre taşıyabilirsiniz:
+
+```bash
+python scripts/preview_story.py create-editorial \
+  --manifest data/editorial-sources/sources.json --brief data/editorial-brief.json \
+  --theme-id flowers_in_painting --theme-title "Flowers in Painting" \
+  --style journal --output data/editorial-project
+python scripts/preview_story.py serve --project data/editorial-project
+```
+
+Editörde başlık, anlatım açısı, giriş, gözlem, detay başlığı/alanı ve düzen aynı
+ekranda değişir. Detay fareyle veya klavyeyle seçilir. Katalog/müze alıntıları
+kaynakla eşleşmek zorundadır; editörde salt okunur gösterilir. Açıklamanın teslim
+edilecek tamamı önizlemede görünür. Kaydetmek onay vermez; her değişiklik sürümü
+artırıp önceki onayı geçersiz kılar. Hatalı kayıt önceki sürümü korur. Aynı yerel
+Host/Origin, oturum tokenı, JSON/boyut ve eski sürüm kontrolleri uygulanır.
+
+Birden fazla projeyi gerçek kapaklarıyla yan yana incelemek için:
+
+```bash
+python scripts/review_editorial_workspace.py create \
+  --projects data/editorial-pilot/story-01/project data/editorial-pilot/story-02/project \
+             data/editorial-pilot/story-03/project data/editorial-pilot/story-04/project \
+  --dossier data/editorial_pilot_dossier.json --output data/editorial-workspace
+python scripts/review_editorial_workspace.py serve --workspace data/editorial-workspace
+```
+
+Akış masası 1–12 açıkça seçilmiş proje alır. Kapak sırası yalnız tarayıcıdaki
+önizlemede değişir; kayıtlı projeleri veya yayın kuyruğunu değiştirmez. Statik
+çıktı oluşturulduğu anı, yerel sunucu ise son kaydedilmiş sürümleri gösterir.
+Dosya isteğe bağlıdır: tek soru ve 3–5 projeye ait farklı katkılar içerir;
+okuma sırası yayın planı veya toplu onay değildir.
+
+Her proje, diğer seçili projelerin anlatım açısı, girişi ve görsel gözlemleriyle
+karşılaştırılır. İsteğe bağlı `--history-project PATH` tekrar edilebilir; toplam
+bağlam en fazla 100 projedir. Sözcük örtüşmesi ve kayıtlı görsel motifler açıklanır;
+bu sınırlı uyarı anlamı kesin değerlendirmez, otomatik metin değiştirmez ve
+onayı engellemez. Geçmiş verilmezse gerçek hesap geçmişi taranmaz.
+
+Kaynak paneli katalog bilgisini, doğrudan müze alıntısını ve editoryal gözlemi
+ayrı gösterir; alıntının müze metnindeki yakın bağlamı ve mevcut kaynak bağlantısı
+korunur. Son kaydedilen değişiklikten sonra önceki sürümün gerçek görselleri ve
+değişen metinler karşılaştırılabilir. Kayıtlı öncülü olmayan eski projelerde
+önceki sürüm varsayılmaz. Yerel editörde inceleme kutusunu işaretleyip verilen
+onay, gösterilen sürüm ve doğrulanmış dosya özetiyle eşleşir; kaydedilmemiş
+değişiklik varken onay kapalıdır. Onay canlı yayın başlatmaz.
+
+Gerçek projelerden tekrar bir ritim planı üretmek için:
+
+```bash
+python scripts/plan_editorial_projects.py --history history.json \
+  --projects data/editorial-pilot/story-01/project data/editorial-pilot/story-02/project \
+             data/editorial-pilot/story-03/project data/editorial-pilot/story-04/project \
+  --output data/editorial-rhythm
+```
+
+Mevcut geçmiş planlayıcısının48saat alt sınırı ve tekli/carousel dönüşümü korunur.
+Gerçek sayfa sayısı gönderi türünü belirler; aynı kaynak birden fazla projede
+planlanamaz. Uygun proje olmayan slotlar ve döneme sığmayan projeler açıkça listelenir.
+Bu araç kuyruk önceliğini değiştirmez, yayın tarihi garanti etmez veya onay vermez.
+
+Görseller ve açıklama incelendikten sonra mevcut açık onay ve export komutları:
+
+```bash
+python scripts/preview_story.py approve --project data/editorial-project --expected-revision 1
+python scripts/preview_story.py export --project data/editorial-project --output data/editorial-export
+```
+
+`artfolio-editorial-story-v2` projeleri açık `artfolio-story-delivery-v2` üretir:
+tek sayfa/tek kaynak `single`,2–10sayfa `carousel` olur. Her kaynak tam eser
+sayfası içerir; zorunlu kapak/kapanış yoktur. Eski v1 plan/teslim kuralları ve
+renderer'ı korunur. Onay; güncel planı, kaynak metadata ve dosyalarını, renderer/font
+bağımlılıklarını, sayfaları ve görülen açıklamayı bağlar. Sonraki değişiklikler
+yeniden inceleme gerektirir. Normal paket, hikâye metadata'sıyla bu kontrolleri atlayamaz.
+
+Mevcut `prepare_feed_queue.py --story-project` onaylı projeyi artık kendi gönderi
+türündeki ilk uygun slota yerleştirir; tekrar verilebilir. Tüm projeler hazırlık
+öncesinde doğrulanır, kaynakları diğer slotlardan dışlanır ve hazırlık sırasında
+onay değişirse işlem reddedilir. Örneğin dört onaylı pilot proje için:
+
+```bash
+python scripts/prepare_feed_queue.py --directory data/editorial-queue --target 4 \
+  --first-format single --skip-keychain \
+  --story-project data/editorial-pilot/story-01/project \
+  --story-project data/editorial-pilot/story-02/project \
+  --story-project data/editorial-pilot/story-03/project \
+  --story-project data/editorial-pilot/story-04/project
+```
+
+Bu komut `--r2` verilmeden yalnız yerel kuyruk hazırlar. Varsayılan editoryal modda
+eksik slotlar yeni onay bekler; yalnız açık legacy modunda mevcut eser hazırlayıcısı
+kullanılır. Canlı tüketimde güncel hak, korunan eser,
+TTL,48saat ve exact-SHA yayın yetkisi kontrolleri sürer. İncelenmiş tekli içerik de
+aynı dosya özeti, yayın sınırı, belirsiz sonuç kilidi ve makbuz/uzlaştırma korumalarını
+kullanır. Pilot veya editör açılması canlı kuyruğa kayıt ya da yayın izni değildir.
+
+## Yerel editoryal plan ve hikâye önerileri
+
+İki veya dört haftalık tema fikirleri için mevcut, salt okunur yayın geçmişi
+dosyasını kullanın. Her çıktıda yeni bir hedef klasör gerekir:
+
+```bash
+python scripts/plan_editorial.py --history history.json --weeks 2 \
+  --seed editorial-review --output data/editorial-plan
+```
+
+`index.html` ve `plan.json` oluşturulur. Gerçek son başarılı yayın sonrası en az
+48 saat ve carousel/tekli dönüşümü korunur. Temalar mevcut registry/planner'dan
+gelir. Geçersiz, çelişkili veya gelecekteki yayın geçmişinde plan reddedilir.
+Bu yalnız fikir takvimidir: hazırlanmış eser, mevcut kuyruk sırası, uygunluk
+onayı veya kesin yayın tarihi değildir. `--now` saat dilimli zamanla tekrarlanabilir
+önizleme sağlar; üretim zamanlayıcısı değiştirilmez.
+
+Mevcut hakları doğrulanmış yerel görsel manifestinden incelenecek hikâye taslakları:
+
+```bash
+python scripts/suggest_stories.py --manifest data/editorial-sources/sources.json \
+  --maximum 3 --output data/story-suggestions
+python scripts/preview_story.py serve --project data/story-suggestions/story-01
+```
+
+Yeni klasörde bir HTML öneri listesi, `suggestions.json` ve mevcut editörle
+açılabilen sürümlü projeler oluşur. En fazla altı alternatif; kaynak sayısına göre
+tek eser, metadata temelli karşılaştırma ve seçki önerilir. Hak, dosya, kalite,
+başlık geçmişi ve en fazla on sayfa kontrolleri korunur; `--history` isteğe bağlı
+son 100 başlık JSON listesidir. Aynı eser farklı alternatiflerde bulunabilir.
+Mevcut çıktının üzerine yazılmaz; başarısız üretim hedefe yarım proje yerleştirmez.
+Görsel detaylar insan incelemesi gerektirir. Araç AI, müze veya Instagram çağrısı,
+editoryal onay, export, kuyruğa ekleme ya da üretim izni oluşturmaz.
+
 ## Ne yapar?
 
 - Art Institute of Chicago, Metropolitan Museum of Art, Cleveland Museum of Art,
@@ -228,33 +476,36 @@ Karşılaştırma her hedef yaş ve format için ayrı observation, coverage, re
 ### Hazır içerik kuyruğu — yerel ve private R2
 
 ```console
-python3 scripts/prepare_feed_queue.py --directory /path/new-feed-queue --target 3
+python3 scripts/prepare_feed_queue.py --directory /path/new-feed-queue --target 3 \
+  --editorial-workspace /path/editorial-workspace
 python3 scripts/prepare_feed_queue.py --directory /path/new-feed-queue --status
 ```
 
-Hazırlama carousel/tekli sırasıyla 3–5 paket oluşturur; önceki paketlerin eserlerini sonraki seçimlerden çıkarır. Her pakette görseller, açıklama, eser/kaynak ve hak bilgileri, SHA-256 digesti ve en fazla 14 günlük son kullanma zamanı bulunur (`--ttl-hours`). Hazırlama mevcut seçme/render yollarını kullanır; reservation, staging, yayınlama veya history yazısı yapmaz. Kaynak indirmeleri ve yapılandırılmış Gemini içerik üretimi çalışabilir. Uzak history/Insights okuması için ayrı read-only `engagement-audit` profili kullanılır. Var olan manifestin üzerine yazılmaz.
+Hazırlama tekli/carousel dönüşümüyle 3–5 paket oluşturur; her eser en fazla bir pakette kullanılır. Her pakette görseller, açıklama, eser/kaynak ve hak bilgileri, SHA-256 digesti ve en fazla 14 günlük son kullanma zamanı bulunur (`--ttl-hours`). Varsayılan mod mevcut onaylı v2 proje sayfalarını kullanır; reservation, staging, yayınlama, history yazısı veya model isteği yapmaz. Eksik onaylı stokta durur. Yalnız açık `--content-mode legacy` ile eski kaynak indirme/Gemini hazırlama ve read-only `engagement-audit` profili kullanımı korunur. Var olan manifestin üzerine yazılmaz.
 
-`main.py --prepared-queue /path/new-feed-queue` mevcut yetkili publication akışında isteğe bağlı tüketimi açar. Bu seçenek kendi başına yayınlama izni vermez. Format, süre, görsel digest/uyumluluk, kayıtlı confirmed hak bilgileri ve güncel duplicate koruması reservation öncesinde tekrar denetlenir. Paket yalnız doğrulanmış publication receipt sonrasında CONSUMED olur; belirsiz sonuç QUARANTINED olur ve otomatik yeniden kullanılmaz. Boş veya geçersiz paketleri elenmiş kuyruk normal içerik üretimine döner. Bozuk manifest ve eşzamanlı sahiplik çatışması koşuyu durdurur.
+`main.py --prepared-queue /path/new-feed-queue` mevcut yetkili publication akışında yerel kuyruğu seçer. Bu seçenek kendi başına yayınlama izni vermez. Format, süre, görsel digest/uyumluluk, kayıtlı confirmed hak bilgileri ve güncel duplicate koruması reservation öncesinde tekrar denetlenir. Paket yalnız doğrulanmış publication receipt sonrasında CONSUMED olur; belirsiz sonuç QUARANTINED olur ve otomatik yeniden kullanılmaz. Boş veya uygun editoryal paket bulunmayan kuyruk `EDITORIAL_REVIEW_REQUIRED` ile durur; yalnız açık legacy modunda acquisition'a döner. Bozuk manifest ve eşzamanlı sahiplik çatışması koşuyu durdurur.
 
 Yerel pilot Mac/Linux üzerinde `fcntl` kilidi ve atomik manifest kullanır. Actions runner'ları için private durable-state bucket'ında `feed-queue/v1/` altında kalıcı R2 kuyruk desteği vardır. JPEG'ler UUID kapsamındaki immutable nesnelerdir; manifest create-only/ETag CAS ile kurulur ve sahiplenilir. Kaybedilen veya sonucu belirsiz sahiplik yazısı yayın başlatmaz ve otomatik tekrar edilmez. CLAIMED paketler süre dolmasıyla yeniden açılmaz. Tamamlanmış veya tamamen eskimiş partiler arşivlenerek yenilenebilir; geçerli READY ve tüm CLAIMED paketler yenilemeyi durdurur. Eski paketler ve asset'ler operatör incelemesi için korunur; otomatik silme yoktur.
 
 ```bash
 # Açık state-writer environment credential'larıyla private R2'ye yazılır;
-# acquisition/rendering yapar, Instagram publication yapmaz.
-python3 scripts/prepare_feed_queue.py --directory /path/new-feed-queue --target 3 --r2 --skip-keychain
+# yalnız incelenmiş projelerden paket hazırlar; Instagram publication yapmaz.
+python3 scripts/prepare_feed_queue.py --directory /path/new-feed-queue --target 3 --r2 --skip-keychain \
+  --editorial-workspace /path/editorial-workspace
 # Yalnız R2 manifest GET; mutation yapmaz.
 python3 scripts/prepare_feed_queue.py --directory /path/status-cache --r2 --status
 ```
 
-`Prepare private Feed queue` workflow'u `main` üzerinden manuel `PREPARE_FEED_QUEUE` onayıyla 3–5 paket hazırlar. Instagram publish token'ı almaz. Feed tüketimi `ARTFOLIO_FEED_QUEUE_ENABLED=true` repository variable'ı veya `--prepared-queue-r2` ile isteğe bağlıdır; default kapalıdır. R2 tüketimi, mevcut adapter'larla bounded yeni müze sorgusunda **exact canonical artwork ID ve confirmed rights** ister. Hak doğrulaması rastgele keşif sayfalarını atlayıp ilk sonuçları kullanır; Rijksmuseum'da kayıtlı eser numarası resmi `objectNumber` alanında aranır. Normal içerik keşfinin rastgele davranışı korunur. Eser yeniden bulunamazsa paket elenir; kayıtlı hak bilgisi güncel onay yerine geçmez. Bu konservatif kontrol geçerli paketleri de eleyebilir. Boş/elenmiş kuyruk normal acquisition'a döner; okunamayan state veya CAS çatışması durdurur. Queue kurulumu, doldurulması ve activation ayrı üretim işlemleridir; kodun mevcut olması etkin olduğu anlamına gelmez.
+`Check editorial Feed stock` workflow'u `main` üzerinden manuel `CHECK_EDITORIAL_FEED` ile yalnız stok kontrolü yapar. Instagram publish token'ı veya içerik üretim anahtarı almaz. Düzenli editoryal Feed varsayılan olarak private R2 kuyruğunu kullanır; açık yerel kuyruk seçilebilir. Legacy modda R2 tüketimi ayrıca `ARTFOLIO_FEED_QUEUE_ENABLED=true` veya `--prepared-queue-r2` ister. R2 tüketimi, mevcut adapter'larla bounded yeni müze sorgusunda **exact canonical artwork ID ve confirmed rights** ister. Hak doğrulaması rastgele keşif sayfalarını atlayıp ilk sonuçları kullanır; Rijksmuseum'da kayıtlı eser numarası resmi `objectNumber` alanında aranır. Eser yeniden bulunamazsa paket elenir; kayıtlı hak bilgisi güncel onay yerine geçmez. Bu konservatif kontrol geçerli paketleri de eleyebilir. Uygun editoryal stok yoksa yeni inceleme beklenir; okunamayan state veya CAS çatışması durdurur. Queue kurulumu, doldurulması ve activation ayrı üretim işlemleridir; kodun mevcut olması etkin olduğu anlamına gelmez.
 
-Otomatik yenileme ayrıca `ARTFOLIO_FEED_QUEUE_REFILL_ENABLED=true` ister; varsayılan kapalıdır. `ARTFOLIO_FEED_QUEUE_ENABLED` ve `ARTFOLIO_PRODUCTION_SCHEDULE_ENABLED` da `true` olduğunda aynı workflow günlük 04:37 UTC / 07:37 İstanbul kontrolü yapar. [Actions schedule](https://docs.github.com/en/actions/reference/workflows-and-actions/events-that-trigger-workflows#schedule) gecikebilir. Kuyruk yoksa, tüm paketleri terminal durumdaysa veya tüm READY paketleri eskimişse üç paket hazırlanır. Bir güncel READY veya herhangi bir CLAIMED varsa yalnız manifest okunur; içerik üretimi başlamaz. Hazırlama öncesinde ve yükleme öncesinde mevcut yayın planının durumu, onaylı tam SHA ve sonraki format denetlenir. Duraklatma, SHA/format değişimi, bozuk state veya eşzamanlı yeni parti kurulumu yüklemeyi durdurur. Yayın izni oluşturulmaz; yayın state/receipt'leri değiştirilmez, mevcut paketler otomatik yeniden açılmaz veya silinmez. Günlük yenileme caption deneyini açmaz; manuel seçenek korunur.
+Zamanlanmış stok kontrolü `ARTFOLIO_FEED_QUEUE_REFILL_ENABLED=true` ister; varsayılan kapalıdır. `ARTFOLIO_FEED_QUEUE_ENABLED` ve `ARTFOLIO_PRODUCTION_SCHEDULE_ENABLED` da `true` olduğunda aynı workflow günlük 04:37 UTC / 07:37 İstanbul kontrolü yapar. Kontrol kuyruğu doldurmaz; uygun onaylı girdi yoksa inceleme ihtiyacını bildirir. Legacy stok yeni biçime ait hazır içerik sayılmaz ve yerinde korunur. Yerelden açık `--refill --editorial-workspace ...` hazırlamada hem öncesinde hem yükleme öncesinde plan durumu, onaylı tam SHA ve sonraki format denetlenir. Duraklatma, SHA/format değişimi, bozuk state veya eşzamanlı yeni parti kurulumu yüklemeyi durdurur. Yayın izni oluşturulmaz; yayın state/receipt'leri değiştirilmez, mevcut paketler otomatik yeniden açılmaz veya silinmez.
 
 ```bash
 # Salt okunur uygunluk kontrolü; acquisition veya R2 yazısı yapmaz.
 python3 scripts/prepare_feed_queue.py --directory /path/status-cache --r2 --skip-keychain --check-refill --expected-sha EXACT_MAIN_SHA
 # Aynı kontrollere bağlı yenileme; yeni ve boş bir yerel hazırlama dizini kullanın.
-python3 scripts/prepare_feed_queue.py --directory /path/new-feed-queue --r2 --skip-keychain --refill --expected-sha EXACT_MAIN_SHA
+python3 scripts/prepare_feed_queue.py --directory /path/new-feed-queue --r2 --skip-keychain --refill --expected-sha EXACT_MAIN_SHA \
+  --editorial-workspace /path/editorial-workspace
 ```
 
 Plan ve kuyruk manifesti ayrı R2 nesneleridir; son plan kontrolü ile kurulum tek atomik işlem değildir. Bu aralıkta duraklatma/onay değişirse özel bir parti kurulabilir. Paket tüketimindeki mevcut yayın yetkisi ve hak kontrolleri yine uygulanır; yenileme kendi başına yayın başlatmaz.
@@ -656,7 +907,7 @@ her zaman `publication_ready=false` olarak kalır; editoryal onay ayrı bir kay�
 incelenen proje sürümüne, kaynak metadata/görsellerine ve sıralı sayfa byte'larına
 bağlanır. Düzenleme veya dosya değişikliği bu onayı geçersiz kılar.
 
-### İncelenmiş hikâyeyi Feed kuyruğuna hazırlama
+### Eski v1 hikâyeyi uyumluluk kuyruğuna hazırlama
 
 ```bash
 # İncelenen project.json revision değerini kullanın.
@@ -665,7 +916,7 @@ python scripts/preview_story.py approve --project data/story-one --expected-revi
 python scripts/preview_story.py export --project data/story-one --output data/story-one-export
 # Hikâye sonraki carousel slotunu doldurur; diğer slotlar mevcut hazırlama yolunu kullanır.
 python scripts/prepare_feed_queue.py --directory data/reviewed-feed --first-format carousel \
-  --story-project data/story-one --target 3
+  --story-project data/story-one --target 3 --content-mode legacy
 ```
 
 `--story-project` tekrarlanabilir; carousel slot sayısını aşamaz ve aynı eser iki
@@ -724,6 +975,25 @@ Insights grupları gözlemseldir ve küçük örneklemler ayrıca işaretlenir.
 
 ### Güncellenebilir yerel panel ve içerik takvimi
 
+Panel ölçüm güncelliği ile ölçüm kapsamını ayrı gösterir. Son kayıt güncel olsa
+bile geçmişte kaçırılan veya kullanılamayan pencere varsa kapsam eksik görünür.
+Vadesi gelen/kısmi ölçümler, henüz zamanı gelmeyen pencereler ve tamamlanan
+ölçümler ayrılır. Kapsam tüm kayıtlı yayınları içerir; bu gösterge bildirim
+göndermez ve yayın iznini değiştirmez.
+
+Paneldeki **Bu içerik neden seçildi?** bölümü, doğrulanmış yayınların ve hazır
+paketlerin kayıtlı kalite/editoryal, öğrenme, çeşitlilik ve keşif katkılarını gösterir.
+Kaydedilmemiş puan yeniden hesaplanmaz. Hazır paket başarılı yayın sayılmaz.
+**Deney ilerlemesi**, aynı tema/hedef yaş/sabit karşı faktörde her kolun gözlem,
+eksik ölçüm ve minimum örnekleme ulaşmak için gereken ek gözlem sayısını gösterir.
+Atama farkı görünürdür; ekran yeni atama yapmaz, süre veya kazanan tahmin etmez.
+
+`--feasibility data/theme_feasibility.json` ile isteğe bağlı mevcut yerel gözlem
+dosyası eklenebilir. Kaynak raporu yalnız saklanan tema denemelerini kapsar:
+toplam metadata hunisi ve müze bazında katılım/hata gözlemleri ayrı gösterilir.
+Müze başına indirme verimi bu kayıtlardan çıkarılamaz. Bu seçenek yeni müze/R2
+çağrısı başlatmaz; dosya sunucu yenilemesinde yeniden okunur.
+
 Aynı girdi seçenekleriyle salt okunur yerel sunucuyu açın:
 
 ```bash
@@ -755,7 +1025,8 @@ devam eder; yenileme düğmesi yalnız yerel sunucu üzerinden etkinleşir.
 
 ### Kuyruk tükenmeden erken stok hazırlama
 
-Zamanlanmış hazırlama `--check-refill --early` ve `--refill --early` kullanır.
+Legacy modda stok hazırlama `--check-refill --early` ve `--refill --early` kullanır.
+Normal editoryal mod yeni onaylı girdi yokken yalnız inceleme ihtiyacını bildirir.
 En fazla iki geçerli READY paket kaldığında üç yeni paket hazırlanır; üç veya
 fazla READY varken hazırlama yapılmaz. Mevcut tüm kaynak kimlikleri dışlanır,
 format sırası hazır kuyruğun sonundan devam eder. Yeni parti oluşturulurken
@@ -769,6 +1040,11 @@ yayın yetkisi vermez; tüketimdeki güncel hak, geçmiş, TTL ve48saat kontroll
 Eski `--refill` davranışı `--early` olmadan yalnız tükenmiş/eskimiş partiyi değiştirir.
 
 ### Haftalık otomatik rapor
+
+Yayın sayıları ve format ölçümleri son yedi günü kapsar. Kapak/açıklama deneyleri
+ise rapor zamanına kadar doğrulanmış tüm kayıtlı yayınlardan birikir; haftalık
+pencere deney örneklerini sıfırlamaz. Tema, hedef yaş ve sabit karşı faktör ayrı
+tutulur; her kolda en az beş gözlem gerekir ve otomatik kazanan seçilmez.
 
 `Weekly Feed report` her pazartesi06:23UTC (09:23Türkiye) salt okunur rapor üretir.
 Son yedi günün `[başlangıç,bitiş)` yayınları, aynı hedef yaştaki gerçek metrikler,

@@ -59,6 +59,10 @@ def test_comparison_keeps_theme_format_age_and_missing_metric_separate():
     assert cohort['arms']['question']['like_rate']['observations'] == 0
     assert cohort['arms']['question']['save_rate']['mean_rate'] == 0
     assert cohort['winner'] is None
+    assert cohort['minimum_cohort_size'] == 5
+    assert cohort['arms']['question']['save_rate']['samples_needed'] == 4
+    assert cohort['arms']['question']['like_rate']['missing_observations'] == 1
+    assert cohort['arms']['question']['like_rate']['samples_needed'] == 5
 
 
 def test_mature_cohorts_disclose_uncertainty_without_promoting_winner():
@@ -76,3 +80,22 @@ def test_mature_cohorts_disclose_uncertainty_without_promoting_winner():
     assert row['status'] == 'descriptive_comparison'
     assert row['arms']['question']['save_rate']['standard_error'] > 0
     assert row['winner'] is None and report['auto_promote'] is False
+    assert row['arms']['question']['save_rate']['samples_needed'] == 0
+
+
+def test_experiment_progress_shows_missingness_without_reassigning_or_promoting():
+    import copy
+    from src.feed_experiment_report import build_experiment_report, render_experiment_progress
+
+    pub = {**publication(0, 'carousel'), 'carousel_theme': 'flowers',
+           'caption_hook_type': 'question', 'cover_variant': 'editorial',
+           'controlled_experiment': {'experiment_id': 'caption_hook_v1', 'variable': 'caption_hook_type',
+                                     'variant': 'question', 'theme_id': 'flowers', 'cover_variant': 'editorial'}}
+    history = {'publications': [pub]}
+    before = copy.deepcopy(history)
+    report = build_experiment_report(history, [snapshot(pub)], now=NOW)
+    page = render_experiment_progress(report)
+    assert 'Deney ilerlemesi' in page and 'gereken ek gözlem' in page
+    assert 'Atamalar değiştirilmez' in page
+    assert 'flowers' in page and '72 saat' in page
+    assert history == before and report['auto_promote'] is False

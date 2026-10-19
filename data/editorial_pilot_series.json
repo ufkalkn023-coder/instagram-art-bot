@@ -1,0 +1,50 @@
+{
+  "title": "Five works, four ways of looking",
+  "entries": [
+    {
+      "theme_id": "flowers_in_painting", "theme_title": "Flowers in Painting",
+      "brief": {
+        "narrative": "single_study", "source_ids": ["cleveland_173665"],
+        "title": "An orchid, a distant forest",
+        "angle": "The change in scale between a suspended blossom and a distant forest.",
+        "lead": "The pale blossom fills the upper half of the painting. Below it, the forest recedes into smaller, darker marks.",
+        "notes": [{"id": "scale", "artwork_id": "cleveland_173665", "kind": "visual_note", "text": "A large pale flower hangs above a small, dark forest."}]
+      }
+    },
+    {
+      "theme_id": "portrait_gaze", "theme_title": "The Portrait Gaze",
+      "brief": {
+        "narrative": "single_study", "source_ids": ["cleveland_124089"],
+        "title": "Lace against a dark dress",
+        "angle": "The patterned white collar forms a bright boundary between the face and the dark dress.",
+        "lead": "The wide collar spreads across the shoulders. Its pale loops stand out against the nearly black fabric below.",
+        "notes": [{"id": "collar", "artwork_id": "cleveland_124089", "kind": "visual_note", "heading": "The scalloped edge", "text": "Loops of white lace cross the dark fabric, with a small brooch at the centre.", "focus": [0.22, 0.48, 0.90, 0.77]}]
+      }
+    },
+    {
+      "theme_id": "mothers_and_children", "theme_title": "Mothers and Children",
+      "brief": {
+        "narrative": "single_study", "source_ids": ["cleveland_147016"],
+        "title": "A hand beneath the tilted face",
+        "angle": "The tilted head and supporting hand create a diagonal above the child.",
+        "lead": "A hand supports the lowered face. Behind the two figures, small buildings and pale hills continue into the distance.",
+        "notes": [{"id": "hand", "artwork_id": "cleveland_147016", "kind": "visual_note", "text": "The woman's head leans into her hand while the child's face turns outward."}]
+      }
+    },
+    {
+      "theme_id": "mountains", "theme_title": "Mountains",
+      "brief": {
+        "narrative": "comparison", "source_ids": ["cleveland_152006", "cleveland_171296"],
+        "title": "Two openings into the distance",
+        "angle": "Compare how a narrow wooded hollow and a broad stretch of water lead toward distant mountains.",
+        "lead": "Both landscapes place darker trees in front of pale mountains. The opening between them changes from a narrow hollow to a wide expanse of water.",
+        "comparison_aspect": "composition",
+        "comparison_rationale": "Gainsborough places a narrow wooded hollow beside a sloping rock; Duncanson opens the foreground around a broad stretch of water.",
+        "notes": [
+          {"id": "hollow", "artwork_id": "cleveland_152006", "kind": "visual_note", "text": "Trees on the left and a sloping rock on the right frame a narrow wooded hollow."},
+          {"id": "water", "artwork_id": "cleveland_171296", "kind": "visual_note", "text": "Dark trees frame a broad stretch of water, with pale mountains extending behind it."}
+        ]
+      }
+    }
+  ]
+}

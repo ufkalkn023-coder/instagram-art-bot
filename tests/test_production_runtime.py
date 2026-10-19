@@ -47,6 +47,7 @@ def _production_environment() -> dict[str, str]:
 
 
 def _mock_reconciliation(monkeypatch, calls=None):
+    monkeypatch.setenv('ARTFOLIO_FEED_CONTENT_MODE', 'legacy')
     monkeypatch.setattr(main, "load_workflow_authorization", lambda: object())
     monkeypatch.setattr(
         main,
@@ -83,7 +84,7 @@ def test_dry_run_main_does_not_require_production_credentials(monkeypatch):
         lambda args: calls.append(args.dry_run),
     )
 
-    assert main.main(["--dry-run"]) == 0
+    assert main.main(["--dry-run", "--content-mode", "legacy"]) == 0
     assert calls == [True]
 
 
@@ -231,7 +232,7 @@ def test_single_mode_uses_single_runner_in_dry_run(monkeypatch):
     calls = []
     monkeypatch.setattr(main, "run_single_post", lambda args: calls.append(args.dry_run))
     monkeypatch.setattr(main, "run_carousel_post", lambda *_: pytest.fail("single routed to carousel"))
-    assert main.main(["--dry-run", "--mode", "single"]) == 0
+    assert main.main(["--dry-run", "--mode", "single", "--content-mode", "legacy"]) == 0
     assert calls == [True]
 
 

@@ -4,7 +4,7 @@ import sys
 import logging
 import inspect
 import tempfile
-from dataclasses import replace
+from dataclasses import dataclass, replace
 from datetime import datetime, timezone
 from enum import Enum
 from pathlib import Path
@@ -42,7 +42,9 @@ from src.carousel_editorial import (
     fallback_editorial_subtitle,
     grounded_gemini_intro,
 )
-from src.carousel_plan import CarouselPlan
+from src.carousel_plan import CarouselPlan, CoverAsset
+from src.carousel_set_optimizer import CarouselSetOptimizationResult
+from src.models import ControlledCaptionExperiment, ControlledCoverExperiment
 from src.carousel_policy import MAX_FEATURED_WORKS
 from src.carousel_sequence import sequence_carousel_artworks
 from src.editorial_experiments import (
@@ -402,7 +404,17 @@ def prepare_single_content(args, *, excluded_ids: set[str] | None = None,
 def run_single_post(args, authorization: ProductionAuthorization | None = None, *,
                     prepared_content: PreparedFeedContent | None = None):
     """Publish one securely selected artwork through the durable Feed lifecycle."""
-    content = prepared_content or prepare_single_content(args)
+    content = replace(prepared_content) if prepared_content is not None else prepare_single_content(args)
+    if isinstance(content, PreparedStoryContent):
+        from src.story_feed import snapshot_story_media
+        with snapshot_story_media(content) as frozen:
+            return _run_single_post(args, authorization, prepared_content=frozen)
+    return _run_single_post(args, authorization, prepared_content=content)
+
+
+def _run_single_post(args, authorization: ProductionAuthorization | None = None, *,
+                     prepared_content: PreparedFeedContent):
+    content = prepared_content
     if content.publication_format != "single":
         raise ValueError("Single runner requires single prepared content")
     artwork, path, caption = dict(content.artworks[0]), content.media_paths[0], content.caption
@@ -415,6 +427,9 @@ def run_single_post(args, authorization: ProductionAuthorization | None = None, 
         return
 
     artwork_ids = [artwork["id"]]
+    if isinstance(content, PreparedStoryContent):
+        from src.story_feed import validate_story_media
+        validate_story_media(content)
     publication_id = history_tracker.reserve_single_publication(
         artwork, authorization=authorization,
         **({"publication_metadata": content.publication_metadata} if content.publication_metadata else {}),
@@ -563,38 +578,22 @@ def _preceding_post_distance_minutes(now: datetime, *, publication_format: str =
     return max(0.0, (now - posted_at.astimezone(timezone.utc)).total_seconds() / 60)
 
 
-def prepare_carousel_content(args, *, excluded_ids: set[str] | None = None) -> PreparedFeedContent:
-    logger.info("Running carousel post logic...")
-    posted_ids = history_tracker.get_posted_ids()
-    posted_ids.update(excluded_ids or ())
-    color_tone = _get_grid_color_tone_for_run(args.dry_run)
+@dataclass(frozen=True)
+class _SelectedCarousel:
+    artworks: list[dict]
+    cover: CoverAsset
+    theme: CarouselThemeDefinition
+    caption_hook_type: CaptionHookType
+    set_optimization: CarouselSetOptimizationResult | None
 
-    selection_run_seed = art_fetcher.resolve_selection_run_seed()
-    run_time = datetime.now(timezone.utc)
-    publish_slot = canonical_publish_slot(run_time)
-    preceding_distance = _preceding_post_distance_minutes(run_time)
-    spacing_bucket = previous_post_spacing_bucket(preceding_distance)
-    engagement_model = _load_engagement_model().for_format("carousel")
-    exploration_selected = engagement_model.exploration_selected(
-        selection_run_seed.value
-    )
-    base_engagement_context = {
-        "publication_format": "carousel",
-        "publish_slot": publish_slot,
-        "publication_weekday": run_time.strftime("%A").casefold(),
-        "cover_variant": CoverVariant.EDITORIAL.value,
-        "preceding_post_distance_minutes": preceding_distance,
-        "previous_post_spacing_bucket": spacing_bucket,
-    }
-    theme_history = history_tracker.get_recent_carousel_theme_history()
-    theme_registry = get_default_theme_registry()
-    theme_selection = plan_carousel_theme(
-        theme_registry,
-        theme_history,
-        run_seed=selection_run_seed.value,
-        current_month=datetime.now(timezone.utc).month,
-        eligible_evidence_modes=(ThemeEvidenceMode.METADATA,),
-    )
+
+def _select_carousel_artworks(
+    args, *, posted_ids: set[str], color_tone: str,
+    selection_run_seed: art_fetcher.SelectionRunSeed, run_time: datetime,
+    engagement_model: EngagementModel, base_engagement_context: dict,
+    exploration_selected: bool, theme_registry, theme_selection,
+) -> _SelectedCarousel:
+    """Rank and try bounded themes, retaining the neutral fallback and cleanup gates."""
     if hasattr(theme_selection, "ranked_themes"):
         ordered_candidates = theme_selection.ranked_themes(theme_registry)
         fallback_enabled = True
@@ -934,6 +933,20 @@ def prepare_carousel_content(args, *, excluded_ids: set[str] | None = None) -> P
         acquisition.availability.query_count if acquisition is not None else "compatibility",
     )
 
+    return _SelectedCarousel(
+        artworks, cover, theme_definition, caption_hook_type, set_optimization,
+    )
+
+
+def _build_carousel_content_plan(
+    selected: _SelectedCarousel, *, selection_run_seed: art_fetcher.SelectionRunSeed,
+) -> tuple[CarouselPlan, ControlledCaptionExperiment | None, ControlledCoverExperiment | None]:
+    """Sequence the selected works and build grounded copy and presentation assignments."""
+    artworks = selected.artworks
+    cover = selected.cover
+    theme_definition = selected.theme
+    caption_hook_type = selected.caption_hook_type
+    set_optimization = selected.set_optimization
     sequence = sequence_carousel_artworks(
         artworks,
         theme=theme_definition,
@@ -1037,6 +1050,11 @@ def prepare_carousel_content(args, *, excluded_ids: set[str] | None = None) -> P
         sequence=sequence,
     )
 
+    return plan, controlled_experiment, controlled_cover_experiment
+
+
+def _render_carousel_content(args, plan: CarouselPlan, *, color_tone: str) -> list[str]:
+    """Render the cover first and featured media in the plan's final order."""
     output_media_paths = [
         create_carousel_editorial_cover(
             cover=plan.cover,
@@ -1070,13 +1088,18 @@ def prepare_carousel_content(args, *, excluded_ids: set[str] | None = None) -> P
         )
         output_media_paths.append(render_result.output_path)
 
-    if args.dry_run and not getattr(args, "prepare_only", False):
-        _log_carousel_dry_run_success(plan, output_media_paths)
-        return PreparedFeedContent("carousel", (dict(plan.cover.artwork), *map(dict, plan.featured_artworks)),
-                                   tuple(output_media_paths), plan.caption)
+    return output_media_paths
 
-    logger.info("media_prepared mode=carousel count=%s", len(output_media_paths))
 
+def _carousel_publication_metadata(
+    plan: CarouselPlan, *, base_engagement_context: dict, engagement_model: EngagementModel,
+    exploration_selected: bool, controlled_experiment: ControlledCaptionExperiment | None,
+    controlled_cover_experiment: ControlledCoverExperiment | None,
+) -> dict:
+    """Record the delivered plan and its explainable learning/selection components."""
+    publish_slot = base_engagement_context["publish_slot"]
+    preceding_distance = base_engagement_context["preceding_post_distance_minutes"]
+    spacing_bucket = base_engagement_context["previous_post_spacing_bucket"]
     final_engagement_context = {
         **base_engagement_context,
         "carousel_theme": plan.theme.id,
@@ -1157,6 +1180,66 @@ def prepare_carousel_content(args, *, excluded_ids: set[str] | None = None) -> P
         selection_components.final_score,
         publish_slot,
         exploration_selected,
+    )
+
+    return publication_metadata
+
+
+def prepare_carousel_content(args, *, excluded_ids: set[str] | None = None) -> PreparedFeedContent:
+    logger.info("Running carousel post logic...")
+    posted_ids = history_tracker.get_posted_ids()
+    posted_ids.update(excluded_ids or ())
+    color_tone = _get_grid_color_tone_for_run(args.dry_run)
+
+    selection_run_seed = art_fetcher.resolve_selection_run_seed()
+    run_time = datetime.now(timezone.utc)
+    publish_slot = canonical_publish_slot(run_time)
+    preceding_distance = _preceding_post_distance_minutes(run_time)
+    spacing_bucket = previous_post_spacing_bucket(preceding_distance)
+    engagement_model = _load_engagement_model().for_format("carousel")
+    exploration_selected = engagement_model.exploration_selected(
+        selection_run_seed.value
+    )
+    base_engagement_context = {
+        "publication_format": "carousel",
+        "publish_slot": publish_slot,
+        "publication_weekday": run_time.strftime("%A").casefold(),
+        "cover_variant": CoverVariant.EDITORIAL.value,
+        "preceding_post_distance_minutes": preceding_distance,
+        "previous_post_spacing_bucket": spacing_bucket,
+    }
+    theme_history = history_tracker.get_recent_carousel_theme_history()
+    theme_registry = get_default_theme_registry()
+    theme_selection = plan_carousel_theme(
+        theme_registry,
+        theme_history,
+        run_seed=selection_run_seed.value,
+        current_month=datetime.now(timezone.utc).month,
+        eligible_evidence_modes=(ThemeEvidenceMode.METADATA,),
+    )
+    selected = _select_carousel_artworks(
+        args, posted_ids=posted_ids, color_tone=color_tone,
+        selection_run_seed=selection_run_seed, run_time=run_time,
+        engagement_model=engagement_model, base_engagement_context=base_engagement_context,
+        exploration_selected=exploration_selected, theme_registry=theme_registry,
+        theme_selection=theme_selection,
+    )
+    plan, controlled_experiment, controlled_cover_experiment = _build_carousel_content_plan(
+        selected, selection_run_seed=selection_run_seed,
+    )
+    output_media_paths = _render_carousel_content(args, plan, color_tone=color_tone)
+
+    if args.dry_run and not getattr(args, "prepare_only", False):
+        _log_carousel_dry_run_success(plan, output_media_paths)
+        return PreparedFeedContent("carousel", (dict(plan.cover.artwork), *map(dict, plan.featured_artworks)),
+                                   tuple(output_media_paths), plan.caption)
+
+    logger.info("media_prepared mode=carousel count=%s", len(output_media_paths))
+
+    publication_metadata = _carousel_publication_metadata(
+        plan, base_engagement_context=base_engagement_context, engagement_model=engagement_model,
+        exploration_selected=exploration_selected, controlled_experiment=controlled_experiment,
+        controlled_cover_experiment=controlled_cover_experiment,
     )
 
     return PreparedFeedContent(
@@ -1320,8 +1403,13 @@ def run_feed_with_queue(args, mode: ProductionMode, authorization: ProductionAut
     if mode not in {ProductionMode.SINGLE, ProductionMode.CAROUSEL}:
         raise ValueError("Resolve the next successful Feed format before claiming content")
     runner = run_single_post if mode is ProductionMode.SINGLE else run_carousel_post
+    from src.feed_content_policy import resolve_content_mode
+    content_mode = resolve_content_mode(getattr(args, 'content_mode', None))
+    if args.dry_run and content_mode == 'editorial':
+        raise ValueError('Use the editorial workspace for read-only previews; legacy dry runs require --content-mode legacy')
     directory = getattr(args, "prepared_queue", None)
-    remote = getattr(args, "prepared_queue_r2", False) or os.environ.get("ARTFOLIO_FEED_QUEUE_ENABLED") == "true"
+    remote = (getattr(args, "prepared_queue_r2", False) or os.environ.get("ARTFOLIO_FEED_QUEUE_ENABLED") == "true"
+              or content_mode == 'editorial' and directory is None)
     if directory is not None and remote:
         raise ValueError("Select either a local or R2 prepared queue")
     if args.dry_run or (directory is None and not remote):
@@ -1340,10 +1428,15 @@ def run_feed_with_queue(args, mode: ProductionMode, authorization: ProductionAut
 
 def _consume_feed_queue(args, mode, authorization, queue, rights_revalidator=None):
     runner = run_single_post if mode is ProductionMode.SINGLE else run_carousel_post
+    from src.feed_content_policy import is_editorial_content, resolve_content_mode
+    editorial = resolve_content_mode(getattr(args, 'content_mode', None)) == 'editorial'
     now = datetime.now(timezone.utc)
     claim = queue.claim(mode.value, protected_ids=history_tracker.get_posted_ids(),
-                        owner=authorization.key, now=now, rights_revalidator=rights_revalidator)
+                        owner=authorization.key, now=now, rights_revalidator=rights_revalidator,
+                        **({'content_filter': is_editorial_content} if editorial else {}))
     if claim is None:
+        if editorial:
+            raise RuntimeError(f'EDITORIAL_REVIEW_REQUIRED: no reviewed {mode.value} package; prepare approved editorial stock')
         logger.info("prepared_queue_empty mode=%s fallback=fresh_acquisition", mode.value)
         return runner(args, authorization)
     try:
@@ -1385,6 +1478,8 @@ def _consume_feed_queue(args, mode, authorization, queue, rights_revalidator=Non
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Instagram Art Museum Automation Bot")
+    parser.add_argument('--content-mode', choices=('editorial', 'legacy'),
+                        help='Regular Feed uses reviewed editorial stock; legacy acquisition is explicit')
     parser.add_argument("--dry-run", action="store_true", help="Run bot locally without posting to Instagram")
     parser.add_argument("--prepared-queue", type=Path, help="Optional local prepared Feed queue; all publication gates still apply")
     parser.add_argument("--prepared-queue-r2", action="store_true", help="Consume the private R2 prepared queue with fresh rights checks")

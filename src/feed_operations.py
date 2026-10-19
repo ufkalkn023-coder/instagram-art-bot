@@ -33,6 +33,17 @@ def build_feed_operations(schedule, queue, history, snapshots, *, now=None):
             counts[state.lower()] += 1
     freshness = ("fresh" if timestamp - latest <= timedelta(hours=48) else "stale") if latest else (
         "missing" if analytics["summary"]["feed_publications"] else "cold_start")
+    summary = analytics["summary"]
+    if not summary["feed_publications"]:
+        coverage = "cold_start"
+    elif summary["missed_windows"] or summary["unavailable_windows"]:
+        coverage = "incomplete"
+    elif summary["due_windows"] or summary["partial_windows"]:
+        coverage = "collecting"
+    elif summary["complete_windows"]:
+        coverage = "complete"
+    else:
+        coverage = "pending"
     status = schedule.get("status", "UNKNOWN")
     actionable = []
     if status not in NORMAL_STATES:
@@ -42,7 +53,8 @@ def build_feed_operations(schedule, queue, history, snapshots, *, now=None):
     return {"schema_version": 1, "generated_at": utc_timestamp(timestamp), "schedule": dict(schedule),
             "queue": {name: counts[name] for name in ("ready", "next_format_ready", "expired", "invalid_age", "claimed", "consumed", "quarantined")},
             "queue_count_basis": "Manifest freshness only; bytes, source rights and history require revalidation at consumption.",
-            "analytics": {"freshness": freshness, "last_comparable_capture_at": utc_timestamp(latest) if latest else None,
+            "analytics": {"freshness": freshness, "coverage_status": coverage,
+                          "last_comparable_capture_at": utc_timestamp(latest) if latest else None,
                           **analytics["summary"]}, "actionable": actionable}
 
 

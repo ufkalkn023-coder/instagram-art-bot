@@ -1,6 +1,7 @@
 """Descriptive equal-age caption experiment cohorts; no automated promotion."""
 
 from collections import defaultdict
+from html import escape
 from math import sqrt
 from statistics import mean, stdev
 
@@ -45,6 +46,8 @@ def build_experiment_report(history, snapshots, *, now=None, minimum_cohort_size
                 values = [row["metrics"][metric] / row["metrics"]["reach"] for row in rows
                           if row["comparable"] and metric in row["metrics"]]
                 rates[rate] = {"observations": len(values), "eligible_publications": len(rows),
+                               "samples_needed": max(0, minimum_cohort_size - len(values)),
+                               "missing_observations": len(rows) - len(values),
                                "coverage": len(values) / len(rows) if rows else None,
                                "mean_rate": mean(values) if values else None,
                                "standard_error": stdev(values) / sqrt(len(values)) if len(values) > 1 else None,
@@ -56,6 +59,8 @@ def build_experiment_report(history, snapshots, *, now=None, minimum_cohort_size
             metric_status[rate] = "descriptive_comparison" if comparable else "insufficient_evidence"
             sufficient = sufficient or comparable
         comparisons.append({"experiment_id": experiment_id, "publication_format": "carousel",
+                            "minimum_cohort_size": minimum_cohort_size,
+                            "assignment_imbalance": abs(len(variants[choices[0]]) - len(variants[choices[1]])),
                             "theme_id": theme_id, "variable": variable, "target_age_hours": target,
                             **({"cover_variant": fixed} if variable == "caption_hook_type" else {"caption_hook_type": fixed}),
                             "status": "descriptive_comparison" if sufficient else "insufficient_evidence",
@@ -64,3 +69,31 @@ def build_experiment_report(history, snapshots, *, now=None, minimum_cohort_size
             "comparisons": [row for row in comparisons if row["variable"] == "caption_hook_type"],
             "cover_comparisons": [row for row in comparisons if row["variable"] == "cover_variant"],
             "limitations": "Observational cohorts. Standard errors describe sample variation; artwork, theme, timing and audience confounding prevent causal winner claims."}
+
+
+def render_experiment_progress(report: dict) -> str:
+    comparisons = [*report['comparisons'], *report['cover_comparisons']]
+    rows = []
+    for cohort in comparisons[:24]:
+        for arm, rates in cohort['arms'].items():
+            cells = []
+            for key in ('save_rate', 'like_rate'):
+                rate = rates[key]
+                cells.append(f'<td>{rate["observations"]} / {cohort["minimum_cohort_size"]} gözlem; '
+                             f'{rate["samples_needed"]} gereken ek gözlem; '
+                             f'{rate["missing_observations"]} eksik ölçüm</td>')
+            fixed = cohort.get('cover_variant') or cohort.get('caption_hook_type')
+            rows.append(f'<tr><th>{escape(cohort["experiment_id"])} · {escape(cohort["theme_id"])}'
+                        f'<br>{cohort["target_age_hours"]} saat · sabit: {escape(fixed)}'
+                        f'<br>Kol: {escape(arm)} · atama farkı: {cohort["assignment_imbalance"]}</th>'
+                        + ''.join(cells) + '</tr>')
+    body = ('<div class="table-scroll" tabindex="0" role="region" aria-label="Deney ilerlemesi">'
+            '<table><thead><tr><th>Deney / kol</th><th>Kaydetme ölçümleri</th><th>Beğeni ölçümleri</th></tr></thead>'
+            f'<tbody>{"".join(rows)}</tbody></table></div>') if rows else '<p>Henüz kayıtlı deney gözlemi yok.</p>'
+    if len(comparisons) > 24:
+        body += f'<p>İlk 24 grup gösteriliyor; toplam {len(comparisons)} grup var.</p>'
+    return ('<section><h2>Deney ilerlemesi</h2>'
+            '<p class="muted">Aynı tema, hedef yaş ve sabit karşı faktör ayrı tutulur. '
+            'Atamalar değiştirilmez; eksik ölçüm sıfır değildir. Gereken örnek sayısı süre tahmini değildir. '
+            'Atama farkı aynı yaştaki kolların yayın sayısı farkıdır; dengesiz gruplar inceleme gerektirir. '
+            'Otomatik kazanan seçilmez.</p>' + body + '</section>')

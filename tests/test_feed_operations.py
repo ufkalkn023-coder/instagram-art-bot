@@ -2,6 +2,8 @@ import copy
 import importlib
 from datetime import timedelta
 
+import pytest
+
 from tests.test_feed_analytics import NOW, publication, snapshot
 from tests.test_r2_feed_queue import remote
 
@@ -30,6 +32,39 @@ def test_unknown_age_and_media_mismatch_do_not_become_fresh_analytics():
     report = module().build_feed_operations({'status': 'READY'}, [], {'publications': [pub]}, [wrong], now=NOW)
     assert report['analytics']['last_comparable_capture_at'] is None
     assert report['analytics']['freshness'] == 'missing'
+
+
+def test_recent_measurement_does_not_hide_missed_early_windows():
+    pub = publication(age=80)
+    report = module().build_feed_operations(
+        {'status': 'READY'}, [], {'publications': [pub]}, [snapshot(pub)], now=NOW)
+    assert report['analytics']['freshness'] == 'fresh'
+    assert report['analytics']['coverage_status'] == 'incomplete'
+    assert report['analytics']['missed_windows'] == 3
+    # Reporting does not introduce a notification or change publication readiness.
+    assert report['actionable'] == []
+
+
+@pytest.mark.parametrize('age,attempts,expected', [
+    (0.5, [], 'pending'),
+    (1, [], 'collecting'),
+    (1, [{'reach': 100}], 'collecting'),
+    (1, [{'reach': 100, 'saved': 0}], 'complete'),
+])
+def test_coverage_distinguishes_pending_partial_and_complete_windows(age, attempts, expected):
+    pub = publication(age=age)
+    snapshots = [snapshot(pub, target=1, metrics=metrics) for metrics in attempts]
+    result = module().build_feed_operations({}, [], {'publications': [pub]}, snapshots, now=NOW)
+    assert result['analytics']['coverage_status'] == expected
+
+
+def test_unavailable_measurement_is_incomplete_and_empty_history_is_cold_start():
+    pub = publication(age=1)
+    unavailable = snapshot(pub, target=1, metrics={}, status='permanently_unavailable',
+                           failure='unsupported_media')
+    result = module().build_feed_operations({}, [], {'publications': [pub]}, [unavailable], now=NOW)
+    assert result['analytics']['coverage_status'] == 'incomplete'
+    assert module().build_feed_operations({}, [], {}, [], now=NOW)['analytics']['coverage_status'] == 'cold_start'
 
 
 def test_changed_block_failure_and_recovery_notify_once_waiting_stays_quiet(tmp_path):

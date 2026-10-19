@@ -141,3 +141,52 @@ def test_invalid_record_with_same_id_does_not_inflate_publication_totals():
     report=build({'publications':[good,invalid]})
     assert report['analytics']['summary']['feed_publications']==1
     assert report['publication_counts']=={'single':1,'carousel':0}
+
+
+@pytest.mark.parametrize('kind', ['caption', 'cover'])
+def test_experiments_accumulate_older_observations_without_inflating_weekly_counts(kind):
+    from tests.test_feed_analytics import snapshot
+
+    pubs, attempts = [], []
+    for index in range(10):
+        # Carousel opportunities are four days apart under the Feed alternation.
+        pub = publication(str(index), age=80 + index * 96, type='carousel',
+                          artwork_ids=[f'aic_{index}', f'met_{index}'],
+                          carousel_theme='flowers', cover_variant='editorial',
+                          caption_hook_type='visual_detail')
+        if kind == 'caption':
+            variant = 'question' if index % 2 else 'visual_detail'
+            pub.update(caption_hook_type=variant, controlled_experiment={
+                'experiment_id': 'caption_hook_v1', 'variable': 'caption_hook_type',
+                'variant': variant, 'theme_id': 'flowers', 'cover_variant': 'editorial'})
+        else:
+            variant = 'editorial' if index % 2 else 'editorial_panel'
+            pub.update(cover_variant=variant, controlled_cover_experiment={
+                'experiment_id': 'cover_treatment_v1', 'variable': 'cover_variant',
+                'variant': variant, 'theme_id': 'flowers', 'caption_hook_type': 'visual_detail'})
+        pubs.append(pub)
+        attempts.append(snapshot(pub, metrics={'reach': 100, 'saved': 2}))
+    history = {'publications': pubs}
+    before = copy.deepcopy((history, attempts))
+    report = build(history, attempts)
+    assert report['publication_counts'] == {'single': 0, 'carousel': 1}
+    key = 'comparisons' if kind == 'caption' else 'cover_comparisons'
+    cohort = next(row for row in report['experiments'][key] if row['target_age_hours'] == 72)
+    assert cohort['status'] == 'descriptive_comparison'
+    assert [arm['save_rate']['observations'] for arm in cohort['arms'].values()] == [5, 5]
+    assert report['experiments']['auto_promote'] is False and cohort['winner'] is None
+    assert report['experiments']['period']['basis'] == 'All validated stored publications before report generation'
+    text = importlib.import_module('src.feed_weekly_report').render_weekly_markdown(report)
+    assert 'Deney gözlemleri · birikimli' in text
+    assert (history, attempts) == before
+
+
+def test_cumulative_experiments_still_reject_cross_period_identity_conflicts():
+    good = publication('same', age=80, type='carousel', artwork_ids=['aic_1', 'met_1'], carousel_theme='flowers',
+                       caption_hook_type='question', cover_variant='editorial',
+                       controlled_experiment={
+                           'experiment_id': 'caption_hook_v1', 'variable': 'caption_hook_type',
+                           'variant': 'question', 'theme_id': 'flowers', 'cover_variant': 'editorial'})
+    conflicting = {**good, 'posted_at': (NOW - timedelta(days=30)).isoformat()}
+    report = build({'publications': [good, conflicting]})
+    assert report['experiments']['comparisons'] == []

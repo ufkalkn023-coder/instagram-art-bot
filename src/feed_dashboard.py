@@ -10,15 +10,21 @@ from zoneinfo import ZoneInfo
 from src.feed_analytics import build_feed_analytics_report
 from src.feed_calendar import build_feed_calendar
 from src.feed_operations import build_feed_operations
+from src.feed_selection_report import build_selection_report, render_selection_report
+from src.feed_source_report import build_source_report, render_source_report
+from src.feed_experiment_report import build_experiment_report, render_experiment_progress
 from src.insights_storage import parse_aware_timestamp
 
 
 def render_feed_dashboard(schedule, queue, history, snapshots, *, now: datetime,
-                          stories=()) -> str:
+                          stories=(), feasibility=None) -> str:
     """Render a self-contained Turkish HTML snapshot from already loaded data."""
     local_now = now.astimezone(ZoneInfo("Europe/Istanbul"))
     operations = build_feed_operations(schedule, queue, history, snapshots, now=now)
     analytics = build_feed_analytics_report(history, snapshots, now=now)
+    selection_html = render_selection_report(build_selection_report(history, queue, now=now))
+    source_html = render_source_report(build_source_report(feasibility, now=now) if feasibility is not None else None)
+    experiment_html = render_experiment_progress(build_experiment_report(history, snapshots, now=now))
     def esc(value):
         return html.escape(str(value), quote=True)
 
@@ -148,6 +154,9 @@ def render_feed_dashboard(schedule, queue, history, snapshots, *, now: datetime,
     schedule_detail = f"{shown(status)} · {shown(schedule.get('reason'))}"
     freshness = {"fresh": "Güncel", "stale": "Eski", "missing": "Ölçüm bulunamadı",
                  "cold_start": "İlk ölçüm bekleniyor"}.get(summary.get("freshness"), summary.get("freshness"))
+    coverage = {"complete": "Vadesi gelen pencereler tamamlandı", "incomplete": "Eksik pencereler var",
+                "collecting": "Vadesi gelen ölçümler bekleniyor", "pending": "İlk ölçüm zamanı bekleniyor",
+                "cold_start": "Henüz yayın yok"}[summary["coverage_status"]]
     return f'''<!doctype html>
 <html lang="tr"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>ARTFOLIO · Feed Durumu</title><style>
@@ -163,8 +172,11 @@ header strong{{font:24px Georgia,serif;letter-spacing:3px}}main{{max-width:1100p
 <section><h2>İçerik takvimi</h2><p class="muted">Bu olası tarihler önceki yayınların başarılı tamamlanmasına bağlıdır; yayın garantisi değildir. Son kullanma ve yayın kontrolleri her tüketimde yeniden uygulanır.</p><div class="calendar-list">{calendar_html}</div></section>
 <section><h2>Hazır içerik kuyruğu</h2><p class="muted">Sayım manifest durumuna dayanır; tüketim sırasında içerik, haklar ve geçmiş yeniden doğrulanır.</p><div class="metrics">{''.join(f'<dl class="metric"><dt>{esc({"ready":"Hazır", "next_format_ready":"Sıradaki formata hazır", "expired":"Süresi dolmuş", "invalid_age":"Yaşı geçersiz", "claimed":"Sahiplenilmiş", "consumed":"Tüketilmiş", "quarantined":"Karantinada"}.get(k, k))}</dt><dd>{esc(v)}</dd></dl>' for k,v in operations['queue'].items())}</div>
 <div class="table-scroll" tabindex="0" role="region" aria-label="Kaydırılabilir veri tablosu"><table><thead><tr><th>Paket</th><th>Durum</th><th>Format</th><th>Son kullanma</th><th>Kaynak</th><th>Sayfa</th></tr></thead><tbody>{''.join(queue_rows)}</tbody></table></div></section>
+{selection_html}
+{source_html}
+{experiment_html}
 <section><h2>Yerel hikâye onayı</h2><ul>{story_html}</ul></section>
-<section><h2>Insights ölçüm pencereleri</h2><p class="muted">Kaçırılan ölçüm pencereleri, eksik performans verisini gösterir; kaçırılmış yayın anlamına gelmez.</p><dl class="metrics">{metrics}</dl><p class="muted">Ölçüm güncelliği: {shown(freshness)}; son karşılaştırılabilir kayıt: {shown(local_timestamp(summary.get('last_comparable_capture_at')))}.</p><h3>Format · hedef yaş grupları</h3><p class="muted">Erişim ortalaması ve kaydetme/beğeni oranları yalnızca mevcut gözlemleri özetler. Küçük örneklemler betimseldir.</p><div class="table-scroll" tabindex="0" role="region" aria-label="Kaydırılabilir veri tablosu"><table><thead><tr><th>Grup</th><th>Örneklem</th><th>Ortalama erişim</th><th>Kaydetme oranı</th><th>Beğeni oranı</th></tr></thead><tbody>{cohort_html}</tbody></table></div><p class="muted">Ölçümler mevcut yayınları özetler; hangi formatın daha iyi olduğu sonucunu çıkarmak için yeterli veri gerekir.</p></section>
+<section><h2>Insights ölçüm pencereleri</h2><p class="muted">Kaçırılan ölçüm pencereleri, eksik performans verisini gösterir; kaçırılmış yayın anlamına gelmez.</p><dl class="metrics">{metrics}</dl><p class="muted">Ölçüm güncelliği: {shown(freshness)}; son karşılaştırılabilir kayıt: {shown(local_timestamp(summary.get('last_comparable_capture_at')))}.</p><p class="muted">Ölçüm kapsamı: {shown(coverage)}. Kapsam tüm kayıtlı yayınların ölçüm pencerelerine dayanır; güncellik eksiksiz ölçüm anlamına gelmez.</p><h3>Format · hedef yaş grupları</h3><p class="muted">Erişim ortalaması ve kaydetme/beğeni oranları yalnızca mevcut gözlemleri özetler. Küçük örneklemler betimseldir.</p><div class="table-scroll" tabindex="0" role="region" aria-label="Kaydırılabilir veri tablosu"><table><thead><tr><th>Grup</th><th>Örneklem</th><th>Ortalama erişim</th><th>Kaydetme oranı</th><th>Beğeni oranı</th></tr></thead><tbody>{cohort_html}</tbody></table></div><p class="muted">Ölçümler mevcut yayınları özetler; hangi formatın daha iyi olduğu sonucunu çıkarmak için yeterli veri gerekir.</p></section>
 
 <section><h2>Hikâye karşılaştırmaları</h2><p class="muted">Anlatım türü ve kapaklar aynı hedef yaştaki gerçek ölçümlerle karşılaştırılır. Her parent gönderi bir gözlemdir; detay sayfaları örnek sayısını artırmaz. Eksik ölçüm sıfır değildir ve otomatik kazanan seçilmez.</p><div class="table-scroll" tabindex="0" role="region" aria-label="Kaydırılabilir hikâye karşılaştırmaları"><table><thead><tr><th>Tür / kapak · hedef yaş</th><th>Örneklem</th><th>Ölçüm kapsamı</th><th>Kaydetme oranı</th><th>Beğeni oranı</th></tr></thead><tbody>{story_comparison_html}</tbody></table></div></section>
 <script id="dashboard-config" type="application/json">null</script>

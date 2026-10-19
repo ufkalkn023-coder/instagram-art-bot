@@ -124,6 +124,7 @@ def test_read_only_grid_tone_never_writes_history(monkeypatch):
 
 
 def test_main_skips_publication_reconciliation_only_for_dry_run(monkeypatch):
+    monkeypatch.setenv('ARTFOLIO_FEED_CONTENT_MODE', 'legacy')
     calls = []
     monkeypatch.setattr(main, "load_workflow_authorization", lambda: object())
     monkeypatch.setattr(main, "validate_carousel_production_preflight", lambda: {})

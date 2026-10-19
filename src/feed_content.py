@@ -21,6 +21,8 @@ class PreparedFeedContent:
     carousel_format: str | None = None
 
     def __post_init__(self) -> None:
+        if 'story_delivery' in self.publication_metadata:
+            raise ValueError('Reviewed story metadata requires PreparedStoryContent')
         count = len(self.artworks)
         if (self.publication_format == "single" and count != 1
                 or self.publication_format == "carousel" and not 6 <= count <= 9
@@ -46,15 +48,17 @@ def artwork_digest(artwork: dict) -> str:
 
 @dataclass(frozen=True)
 class PreparedStoryContent(PreparedFeedContent):
-    """Reviewed carousel pages with unique sources; legacy cardinality is unchanged."""
+    """Reviewed Feed pages with unique sources; legacy cardinality is unchanged."""
 
     story_delivery: StoryDelivery | None = None
 
     def __post_init__(self) -> None:
-        if self.publication_format != "carousel" or not isinstance(self.story_delivery, StoryDelivery):
-            raise ValueError("Story content requires a reviewed carousel delivery")
+        if not isinstance(self.story_delivery, StoryDelivery):
+            raise ValueError("Story content requires a reviewed delivery")
         # Revalidate even model_copy/constructed values at this trust boundary.
         delivery = StoryDelivery.model_validate(self.story_delivery.model_dump(mode="json"))
+        if self.publication_format != delivery.publication_format:
+            raise ValueError('Story format must match its reviewed page count')
         delivery.require_sources(self.publication_ids)
         if len(self.media_paths) != len(delivery.pages):
             raise ValueError("Story media count does not match reviewed pages")
