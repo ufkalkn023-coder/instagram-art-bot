@@ -15,7 +15,8 @@ class StoryPage(BaseModel):
 
 class StoryDelivery(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
-    schema_version: Literal["artfolio-story-delivery-v1", "artfolio-story-delivery-v2"] = "artfolio-story-delivery-v1"
+    # v3 binds machine-validated editorial output; v1/v2 retain human review semantics.
+    schema_version: Literal["artfolio-story-delivery-v1", "artfolio-story-delivery-v2", "artfolio-story-delivery-v3"] = "artfolio-story-delivery-v1"
     reviewed_revision: int = Field(ge=1, strict=True)
     reviewed_digest: str = Field(pattern=r"^[a-f0-9]{64}$")
     source_ids: tuple[str, ...] = Field(min_length=1, max_length=8)
@@ -100,7 +101,7 @@ class StoryDelivery(BaseModel):
 
     @property
     def publication_format(self) -> Literal['single', 'carousel']:
-        return 'single' if self.schema_version == 'artfolio-story-delivery-v2' and len(self.pages) == 1 else 'carousel'
+        return 'single' if self.schema_version != 'artfolio-story-delivery-v1' and len(self.pages) == 1 else 'carousel'
 
     @property
     def child_count(self) -> int:

@@ -1398,11 +1398,28 @@ def _run_carousel_post(args, authorization: ProductionAuthorization | None = Non
     return publication_id
 
 
+def _run_fresh_feed(args, mode, authorization):
+    from src.feed_content_policy import resolve_content_mode
+    runner = run_single_post if mode is ProductionMode.SINGLE else run_carousel_post
+    if resolve_content_mode(getattr(args, 'content_mode', None)) != 'automatic':
+        return runner(args) if args.dry_run else runner(args, authorization)
+    from src.automatic_editorial import prepare_automatic_editorial
+    prepare = prepare_single_content if mode is ProductionMode.SINGLE else prepare_carousel_content
+    preparation_args = argparse.Namespace(**vars(args))
+    preparation_args.prepare_only = True
+    with tempfile.TemporaryDirectory(prefix='artfolio-automatic-editorial-') as directory:
+        preparation_args.preparation_directory = Path(directory)
+        acquired = prepare(preparation_args)
+        content = prepare_automatic_editorial(acquired, Path(directory) / 'editorial')
+        logger.info('automatic_editorial_prepared mode=%s sources=%s human_reviewed=false',
+                    mode.value, len(content.publication_ids))
+        return runner(args, authorization, prepared_content=content)
+
+
 def run_feed_with_queue(args, mode: ProductionMode, authorization: ProductionAuthorization | None):
     """Optionally consume local content through the unchanged publication gates."""
     if mode not in {ProductionMode.SINGLE, ProductionMode.CAROUSEL}:
         raise ValueError("Resolve the next successful Feed format before claiming content")
-    runner = run_single_post if mode is ProductionMode.SINGLE else run_carousel_post
     from src.feed_content_policy import resolve_content_mode
     content_mode = resolve_content_mode(getattr(args, 'content_mode', None))
     if args.dry_run and content_mode == 'editorial':
@@ -1413,7 +1430,7 @@ def run_feed_with_queue(args, mode: ProductionMode, authorization: ProductionAut
     if directory is not None and remote:
         raise ValueError("Select either a local or R2 prepared queue")
     if args.dry_run or (directory is None and not remote):
-        return runner(args) if args.dry_run else runner(args, authorization)
+        return _run_fresh_feed(args, mode, authorization)
     if not isinstance(authorization, ProductionAuthorization):
         raise ValueError("Prepared content is not a production authorization")
     from src.feed_queue import PreparedFeedQueue
@@ -1428,17 +1445,19 @@ def run_feed_with_queue(args, mode: ProductionMode, authorization: ProductionAut
 
 def _consume_feed_queue(args, mode, authorization, queue, rights_revalidator=None):
     runner = run_single_post if mode is ProductionMode.SINGLE else run_carousel_post
-    from src.feed_content_policy import is_editorial_content, resolve_content_mode
-    editorial = resolve_content_mode(getattr(args, 'content_mode', None)) == 'editorial'
+    from src.feed_content_policy import is_automatic_editorial_content, is_editorial_content, resolve_content_mode
+    content_mode = resolve_content_mode(getattr(args, 'content_mode', None))
+    editorial = content_mode == 'editorial'
+    content_filter = is_editorial_content if editorial else is_automatic_editorial_content
     now = datetime.now(timezone.utc)
     claim = queue.claim(mode.value, protected_ids=history_tracker.get_posted_ids(),
                         owner=authorization.key, now=now, rights_revalidator=rights_revalidator,
-                        **({'content_filter': is_editorial_content} if editorial else {}))
+                        **({'content_filter': content_filter} if content_mode != 'legacy' else {}))
     if claim is None:
         if editorial:
             raise RuntimeError(f'EDITORIAL_REVIEW_REQUIRED: no reviewed {mode.value} package; prepare approved editorial stock')
         logger.info("prepared_queue_empty mode=%s fallback=fresh_acquisition", mode.value)
-        return runner(args, authorization)
+        return _run_fresh_feed(args, mode, authorization)
     try:
         content = claim.content
         if datetime.now(timezone.utc) >= claim.expires_at:
@@ -1478,8 +1497,8 @@ def _consume_feed_queue(args, mode, authorization, queue, rights_revalidator=Non
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Instagram Art Museum Automation Bot")
-    parser.add_argument('--content-mode', choices=('editorial', 'legacy'),
-                        help='Regular Feed uses reviewed editorial stock; legacy acquisition is explicit')
+    parser.add_argument('--content-mode', choices=('automatic', 'editorial', 'legacy'),
+                        help='Default: automatic editorial generation; editorial consumes human-reviewed stock only')
     parser.add_argument("--dry-run", action="store_true", help="Run bot locally without posting to Instagram")
     parser.add_argument("--prepared-queue", type=Path, help="Optional local prepared Feed queue; all publication gates still apply")
     parser.add_argument("--prepared-queue-r2", action="store_true", help="Consume the private R2 prepared queue with fresh rights checks")

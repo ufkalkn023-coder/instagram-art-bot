@@ -79,7 +79,8 @@ def run(argv: list[str] | None = None) -> int:
     modes.add_argument("--check-refill", action="store_true", help="Read-only R2 queue and exact-SHA schedule gate")
     modes.add_argument("--refill", action="store_true", help="Prepare only an empty, exhausted or expired R2 batch")
     modes.add_argument('--check-editorial', action='store_true', help='Read-only approval and format readiness; never builds a queue')
-    parser.add_argument('--content-mode', choices=('editorial', 'legacy'), help='Default: reviewed editorial stock')
+    parser.add_argument('--content-mode', choices=('automatic', 'editorial', 'legacy'),
+                        help='Default: reviewed editorial stock; scheduled Feed can generate on demand')
     parser.add_argument('--editorial-workspace', type=Path, help='Select reviewed v2 projects from this local workspace')
     parser.add_argument("--early", action="store_true", help="Keep fresh READY entries and add three packages when at most two remain")
     parser.add_argument("--expected-sha", default=os.environ.get('GITHUB_SHA'))
@@ -108,7 +109,7 @@ def run(argv: list[str] | None = None) -> int:
     queue = PreparedFeedQueue(args.directory)
     original_policy = os.environ.get(RIGHTS_POLICY_ENV)
     try:
-        content_mode = resolve_content_mode(args.content_mode)
+        content_mode = resolve_content_mode(args.content_mode or os.environ.get('ARTFOLIO_FEED_CONTENT_MODE', 'editorial'))
         if args.editorial_workspace and content_mode != 'editorial' or args.check_editorial and content_mode != 'editorial':
             raise ValueError('Editorial workspace checks require editorial content mode')
         if content_mode == 'editorial' and not (args.status or conditional or args.editorial_workspace or args.story_project):
@@ -117,6 +118,17 @@ def run(argv: list[str] | None = None) -> int:
             raise ValueError("R2 installation requires explicitly supplied state-writer credentials; use --skip-keychain")
         remote = R2PreparedFeedQueue(args.directory / '.remote-read') if args.r2 else None
         decision = _refill_decision(remote, args.expected_sha, early=args.early) if conditional else None
+        if (args.check_refill and content_mode == 'automatic'
+                and decision['reason'] in {'EMPTY', 'EXHAUSTED', 'EXPIRED', 'READY_PRESENT', 'LOW_STOCK'}):
+            packages = remote._read_manifest()[0]['packages']
+            eligible = [item for item in packages if item['state'] == 'READY'
+                        and item['content'].get('content_kind') == 'story'
+                        and item['content'].get('story_delivery', {}).get('schema_version')
+                        in {'artfolio-story-delivery-v2', 'artfolio-story-delivery-v3'}]
+            decision = {**decision, 'refill_needed': False,
+                        'reason': 'EDITORIAL_STOCK_PRESENT' if eligible else 'ON_DEMAND_GENERATION_AVAILABLE',
+                        'editorial_ready_count': len(eligible), 'requires_editorial_review': False,
+                        'on_demand_generation': True, 'legacy_stock_preserved': True}
         if (decision is not None and content_mode == 'editorial'
                 and decision['reason'] in {'READY_PRESENT', 'LOW_STOCK'}):
             packages = remote._read_manifest()[0]['packages']
@@ -141,7 +153,7 @@ def run(argv: list[str] | None = None) -> int:
             print(json.dumps(decision, indent=2))
             return 0
         if not args.status:
-            if content_mode == 'legacy' and not args.skip_keychain:
+            if content_mode != 'editorial' and not args.skip_keychain:
                 status = load_keychain_credentials(ENGAGEMENT_AUDIT_PROFILE)
                 if any(not status[name] for name in credential_variables(ENGAGEMENT_AUDIT_PROFILE)):
                     raise ValueError("Read-only engagement-audit credentials are incomplete")
@@ -204,7 +216,11 @@ def run(argv: list[str] | None = None) -> int:
                     return story
                 if content_mode == 'editorial':
                     raise EditorialStockUnavailable('EDITORIAL_REVIEW_REQUIRED: no reviewed project for this slot')
-                return planner.prepare(format_name, directory, excluded | story_ids | set((decision or {}).get("excluded_artwork_ids", [])), prepare=_prepare)
+                acquired = planner.prepare(format_name, directory, excluded | story_ids | set((decision or {}).get("excluded_artwork_ids", [])), prepare=_prepare)
+                if content_mode == 'automatic':
+                    from src.automatic_editorial import prepare_automatic_editorial
+                    return prepare_automatic_editorial(acquired, directory / 'editorial')
+                return acquired
 
             queue.build(target=args.target, first_format=first_format,
                         prepare=prepare_slot, ttl_hours=args.ttl_hours)

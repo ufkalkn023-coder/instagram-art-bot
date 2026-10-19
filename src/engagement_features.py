@@ -123,7 +123,7 @@ class EngagementFeatureVector(BaseModel):
     previous_post_spacing_bucket: SpacingBucket | None = None
     narrative: StoryNarrative | None = None
     headline_kind: StoryHeadlineKind | None = None
-    page_count: int | None = Field(default=None, ge=3, le=10)
+    page_count: int | None = Field(default=None, ge=1, le=10)
 
     @field_validator(
         "artist",
@@ -267,7 +267,8 @@ class EngagementFeatureVector(BaseModel):
                 _story_delivery(context).get("headline_kind"), canonical.get("headline_kind"),
                 allowed={"source_title", "factual_collection", "ai_proposal", "user_edit"},
             ),
-            page_count=_page_count(_story_delivery(context).get("pages")),
+            page_count=_page_count(_story_delivery(context).get("pages"), minimum=(
+                3 if _story_delivery(context).get('schema_version') == 'artfolio-story-delivery-v1' else 1)),
         )
 
     def candidate_feature_keys(self) -> tuple[str, ...]:
@@ -288,11 +289,12 @@ class EngagementFeatureVector(BaseModel):
 
 def _story_delivery(context: Mapping[str, object]) -> Mapping[str, object]:
     value = context.get("story_delivery")
-    return value if isinstance(value, Mapping) and value.get("schema_version") == "artfolio-story-delivery-v1" else {}
+    return value if isinstance(value, Mapping) and value.get("schema_version") in {
+        'artfolio-story-delivery-v1', 'artfolio-story-delivery-v2', 'artfolio-story-delivery-v3'} else {}
 
 
-def _page_count(value: object) -> int | None:
-    return len(value) if isinstance(value, list) and 3 <= len(value) <= 10 else None
+def _page_count(value: object, *, minimum: int = 3) -> int | None:
+    return len(value) if isinstance(value, list) and minimum <= len(value) <= 10 else None
 
 
 def _controlled_value(*values: object, allowed: set[str]) -> str | None:
