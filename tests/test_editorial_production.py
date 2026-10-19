@@ -1,4 +1,4 @@
-"""The normal Feed entrypoint must never silently revert to older presentation."""
+"""Explicit reviewed-only mode preserves human approval and the new presentation."""
 import json
 from datetime import datetime
 from types import SimpleNamespace
@@ -9,10 +9,10 @@ from tests.test_feed_queue import NOW, build
 from tests.test_feed_schedule import auth
 
 
-def test_feed_content_policy_defaults_to_editorial_and_rejects_unknown_modes(monkeypatch):
+def test_feed_content_policy_defaults_to_automatic_and_rejects_unknown_modes(monkeypatch):
     from src.feed_content_policy import resolve_content_mode
     monkeypatch.delenv('ARTFOLIO_FEED_CONTENT_MODE', raising=False)
-    assert resolve_content_mode() == 'editorial'
+    assert resolve_content_mode() == 'automatic'
     monkeypatch.setenv('ARTFOLIO_FEED_CONTENT_MODE', 'legacy')
     assert resolve_content_mode() == 'legacy'
     assert resolve_content_mode('editorial') == 'editorial'
@@ -36,9 +36,9 @@ def test_editorial_claim_filter_leaves_valid_legacy_stock_untouched(tmp_path, ba
 
 
 @pytest.mark.parametrize('with_legacy_stock', [False, True])
-def test_default_feed_waits_without_acquiring_or_publishing_legacy(monkeypatch, tmp_path, with_legacy_stock):
+def test_reviewed_only_feed_waits_without_acquiring_or_publishing_legacy(monkeypatch, tmp_path, with_legacy_stock):
     import main
-    monkeypatch.delenv('ARTFOLIO_FEED_CONTENT_MODE', raising=False)
+    monkeypatch.setenv('ARTFOLIO_FEED_CONTENT_MODE', 'editorial')
     from src.feed_queue import PreparedFeedQueue
     queue = build(tmp_path)[0] if with_legacy_stock else PreparedFeedQueue(tmp_path / 'queue')
     before = queue.status()

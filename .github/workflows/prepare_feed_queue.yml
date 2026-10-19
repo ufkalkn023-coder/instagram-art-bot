@@ -44,7 +44,7 @@ jobs:
       - name: Check editorial stock
         id: refill
         env:
-          ARTFOLIO_FEED_CONTENT_MODE: editorial
+          ARTFOLIO_FEED_CONTENT_MODE: automatic
           CLOUDFLARE_R2_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_R2_ACCOUNT_ID }}
           CLOUDFLARE_R2_ACCESS_KEY_ID: ${{ secrets.CLOUDFLARE_R2_ACCESS_KEY_ID }}
           CLOUDFLARE_R2_SECRET_ACCESS_KEY: ${{ secrets.CLOUDFLARE_R2_SECRET_ACCESS_KEY }}

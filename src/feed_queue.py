@@ -32,6 +32,7 @@ MAX_PACKAGE_AGE_HOURS = 14 * 24
 ARTWORK_FIELDS = frozenset({
     "id", "title", "artist", "date", "museum", "image_url", "artwork_url", "source",
     "is_public_domain", "rights_status", "license", "credit_line", "alt_text", "medium",
+    "rights_text", "copyright_notice", "image_width", "image_height",
     "classification", "description", "period", "region", "quality_score", "measurement_coverage",
     "selection_score", "visual_category", "period_or_style", "style_or_period", "normalized_artist_key",
     "semantic_family", "published_orientation", "visual_tone", "luminance_bucket", "visual_color_family",

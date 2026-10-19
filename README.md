@@ -2,12 +2,31 @@
 
 Bu proje, müze API'lerinden gelen eserleri hak bilgisini koruyarak seçer, güvenli biçimde indirir ve resmi Meta Instagram Graph API üzerinden sırayla editorial carousel ve tekli görsel gönderisi olarak paylaşır. GitHub Actions zamanlaması, aynı checkout üzerinde önce compile ve test doğrulamasını tamamlar; yalnız ardından production bot çalışır.
 
-## Düzenli paylaşım: onaylı editoryal içerik
+## Düzenli paylaşım: otomatik editoryal içerik
 
-Normal Feed akışının varsayılanı `editorial` modudur: eseri öne çıkaran v2
-taslaklar, ayrı sürüm onayından sonra mevcut yayın kuyruğuna hazırlanır. Tekli ve
-carousel sırası korunur. Uygun onaylı paket yoksa `EDITORIAL_REVIEW_REQUIRED`
-ile durur; eski şablona, otomatik metin üretimine veya model çağrısına dönmez.
+Normal Feed akışının varsayılanı `automatic` modudur. Yayın zamanı geldiğinde
+uygun hazır editorial paket varsa kullanılır; yoksa mevcut müze seçimi, hak ve
+güvenli indirme akışı yeni eserleri edinir ve Museum Journal tasarımında işler.
+İnsan tarafından hazırlanmış stok veya gönderi başına onay gerekmez. Tekli ve
+carousel sırası, en az 48 saatlik yayın aralığı, exact-SHA sürüm izni, tekrar
+koruması ve belirsiz yayın kilitleri korunur.
+
+Otomatik tekli bir tam eser sayfasıdır; carousel seçilen 5–8 eserin tam
+sayfalarından oluşur. Eski ayrı kapak eklenmez. Başlık, metin ve credits kaynak
+katalog bilgilerine dayanır; tarihsel niyet veya görsel gözlem uydurulmaz.
+Mevcut acquisition hazırlığı Gemini açık olduğunda onu çağırabilir; yeni
+editorial metin için ek model çağrısı gerekmez. Eksik/bozuk hak, görsel, state
+veya kuyruk hatası yayınlamayı durdurur; bozuk kuyruk sessizce atlanmaz.
+
+Otomatik çıktının `artfolio-story-delivery-v3` kaydı makine doğrulamasını ifade
+eder. Geriye uyumlu `reviewed_revision`/`reviewed_digest` alanları bu üretimin
+sürümünü ve doğrulanan içeriğini bağlar; insan onayı anlamına gelmez. İnsan
+onaylı v2 paketlerin sözleşmesi değişmez ve mevcut pilotlar otomatik onaylanmaz.
+
+Yalnız önceden incelenmiş projelerle çalışmak için `main.py --content-mode editorial`
+seçilebilir. Bu modda uygun onaylı stok yoksa
+`EDITORIAL_REVIEW_REQUIRED` ile durulur. Aşağıdaki hazırlama ve masa komutları
+bu isteğe bağlı insan incelemesi yoludur; zamanlanmış otomatik yayın için şart değildir.
 
 ```bash
 # Önce masada görselleri ve açıklamayı inceleyip her projeyi ayrı onaylayın.
@@ -30,17 +49,17 @@ belirtir. `--status` genel envanterdir, editoryal uygunluk onayı değildir.
 Canlı sisteme kurulum ayrıca açık `--r2 --skip-keychain` ve süreçte sağlanmış R2
 yetkileri gerektirir. R2 kurulumunda `--first-format auto` sonraki türü kayıtlı
 geçmişten/schedule durumundan alır. Bu komut Instagram'a yayın yapmaz. Normal
-`main.py --mode auto`, açık yerel kuyruk verilmediyse private R2 kuyruğunu kullanır.
+workflow, açık yerel kuyruk verilmediyse private R2 kuyruğunu kontrol eder.
 Mevcut exact-SHA, kaynak hakkı, TTL, tekrar koruması, yayın yetkisi ve belirsiz sonuç
 kilitleri sürer. Henüz onaylanmamış pilotlar otomatik onaylanmaz.
 
-Yayın workflow'u editoryal modu sabitler. `Check editorial Feed stock` workflow'u
+Yayın workflow'u `automatic` modu sabitler. `Check editorial Feed stock` workflow'u
 yalnız private stok kontrolü yapar; manuel kontrol `CHECK_EDITORIAL_FEED` ister.
-Yeni onaylı girdi yokken `EDITORIAL_REVIEW_REQUIRED` bildirir ve acquisition/R2
-yazısı yapmaz. Onaylı kuyruk yerel CLI üzerinden açık `--r2` ile kurulur; workspace
+Hazır editorial stok yokken `ON_DEMAND_GENERATION_AVAILABLE` bildirir ve acquisition/R2
+yazısı yapmaz; içerik uygun yayın koşusunda üretilir. Onaylı kuyruk yerel CLI üzerinden açık `--r2` ile kurulur; workspace
 yerel mutlak proje yollarını tuttuğundan klasörü kopyalamak GitHub runner'ına
 taşımak için yeterli değildir. Workflow yerel dosyaları otomatik taşımaz.
-İncelenmiş stok ve mevcut deployment onayı olmadan yayın başlatılmaz.
+Mevcut deployment onayı olmadan yayın başlatılmaz; hazır stok zorunlu değildir.
 
 Eski hazırlama/karışık v1 akışı yalnız açık `--content-mode legacy` veya
 `ARTFOLIO_FEED_CONTENT_MODE=legacy` ile kullanılabilir; CLI seçimi ortamdan önceliklidir.
