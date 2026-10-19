@@ -14,6 +14,7 @@ from src.story_plan import StoryPlan, rectangle_overlap, usable_detail
 
 
 ISSUE_MESSAGES = {
+    "editorial_brief": "Kaynak notu, karşılaştırma gerekçesi, başlık veya detay alanını kontrol edin",
     "manual_review_required": "Yayın öncesi görsel ve içerik incelemesi gerekiyor",
     "geometry_needs_visual_review": "Otomatik önerilen detay alanını görsel olarak kontrol edin",
     "duplicate_source": "Aynı eser kaynak listesinde iki kez yer alıyor",

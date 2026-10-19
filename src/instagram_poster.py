@@ -475,6 +475,8 @@ def post_carousel_to_instagram_graph_api(
     )
     if story_delivery is not None:
         story_delivery = StoryDelivery.model_validate(story_delivery.model_dump(mode="json"))
+        if story_delivery.publication_format != 'carousel':
+            raise ValueError('Single reviewed page must use the image publisher')
         if len(media_urls) != len(story_delivery.pages):
             raise ValueError("Story media URLs must match reviewed page count")
     elif not MIN_CAROUSEL_ITEMS <= len(media_urls) <= MAX_CAROUSEL_ITEMS:

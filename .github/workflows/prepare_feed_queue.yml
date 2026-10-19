@@ -1,4 +1,4 @@
-name: Prepare private Feed queue
+name: Check editorial Feed stock
 
 "on":
   schedule:
@@ -6,18 +6,9 @@ name: Prepare private Feed queue
   workflow_dispatch:
     inputs:
       confirmation:
-        description: "Type PREPARE_FEED_QUEUE to write 3–5 private prepared packages; no Instagram publication"
+        description: "Type CHECK_EDITORIAL_FEED to inspect stock; no queue writes or publication"
         required: true
         type: string
-      target:
-        description: "Number of alternating packages"
-        type: choice
-        options: ["3", "4", "5"]
-        default: "3"
-      caption_experiment:
-        description: "Opt into the fixed-cover caption-hook experiment"
-        type: boolean
-        default: false
 
 permissions:
   contents: read
@@ -30,7 +21,7 @@ jobs:
   prepare:
     if: >-
       github.ref == 'refs/heads/main' &&
-      ((github.event_name == 'workflow_dispatch' && inputs.confirmation == 'PREPARE_FEED_QUEUE') ||
+      ((github.event_name == 'workflow_dispatch' && inputs.confirmation == 'CHECK_EDITORIAL_FEED') ||
        (github.event_name == 'schedule' && vars.ARTFOLIO_FEED_QUEUE_REFILL_ENABLED == 'true' &&
         vars.ARTFOLIO_FEED_QUEUE_ENABLED == 'true' && vars.ARTFOLIO_PRODUCTION_SCHEDULE_ENABLED == 'true'))
     runs-on: ubuntu-latest
@@ -39,7 +30,7 @@ jobs:
       - name: Block reruns
         run: |
           if [ "$GITHUB_RUN_ATTEMPT" != "1" ]; then
-            echo 'PREPARED_QUEUE_RERUN_BLOCKED' >&2
+            echo 'EDITORIAL_STOCK_CHECK_RERUN_BLOCKED' >&2
             exit 1
           fi
       - uses: actions/checkout@v5
@@ -50,10 +41,10 @@ jobs:
           cache-dependency-path: requirements-dev.lock
       - name: Install dependencies
         run: python -m pip install --require-hashes -r requirements-dev.lock
-      - name: Check scheduled refill eligibility
+      - name: Check editorial stock
         id: refill
-        if: github.event_name == 'schedule'
         env:
+          ARTFOLIO_FEED_CONTENT_MODE: editorial
           CLOUDFLARE_R2_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_R2_ACCOUNT_ID }}
           CLOUDFLARE_R2_ACCESS_KEY_ID: ${{ secrets.CLOUDFLARE_R2_ACCESS_KEY_ID }}
           CLOUDFLARE_R2_SECRET_ACCESS_KEY: ${{ secrets.CLOUDFLARE_R2_SECRET_ACCESS_KEY }}
@@ -63,29 +54,5 @@ jobs:
           CLOUDFLARE_STATE_R2_SECRET_ACCESS_KEY: ${{ secrets.CLOUDFLARE_STATE_R2_SECRET_ACCESS_KEY }}
         run: python scripts/prepare_feed_queue.py --directory "$RUNNER_TEMP/feed-queue" --r2 --skip-keychain --check-refill --early --expected-sha "$GITHUB_SHA" --github-output
       - name: Verify queue implementation
-        if: github.event_name == 'workflow_dispatch' || steps.refill.outputs.refill_needed == 'true'
-        run: pytest -q tests/test_feed_queue.py tests/test_r2_feed_queue.py tests/test_feed_queue_refill.py tests/test_feed_queue_rights.py tests/test_feed_queue_runtime.py
-      - name: Prepare and install validated batch
-        if: github.event_name == 'workflow_dispatch' || steps.refill.outputs.refill_needed == 'true'
-        env:
-          QUEUE_TARGET: ${{ inputs.target || '3' }}
-          ARTFOLIO_CAPTION_EXPERIMENT_ENABLED: ${{ inputs.caption_experiment || vars.ARTFOLIO_CAPTION_EXPERIMENT_ENABLED == 'true' }}
-          ARTFOLIO_COVER_EXPERIMENT_ENABLED: ${{ vars.ARTFOLIO_COVER_EXPERIMENT_ENABLED }}
-          ARTFOLIO_RIGHTS_POLICY: strict_public_domain
-          ARTFOLIO_FEED_VARIETY_ENABLED: ${{ vars.ARTFOLIO_FEED_VARIETY_ENABLED }}
-          GOOGLE_GEMINI_API_KEY: ${{ vars.ARTFOLIO_GEMINI_ENABLED == 'true' && secrets.GOOGLE_GEMINI_API_KEY || '' }}
-          SMITHSONIAN_API_KEY: ${{ secrets.SMITHSONIAN_API_KEY }}
-          EUROPEANA_API_KEY: ${{ secrets.EUROPEANA_API_KEY }}
-          CLOUDFLARE_R2_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_R2_ACCOUNT_ID }}
-          CLOUDFLARE_R2_ACCESS_KEY_ID: ${{ secrets.CLOUDFLARE_R2_ACCESS_KEY_ID }}
-          CLOUDFLARE_R2_SECRET_ACCESS_KEY: ${{ secrets.CLOUDFLARE_R2_SECRET_ACCESS_KEY }}
-          CLOUDFLARE_R2_BUCKET_NAME: ${{ secrets.CLOUDFLARE_R2_BUCKET_NAME }}
-          CLOUDFLARE_STATE_R2_BUCKET_NAME: ${{ secrets.CLOUDFLARE_STATE_R2_BUCKET_NAME }}
-          CLOUDFLARE_STATE_R2_ACCESS_KEY_ID: ${{ secrets.CLOUDFLARE_STATE_R2_ACCESS_KEY_ID }}
-          CLOUDFLARE_STATE_R2_SECRET_ACCESS_KEY: ${{ secrets.CLOUDFLARE_STATE_R2_SECRET_ACCESS_KEY }}
-        run: |
-          if [ "$GITHUB_EVENT_NAME" = "schedule" ]; then
-            python scripts/prepare_feed_queue.py --directory "$RUNNER_TEMP/feed-queue" --target "$QUEUE_TARGET" --r2 --skip-keychain --refill --early --expected-sha "$GITHUB_SHA"
-          else
-            python scripts/prepare_feed_queue.py --directory "$RUNNER_TEMP/feed-queue" --target "$QUEUE_TARGET" --r2 --skip-keychain
-          fi
+        if: github.event_name == 'workflow_dispatch'
+        run: pytest -q tests/test_feed_queue.py tests/test_r2_feed_queue.py tests/test_feed_queue_refill.py tests/test_feed_queue_rights.py tests/test_feed_queue_runtime.py tests/test_editorial_production.py

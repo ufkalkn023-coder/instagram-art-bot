@@ -15,6 +15,12 @@ def story_project(tmp_path):
     return root
 
 
+@pytest.fixture(autouse=True)
+def legacy_mixed_story_cli(monkeypatch):
+    """These compatibility tests intentionally mix v1 stories and legacy acquisition."""
+    monkeypatch.setenv('ARTFOLIO_FEED_CONTENT_MODE', 'legacy')
+
+
 def test_preview_story_approve_and_export_commands(
     story_project, tmp_path, monkeypatch, capsys
 ):

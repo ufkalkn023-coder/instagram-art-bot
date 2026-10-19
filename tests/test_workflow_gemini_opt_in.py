@@ -13,6 +13,9 @@ def test_feed_workflows_withhold_gemini_key_without_explicit_opt_in(filename):
     bindings = [step["env"]["GOOGLE_GEMINI_API_KEY"]
                 for job in workflow["jobs"].values() for step in job["steps"]
                 if "GOOGLE_GEMINI_API_KEY" in step.get("env", {})]
+    if filename == 'prepare_feed_queue.yml':
+        assert bindings == []  # Editorial stock checks never generate copy or acquire artworks.
+        return
     assert bindings
     for binding in bindings:
         assert binding == "${{ vars.ARTFOLIO_GEMINI_ENABLED == 'true' && secrets.GOOGLE_GEMINI_API_KEY || '' }}"

@@ -2102,6 +2102,8 @@ def reserve_story(artworks: Sequence[Dict[str, Any]], *,
                   publication_metadata: Mapping[str, Any],
                   authorization: ProductionAuthorization | None = None) -> str:
     metadata = StoryPublicationMetadata.model_validate(publication_metadata)
+    if metadata.story_delivery.publication_format != 'carousel':
+        raise ValueError('Single story delivery requires the single reservation path')
     metadata.story_delivery.require_sources([art["id"] for art in artworks])
     return _reserve_carousel_sources(artworks[0], artworks[1:], publication_metadata=publication_metadata,
                                     authorization=authorization, story_delivery=metadata.story_delivery)
@@ -2244,8 +2246,16 @@ def reserve_single_publication(
     publication_metadata: Mapping[str, Any] | None = None,
 ) -> str:
     """Atomically reserve one artwork for a single-feed publication."""
-    metadata = (FeedEditorialMetadata.model_validate(publication_metadata).model_dump(exclude_none=True)
-                if publication_metadata is not None else None)
+    metadata = None
+    if publication_metadata is not None:
+        if 'story_delivery' in publication_metadata:
+            typed = StoryPublicationMetadata.model_validate(publication_metadata)
+            if typed.story_delivery.publication_format != 'single':
+                raise ValueError('Single reservation requires a single-page reviewed delivery')
+            typed.story_delivery.require_sources([artwork_data['id']])
+            metadata = typed.model_dump(exclude_none=True)
+        else:
+            metadata = FeedEditorialMetadata.model_validate(publication_metadata).model_dump(exclude_none=True)
     artwork_id = normalize_artwork_id(artwork_data["id"])
     history, etag = load_history_with_etag()
     now = datetime.now(timezone.utc)
@@ -2307,7 +2317,7 @@ def start_publication_attempt(
 
     def mutation(publication_id, records):
         story = _story_delivery_from_records(records)
-        if story is not None and (len(children) != len(story.pages) or len(set(children)) != len(children)):
+        if story is not None and (len(children) != story.child_count or len(set(children)) != len(children)):
             raise RuntimeError("Story child containers must match ordered reviewed pages")
         existing_status = _uniform_status(records)
         if existing_status is PublicationStatus.PUBLISHING:
@@ -2327,7 +2337,7 @@ def start_publication_attempt(
             record["container_id"] = container_id
             record["publish_started_at"] = started_at
             record["publishing_at"] = started_at
-            if children:
+            if children or story is not None:
                 record["child_container_ids"] = list(children)
         logger.info(
             "publication_transition publication_id=%s from=%s to=PUBLISHING container_id=%s",
@@ -2592,7 +2602,14 @@ def _finalize_publication_history(
         raw_single_metadata = target_records[0].get("publication_metadata")
         if raw_single_metadata is not None:
             try:
-                experiment_metadata = FeedEditorialMetadata.model_validate(raw_single_metadata).model_dump(exclude_none=True)
+                story = _story_delivery_from_records(target_records)
+                metadata_type = StoryPublicationMetadata if story is not None else FeedEditorialMetadata
+                experiment_metadata = metadata_type.model_validate(raw_single_metadata).model_dump(exclude_none=True)
+                if story is not None:
+                    if story.publication_format != 'single':
+                        raise CorruptedHistoryError('Single reservation has a carousel story delivery')
+                    if theme is None:
+                        theme = story.theme_id
             except ValidationError as error:
                 raise CorruptedHistoryError("Single reservation has malformed editorial metadata") from error
     if role_records:
@@ -2926,7 +2943,14 @@ def _story_delivery_from_records(records) -> StoryDelivery | None:
         story.require_sources([r["id"] for r in records])
     except (ValueError, KeyError) as error:
         raise CorruptedHistoryError("Story source delivery metadata is malformed") from error
-    if (records[0].get("publication_role") != "COVER"
+    single = story.publication_format == 'single'
+    if single:
+        if (len(records) != 1 or str(records[0].get('publication_type', '')).upper() != 'SINGLE'
+                or records[0].get('content_type') != 'SINGLE_ARTWORK'
+                or any(key in records[0] for key in ('publication_role', 'cover_artwork_id',
+                                                    'featured_artwork_ids', 'featured_position'))):
+            raise CorruptedHistoryError('Single story source reservation shape mismatch')
+    elif (records[0].get("publication_role") != "COVER"
             or records[0].get("publication_metadata") != story_payloads[0]
             or any(str(r.get("publication_type", "")).upper() != "CAROUSEL"
                    or r.get("cover_artwork_id") != story.source_ids[0]
@@ -2943,7 +2967,7 @@ def _story_delivery_from_records(records) -> StoryDelivery | None:
             raise CorruptedHistoryError("Story crossed publication boundary without child evidence")
         if children is not None and (not isinstance(children, list)
                 or any(not isinstance(c, str) or not c for c in children)
-                or len(children) != len(story.pages) or len(set(children)) != len(children)):
+                or len(children) != story.child_count or len(set(children)) != len(children)):
             raise CorruptedHistoryError("Story child container cardinality mismatch")
     return story
 

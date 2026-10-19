@@ -19,7 +19,7 @@ def test_preparation_command_builds_alternating_local_packages_and_restores_conf
     monkeypatch.setattr(command.main, "prepare_single_content", prepare)
     monkeypatch.setattr(command.main, "prepare_carousel_content", prepare)
     directory = tmp_path / "queue"
-    assert command.run(["--directory", str(directory), "--target", "3", "--first-format", "carousel", "--skip-keychain"]) == 0
+    assert command.run(["--directory", str(directory), "--target", "3", "--first-format", "carousel", "--skip-keychain", '--content-mode', 'legacy']) == 0
     result = json.loads(capsys.readouterr().out)
     assert [item["publication_format"] for item in result] == ["carousel", "single", "carousel"]
     assert command.config.DATA_DIR == original_data and command.config.OUTPUT_RAW_IMAGE_PATH == original_raw

@@ -1,0 +1,10 @@
+{
+  "title": "Yakından uzağa",
+  "question": "Bir resimde bakışımızı yakındaki bir ayrıntıdan uzak bir dünyaya ne taşır?",
+  "contributions": [
+    {"project_id": "p-01", "contribution": "Büyük orkide ile küçük, uzak orman arasındaki ölçek farkına bakıyoruz."},
+    {"project_id": "p-02", "contribution": "Dantel yakanın ayrıntısını portrenin bütünüyle birlikte inceliyoruz."},
+    {"project_id": "p-03", "contribution": "Eğilmiş yüzü destekleyen elden arkadaki küçük yapılara ve tepelere geçiyoruz."},
+    {"project_id": "p-04", "contribution": "Dar bir ağaçlık açıklık ile geniş bir su yüzeyinin uzaklığı nasıl açtığını karşılaştırıyoruz."}
+  ]
+}

@@ -843,6 +843,7 @@ def test_reconcile_only_cli_reports_cleanup_failure_separately(monkeypatch):
 
 
 def test_startup_reconciliation_runs_before_new_acquisition(monkeypatch):
+    monkeypatch.setenv('ARTFOLIO_FEED_CONTENT_MODE', 'legacy')
     events = []
     monkeypatch.setattr(main, "load_workflow_authorization", lambda: object())
     monkeypatch.setattr(main, "validate_carousel_production_preflight", lambda: {})

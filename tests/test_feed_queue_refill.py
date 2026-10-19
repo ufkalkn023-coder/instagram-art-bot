@@ -73,6 +73,8 @@ def test_refill_check_rejects_corrupt_manifest(tmp_path):
 
 
 def wire_command(monkeypatch, queue, *, sha=SHA):
+    # This fixture exercises the explicit compatibility refill path.
+    monkeypatch.setenv('ARTFOLIO_FEED_CONTENT_MODE', 'legacy')
     store, client = fixture_store()
     initialize(store)
     schedule = manager(store)

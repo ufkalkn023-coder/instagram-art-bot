@@ -5,7 +5,7 @@ from dataclasses import replace
 from uuid import uuid4
 
 from src.carousel_themes import ThemeEvidenceMode, get_default_theme_registry
-from src.feed_content import PreparedFeedContent
+from src.feed_content import PreparedFeedContent, PreparedStoryContent
 from src.feed_variety import context_from_content, variety_enabled
 
 logger = logging.getLogger(__name__)
@@ -23,6 +23,9 @@ class FeedPairPlanner:
         self._seen_themes = set()
 
     def remember(self, content: PreparedFeedContent) -> None:
+        if isinstance(content, PreparedStoryContent):
+            # Reviewed copy cannot inherit a planned legacy caption-pair treatment.
+            self._anchor = None
         self._prepared_count += 1
         self._inventory.extend(context_from_content(content, f'planned:{self._prepared_count}'))
 

@@ -160,6 +160,83 @@ def test_discovery_filters_reels_and_uses_get_only():
     assert not hasattr(Session(), "post")
 
 
+def _reel_entry(identifier):
+    return {"id": identifier, "media_type": "VIDEO", "media_product_type": "REELS",
+            "timestamp": "2026-08-25T10:00:00+0000"}
+
+
+def test_discovery_uses_cursor_on_trusted_endpoint_deduplicates_and_bounds_pages():
+    calls = []
+    pages = [
+        {"data": [_reel_entry("first"), _reel_entry("shared")],
+         "paging": {"cursors": {"after": "cursor-1"}, "next": "https://untrusted.example/next"}},
+        {"data": [_reel_entry("shared"), _reel_entry("second")],
+         "paging": {"cursors": {"after": "cursor-2"}, "next": "https://untrusted.example/more"}},
+    ]
+
+    class Session:
+        def get(self, url, **kwargs):
+            calls.append((url, dict(kwargs["params"])))
+            return FakeResponse(200, pages[len(calls) - 1])
+
+    result = InstagramInsightsClient("token", Session()).discover_recent_media("account")
+
+    assert [item.id for item in result.media] == ["first", "shared", "second"]
+    assert result.api_calls == len(calls) == 2
+    assert calls[0][0] == calls[1][0] == "https://graph.facebook.com/v22.0/account/media"
+    assert "after" not in calls[0][1]
+    assert calls[1][1]["after"] == "cursor-1"
+    assert calls[0][1]["fields"] == calls[1][1]["fields"]
+    assert calls[0][1]["limit"] == calls[1][1]["limit"]
+
+
+@pytest.mark.parametrize("paging", [
+    None, [], {}, {"next": "https://graph.facebook.com/next"},
+    {"cursors": {"after": "cursor"}},
+    {"cursors": {"after": ""}, "next": "https://graph.facebook.com/next"},
+    {"cursors": {"after": 1}, "next": "https://graph.facebook.com/next"},
+    {"cursors": {"after": "cursor"}, "next": "http://graph.facebook.com/next"},
+])
+def test_discovery_stops_when_pagination_is_missing_or_malformed(paging):
+    class Session:
+        def get(self, url, **kwargs):
+            assert "after" not in kwargs["params"], "Malformed paging triggered another request"
+            return FakeResponse(200, {"data": [_reel_entry("only")], "paging": paging})
+
+    result = InstagramInsightsClient("token", Session()).discover_recent_media("account")
+    assert [item.id for item in result.media] == ["only"]
+    assert result.api_calls == 1
+
+
+@pytest.mark.parametrize("field", ["values", "total_value"])
+@pytest.mark.parametrize("value", [True, False, -1, -0.5, float("nan"), float("inf"), float("-inf"), "7"])
+def test_invalid_metric_numbers_remain_missing_in_both_response_shapes(field, value):
+    metric = {"name": "saved", field: [{"value": value}] if field == "values" else {"value": value}}
+
+    class Session:
+        def get(self, *args, **kwargs):
+            return FakeResponse(200, {"data": [
+                {"name": "reach", "values": [{"value": 100}]}, metric]})
+
+    result = InstagramInsightsClient("token", Session()).fetch_media_insights("media")
+    assert result.metrics == {"reach": 100}
+    assert "saved" in result.missing_metrics and "saved" not in result.returned_metrics
+
+
+@pytest.mark.parametrize("values", [None, []])
+@pytest.mark.parametrize("value", [0, 7, 2.5])
+def test_total_only_metric_preserves_valid_numbers_including_zero(values, value):
+    class Session:
+        def get(self, *args, **kwargs):
+            return FakeResponse(200, {"data": [
+                {"name": "saved", "values": values, "total_value": {"value": value}}]})
+
+    result = InstagramInsightsClient("token", Session()).fetch_media_insights("media")
+    assert result.metrics == {"saved": value}
+    assert result.returned_metrics == ("saved",)
+    assert "saved" not in result.missing_metrics
+
+
 def test_discovery_rejects_account_id_stored_as_access_token_without_an_api_call():
     class Session:
         def get(self, *args, **kwargs):

@@ -19,6 +19,8 @@ from tests.test_instagram_poster import FakeResponse
 
 
 def runtime(monkeypatch):
+    # Retained acquisition lifecycle; regular editorial stock is exercised separately.
+    monkeypatch.setenv('ARTFOLIO_FEED_CONTENT_MODE', 'legacy')
     store, client = fixture_store()
     armed(store)
 

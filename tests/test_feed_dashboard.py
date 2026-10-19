@@ -116,6 +116,8 @@ def test_real_cohort_schema_shows_reach_and_save_rate_with_sample_caveat():
     assert "20.0% · 1 gözlem" in page
     assert "1 kullanılabilir / 1 uygun yayın" in page
     assert "minimum örneklem 5" in page
+    assert "Ölçüm kapsamı: Eksik pencereler var" in page
+    assert "Ölçüm güncelliği: Güncel" in page
 
 
 def test_queue_report_input_renders_validated_operator_rows(tmp_path):

@@ -406,7 +406,7 @@ def test_all_five_failed_production_themes_return_nonzero(monkeypatch):
         lambda **kwargs: pytest.fail("cover must not run"),
     )
 
-    assert main.main(["--dry-run"]) == 1
+    assert main.main(["--dry-run", '--content-mode', 'legacy']) == 1
     assert calls == [theme.id for theme in themes] + ["artfolio_selection"]
 
 

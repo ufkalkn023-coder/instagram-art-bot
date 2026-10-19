@@ -15,7 +15,7 @@ class StoryPage(BaseModel):
 
 class StoryDelivery(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
-    schema_version: Literal["artfolio-story-delivery-v1"] = "artfolio-story-delivery-v1"
+    schema_version: Literal["artfolio-story-delivery-v1", "artfolio-story-delivery-v2"] = "artfolio-story-delivery-v1"
     reviewed_revision: int = Field(ge=1, strict=True)
     reviewed_digest: str = Field(pattern=r"^[a-f0-9]{64}$")
     source_ids: tuple[str, ...] = Field(min_length=1, max_length=8)
@@ -30,7 +30,7 @@ class StoryDelivery(BaseModel):
     headline_kind: Literal[
         "source_title", "factual_collection", "ai_proposal", "user_edit"
     ]
-    pages: tuple[StoryPage, ...] = Field(min_length=3, max_length=10)
+    pages: tuple[StoryPage, ...] = Field(min_length=1, max_length=10)
 
     @field_validator("source_sha256", "artwork_sha256")
     @classmethod
@@ -65,14 +65,21 @@ class StoryDelivery(BaseModel):
             and not 3 <= count <= 8
         ):
             raise ValueError("Story source registry does not match narrative")
-        if (
-            self.pages[0].role != "cover"
+        legacy = self.schema_version == 'artfolio-story-delivery-v1'
+        if legacy and (
+            len(self.pages) < 3
+            or self.pages[0].role != "cover"
             or self.pages[-1].role != "closing"
             or len({p.id for p in self.pages}) != len(self.pages)
             or sum(p.role == "cover" for p in self.pages) != 1
             or sum(p.role == "closing" for p in self.pages) != 1
         ):
             raise ValueError("Story page order/identity is invalid")
+        if not legacy and (len({page.id for page in self.pages}) != len(self.pages)
+                           or any(page.role not in {'artwork', 'detail', 'comparison'} for page in self.pages)
+                           or self.pages[0].role not in {'artwork', 'detail'}
+                           or sum(page.role == 'artwork' for page in self.pages) != count):
+            raise ValueError('Editorial delivery requires meaningful unique pages and full source views')
         for page in self.pages:
             expected = 2 if page.role == "comparison" else 1
             if (
@@ -90,6 +97,14 @@ class StoryDelivery(BaseModel):
         ):
             raise ValueError("Comparison requires a comparison page")
         return self
+
+    @property
+    def publication_format(self) -> Literal['single', 'carousel']:
+        return 'single' if self.schema_version == 'artfolio-story-delivery-v2' and len(self.pages) == 1 else 'carousel'
+
+    @property
+    def child_count(self) -> int:
+        return 0 if self.publication_format == 'single' else len(self.pages)
 
     def require_sources(self, ids) -> None:
         if tuple(ids) != self.source_ids:

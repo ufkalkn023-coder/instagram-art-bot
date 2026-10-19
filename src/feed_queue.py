@@ -146,6 +146,10 @@ class PreparedFeedQueue:
         kind = content.get("content_kind", "legacy")
         if kind not in {"legacy", "story"}:
             raise ValueError("Unknown prepared content kind")
+        if kind != 'story' and ('story_delivery' in content or
+                                isinstance(content.get('publication_metadata'), dict)
+                                and 'story_delivery' in content['publication_metadata']):
+            raise ValueError('Reviewed story payload requires the story content kind')
         if not isinstance(assets, list) or not 1 <= len(assets) <= (10 if kind == "story" else 9):
             raise ValueError("Invalid prepared asset list")
         paths = []
@@ -237,7 +241,8 @@ class PreparedFeedQueue:
 
     def claim(self, expected_format: str, *, protected_ids: set[str], owner: str,
               now: datetime | None = None,
-              rights_revalidator: Callable[[PreparedFeedContent], bool] | None = None) -> QueueClaim | None:
+              rights_revalidator: Callable[[PreparedFeedContent], bool] | None = None,
+              content_filter: Callable[[PreparedFeedContent], bool] | None = None) -> QueueClaim | None:
         timestamp = _now(now)
         if expected_format not in {"single", "carousel"} or not isinstance(owner, str) or not owner.strip():
             raise ValueError("Queue claim requires a Feed format and owner")
@@ -256,6 +261,8 @@ class PreparedFeedQueue:
                 else:
                     try:
                         content = self._content(package)
+                        if content_filter is not None and not content_filter(content):
+                            continue
                         if any(identifier in protected_ids for identifier in content.publication_ids):
                             reason = "protected_artwork"
                         elif rights_revalidator is not None and not rights_revalidator(content):

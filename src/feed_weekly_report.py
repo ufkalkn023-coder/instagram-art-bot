@@ -25,12 +25,18 @@ def build_weekly_report(schedule, queue, history, snapshots, *, now: datetime) -
     analytics = build_feed_analytics_report({'publications': publications}, selected_snapshots, now=timestamp)
     valid_parents = {row['publication_id']: row['publication_format'] for row in analytics['windows']}
     counts = Counter(valid_parents.values())
+    # Experiment arms need observations across weeks at the normal Feed cadence.
+    experiments = build_experiment_report(history, snapshots, now=timestamp)
+    experiments['period'] = {
+        'basis': 'All validated stored publications before report generation',
+        'end': utc_timestamp(timestamp),
+    }
     return {'schema_version': 1, 'generated_at': utc_timestamp(timestamp),
             'period': {'start': utc_timestamp(start), 'end': utc_timestamp(timestamp),
                        'basis': 'Published in [start, end); stored measurements available at generation time'},
             'publication_counts': {name: counts[name] for name in ('single', 'carousel')},
             'analytics': analytics, 'source_diagnostics': complete['diagnostics'],
-            'experiments': build_experiment_report({'publications': publications}, selected_snapshots, now=timestamp),
+            'experiments': experiments,
             'operations': build_feed_operations(schedule, queue, history, snapshots, now=timestamp),
             'winner': None, 'auto_promote': False}
 
@@ -65,7 +71,8 @@ def render_weekly_markdown(report: dict) -> str:
               'Rapor yalnız kayıtlı verileri okur; yayın veya yeni ölçüm başlatmaz.']
     experiments = report.get('experiments', {})
     comparisons = [*experiments.get('comparisons', []), *experiments.get('cover_comparisons', [])]
-    lines += ['', '## Deney gözlemleri', '',
+    lines += ['', '## Deney gözlemleri · birikimli', '',
+              'Deneyler yalnız bu haftayı değil, rapor zamanına kadar doğrulanmış tüm kayıtlı yayınları kapsar.', '',
               'Kapak ve açıklama ayrı deneylerdir. Aynı tema, hedef yaş ve sabit karşı faktör korunur; her kolda minimum 5 gözlem gerekir. Otomatik kazanan seçilmez.']
     if not comparisons:
         lines += ['', 'Henüz kayıtlı karşılaştırılabilir deney ataması yok.']

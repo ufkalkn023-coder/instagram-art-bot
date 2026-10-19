@@ -30,6 +30,10 @@ def source_preview(path: str) -> str:
 
 
 def review_page(project: StoryProject, report: dict) -> str:
+    from src.editorial_story import EditorialStoryPlan
+    if isinstance(project.plan, EditorialStoryPlan):
+        from src.editorial_review import review_editorial_page
+        return review_editorial_page(project, report)
     escape = html.escape
     roles = dict(
         cover="Kapak",
