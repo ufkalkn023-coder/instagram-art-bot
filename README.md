@@ -321,6 +321,13 @@ Format policy, temanın istediği bilinçli benzerliği istenmeyen tekrardan ay�
 
 ## Zamanlama ve GitHub Actions
 
+Yeni `main` sürümünün mevcut sürekli üretim iznine aktarımı için `Release reviewed
+editorial Feed` workflow'u önce `inspect`, ardından aynı SHA ve dönen generation
+ile açık `activate` işlemi sağlar. Aktivasyon `DEPLOY_REVIEWED_EDITORIAL_FEED`
+onayı ister. Önceden duraklatılmış veya çözülmemiş bir yayını otomatik açmaz;
+mevcut cadence ve 48 saat sınırını korur. Proje onayı, stok kurulumu ve Instagram
+yayını yapmaz; production anahtarları yalnız GitHub'daki operatör adımında kalır.
+
 Workflow her saat UTC dakika 17’de Feed yayın uygunluğunu kontrol eder:
 
 ```text
