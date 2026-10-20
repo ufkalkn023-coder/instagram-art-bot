@@ -421,3 +421,49 @@ def test_automatic_feed_does_not_reuse_catalogue_only_v3_stock(tmp_path):
     delivery = content.story_delivery.model_copy(update={'headline_kind': 'source_title'})
     stale = replace(content, story_delivery=delivery, publication_metadata={'story_delivery': delivery.model_dump(mode='json')})
     assert not is_automatic_editorial_content(stale)
+
+
+def test_provider_rejection_reports_reason_without_exposing_api_key(monkeypatch, tmp_path, editorial_model_response, caplog):
+    from google.genai import errors
+    from src.automatic_editorial import prepare_automatic_editorial
+    def rejected(**_kwargs):
+        raise errors.ClientError(400, {'error': {'message': 'Invalid JSON schema; key=test-key',
+                                                'status': 'INVALID_ARGUMENT'}})
+    monkeypatch.setattr(editorial_model_response, 'generate_content', rejected)
+    with pytest.raises(RuntimeError):
+        prepare_automatic_editorial(acquired_content(tmp_path, 'single'), tmp_path / 'rendered')
+    assert '400' in caplog.text and 'Invalid JSON schema' in caplog.text
+    assert 'test-key' not in caplog.text
+
+
+def test_strict_copy_schema_is_sent_as_json_schema_through_real_sdk(monkeypatch, tmp_path):
+    import httpx
+    from google import genai
+    from google.genai import types
+    from src import gemini_ai
+    from src.automatic_editorial import prepare_automatic_editorial
+    requests = []
+    response = {'title': 'Blue rectangles in a diagonal rhythm', 'angle': 'Overlapping edges build a stepped composition.',
+                'lead': 'Blue rectangles overlap across the pale ground. Their repeated edges form a diagonal sequence, with narrow ivory gaps separating the shifting shapes.',
+                'notes': [{'artwork_id': 'cleveland_0', 'heading': 'Stepped edges',
+                           'text': 'Overlapping blue shapes create a stepped pattern of straight edges against the ivory ground.'}]}
+    def handle(request):
+        payload = json.loads(request.content)
+        requests.append(payload)
+        generation = payload['generationConfig']
+        if 'responseSchema' in generation:
+            # The OpenAPI Schema endpoint has no additionalProperties field.
+            return httpx.Response(400, json={'error': {'message': 'Unsupported field additionalProperties in responseSchema.',
+                                                       'status': 'INVALID_ARGUMENT'}})
+        return httpx.Response(200, json={'candidates': [{'content': {'role': 'model', 'parts': [{'text': json.dumps(response)}]},
+                                                       'finishReason': 'STOP'}]})
+    def client(key):
+        return genai.Client(api_key=key, http_options=types.HttpOptions(
+            client_args={'transport': httpx.MockTransport(handle)},
+            retry_options=types.HttpRetryOptions(attempts=1)))
+    monkeypatch.setattr(gemini_ai, '_create_client', client)
+    content = prepare_automatic_editorial(acquired_content(tmp_path, 'single'), tmp_path / 'rendered')
+    assert content.story_delivery.public_title == 'Blue rectangles in a diagonal rhythm'
+    assert len(requests) == 1
+    schema = requests[0]['generationConfig']['responseJsonSchema']
+    assert schema['additionalProperties'] is False

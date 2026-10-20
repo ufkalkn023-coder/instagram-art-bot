@@ -3,6 +3,7 @@ import io
 import json
 import logging
 import os
+import re
 
 import httpx
 from google.genai import errors, types
@@ -79,8 +80,9 @@ def generate_automatic_brief(sources, *, theme_title):
         client = gemini_ai._create_client(os.environ['GOOGLE_GEMINI_API_KEY'])
         response = client.models.generate_content(
             model=gemini_ai.config.GEMINI_MODEL, contents=contents,
+            # Strict objects need JSON Schema; OpenAPI Schema lacks additionalProperties.
             config=types.GenerateContentConfig(
-                response_mime_type='application/json', response_schema=AutomaticCopy,
+                response_mime_type='application/json', response_json_schema=AutomaticCopy.model_json_schema(),
                 thinking_config=types.ThinkingConfig(thinking_level='MEDIUM'),
                 max_output_tokens=4096,
             ),
@@ -108,8 +110,18 @@ def generate_automatic_brief(sources, *, theme_title):
                                lead=copy.lead, notes=tuple(notes))
         validate_editorial_brief(brief, sources)
         validate_editorial_copy(brief)
-    except (errors.APIError, httpx.TransportError, ValueError, OSError):
-        # Provider responses may contain request details: never include them in logs.
+    except (errors.APIError, httpx.TransportError, ValueError, OSError) as error:
+        # Expose a bounded diagnostic, never the full SDK exception/request headers.
+        if isinstance(error, errors.APIError):
+            message = str(error.message or '')
+            secret = os.environ.get('GOOGLE_GEMINI_API_KEY')
+            if secret:
+                message = message.replace(secret, '[REDACTED]')
+            message = re.sub(r'AIza[\w-]+', '[REDACTED]', message)
+            logger.warning('automatic_editorial_provider_rejected status=%s reason=%s',
+                           error.code, ' '.join(message.split())[:600])
+        else:
+            logger.warning('automatic_editorial_copy_rejected reason=%s', type(error).__name__)
         raise AutomaticEditorialUnavailable('AUTOMATIC_EDITORIAL_AI_UNAVAILABLE_OR_INVALID') from None
     finally:
         if client is not None:
