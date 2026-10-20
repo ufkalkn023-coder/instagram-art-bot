@@ -12,11 +12,28 @@ carousel sırası, en az 48 saatlik yayın aralığı, exact-SHA sürüm izni, t
 koruması ve belirsiz yayın kilitleri korunur.
 
 Otomatik tekli bir tam eser sayfasıdır; carousel seçilen 5–8 eserin tam
-sayfalarından oluşur. Eski ayrı kapak eklenmez. Başlık, metin ve credits kaynak
-katalog bilgilerine dayanır; tarihsel niyet veya görsel gözlem uydurulmaz.
-Mevcut acquisition hazırlığı Gemini açık olduğunda onu çağırabilir; yeni
-editorial metin için ek model çağrısı gerekmez. Eksik/bozuk hak, görsel, state
-veya kuyruk hatası yayınlamayı durdurur; bozuk kuyruk sessizce atlanmaz.
+sayfalarından oluşur. Eski ayrı kapak eklenmez. Varsayılan model
+`gemini-3.8-flash` olur. Her yeni otomatik paket için kaynak görseller ve müze
+metadata'sıyla tek, en fazla 60 saniyelik Gemini çağrısı yapılır (thinking Medium,
+4096 output token). Önceki acquisition caption çağrısı bu modda atlanır.
+İngilizce editoryal başlık, kısa anlatı ve her eser için görsel gözlem yeni tasarıma
+ve açıklamaya taşınır; kaynak başlığı, sanatçı, tarih ve müze credits olarak korunur.
+Tarihsel niyet ve sembolizm türetilmez. Gözlemler model yorumudur; bağımsız insan
+incelemesi anlamına gelmez. Gemini kapalı, erişilemez veya yanıtı geçersizse
+`AUTOMATIC_EDITORIAL_AI_REQUIRED` / `AUTOMATIC_EDITORIAL_AI_UNAVAILABLE_OR_INVALID`
+ile o deneme yayınlamadan durur; ham malzeme listesi anlatı yerine kullanılmaz.
+Sonraki uygun zamanlanmış deneme yeniden üretir. Eksik/bozuk hak, görsel, state
+veya kuyruk hatası da yayınlamayı durdurur; bozuk kuyruk sessizce atlanmaz.
+
+GitHub'da `ARTFOLIO_GEMINI_ENABLED=true` ve kayıtlı `GOOGLE_GEMINI_API_KEY` gerekir.
+`Verify Gemini editorial generation` manuel workflow'u `VERIFY_GEMINI` ile iki
+sınırlı model çağrısı yapar; gerçek müze kaynaklarından tekli/carousel önizlemeleri
+üretir ve üç günlük artifact bırakır. Instagram veya R2 credential'ı almaz ve
+gönderi oluşturmaz. Yerel karşılığı:
+
+```bash
+python scripts/verify_gemini.py --output /path/new-preview --format both
+```
 
 Otomatik çıktının `artfolio-story-delivery-v3` kaydı makine doğrulamasını ifade
 eder. Geriye uyumlu `reviewed_revision`/`reviewed_digest` alanları bu üretimin
@@ -713,8 +730,8 @@ saklayarak görünen iddiaların seçilen setle karşılaştırılmasını sağl
 | `CLOUDFLARE_STATE_R2_SECRET_ACCESS_KEY` | Production için gerekli | State bucket'a scoped secret key |
 | `CLOUDFLARE_R2_CONTROL_PLANE_ACCESS_KEY_ID` / `CLOUDFLARE_R2_CONTROL_PLANE_SECRET_ACCESS_KEY` | Yalnız `control-plane-s3` bootstrap audit seçeneğinde gerekli | Ayrı bucket lifecycle okuma credential'ı; runtime workflow'larına verilmez |
 | `CLOUDFLARE_R2_PUBLIC_URL` | R2 media upload kullanılıyorsa gerekli | Instagram’ın erişeceği R2 public URL tabanı |
-| `GOOGLE_GEMINI_API_KEY` | Opsiyonel | Gemini caption/alt-text üretimi; yoksa fallback kullanılır |
-| `ARTFOLIO_GEMINI_ENABLED` | Feed Actions için açık opt-in | Repository variable tam `true` olduğunda Feed yayınlama/hazırlama adımları Gemini secret'ını alır. Eksik veya `false` olduğunda yerel fallback kullanılır; secret silinmez. Yerel CLI kendi environment ayarlarını kullanır. |
+| `GOOGLE_GEMINI_API_KEY` | Yeni automatic paket için gerekli | Gemini üretimi; yeni automatic paketlerde zorunlu, legacy modda fallback kullanılabilir |
+| `ARTFOLIO_GEMINI_ENABLED` | Feed Actions için açık opt-in | Repository variable tam `true` olduğunda Feed yayınlama/hazırlama adımları Gemini secret'ını alır. Eksik veya `false` olduğunda yeni automatic paket üretimi durur; legacy modda fallback kullanılır ve secret silinmez. Yerel CLI kendi environment ayarlarını kullanır. |
 | `SMITHSONIAN_API_KEY` | Opsiyonel | Smithsonian Open Access adapter'ını etkinleştirir |
 | `EUROPEANA_API_KEY` | Opsiyonel | Europeana adapter'ını etkinleştirir |
 | `ARTFOLIO_SELECTION_SEED` | Opsiyonel | Seçim RNG’si için açık seed |
@@ -727,7 +744,7 @@ belgesine bakın.
 
 Instagram publish ile ayrı durable R2 safety state ve receipt ledger zorunludur. Temporary media cleanup yalnız media bucket'ın uygulamaya ait `images/publications/<id>/` veya `reels/publications/<id>/` anahtarlarına erişir. `CLOUDFLARE_R2_PUBLIC_URL`, carousel media upload akışında gerekir.
 
-Production startup’ta Instagram, media R2 ve ayrı state R2 değişkenleri **required** kabul edilir; eksik adlar secret değerleri yazdırılmadan tek tanıda raporlanır. State ve media bucket/credential değerleri aynı olamaz. Gemini template fallback sunduğu için optional kalır; Rijksmuseum Data Services adapter’ı anahtarsız çalışır.
+Production startup’ta Instagram, media R2 ve ayrı state R2 değişkenleri **required** kabul edilir; eksik adlar secret değerleri yazdırılmadan tek tanıda raporlanır. State ve media bucket/credential değerleri aynı olamaz. Gemini legacy modda optional, yeni automatic paket üretiminde zorunludur; Rijksmuseum Data Services adapter’ı anahtarsız çalışır.
 
 Recovery bootstrap, forensic artifact dizininden yalnız yerel candidate üretir:
 
@@ -741,7 +758,7 @@ Varsayılan mod R2'ye yazmaz. `--output-dir` yalnız yerel dosya üretir. Üreti
 
 Güncel publication namespace cutover tamamlanmadan `INSTAGRAM_ACCESS_TOKEN_V2` secret binding'i kaldırılmaz. Cutover sonrasında Feed/Reel yalnız `INSTAGRAM_PUBLICATION_ACCESS_TOKEN` kullanır; Insights ayrı `INSTAGRAM_INSIGHTS_ACCESS_TOKEN` kullanmaya devam eder. Eski workflow snapshot'larının yeniden çalıştırılması, eski secret binding'i kaldırılarak credential seviyesinde engellenir.
 
-Normal outbound isteklerin tümü bounded timeout kullanır. R2 connect/read sınırları 10/30 saniyedir; SDK-level retry kapalıdır. Media upload yalnız transient network, rate-limit ve 5xx hatalarında en fazla üç loglanan uygulama denemesi yapar; permanent 4xx/config hataları hemen durur. Gemini isteği 60 saniye ve tek attempt ile sınırlıdır; hata halinde deterministic template fallback kullanılır. Instagram yalnız transient container/status hatalarını üç bounded attempt ile tekrarlar; publish sınırındaki belirsiz sonuç otomatik retry edilmez.
+Normal outbound isteklerin tümü bounded timeout kullanır. R2 connect/read sınırları 10/30 saniyedir; SDK-level retry kapalıdır. Media upload yalnız transient network, rate-limit ve 5xx hatalarında en fazla üç loglanan uygulama denemesi yapar; permanent 4xx/config hataları hemen durur. Gemini isteği 60 saniye ve tek attempt ile sınırlıdır; legacy modda hata halinde template fallback kullanılır, yeni automatic pakette yayın yapılmaz. Instagram yalnız transient container/status hatalarını üç bounded attempt ile tekrarlar; publish sınırındaki belirsiz sonuç otomatik retry edilmez.
 
 ## Selection reproducibility
 

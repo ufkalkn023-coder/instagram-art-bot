@@ -27,7 +27,7 @@ MET_API_BASE = "https://collectionapi.metmuseum.org/public/collection/v1"
 MET_SEARCH_API_BASE = "https://collectionapi.metmuseum.org/public/collection/v1.1"
 
 # Gemini AI Settings
-GEMINI_MODEL = "gemini-3.7-flash"
+GEMINI_MODEL = "gemini-3.8-flash"
 GEMINI_ENABLED = True
 
 # Instagram Graph API Version & Endpoints. Keep one version source for publish

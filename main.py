@@ -390,7 +390,7 @@ def prepare_single_content(args, *, excluded_ids: set[str] | None = None,
             "No single artwork in the bounded candidate pool passed Instagram image validation"
         )
 
-    analysis = gemini_ai.analyze_artwork(
+    analysis = None if getattr(args, "automatic_editorial", False) else gemini_ai.analyze_artwork(
         image_path=artwork["local_image_path"],
         title=artwork.get("title", ""), artist=artwork.get("artist", ""),
         date=artwork.get("date", ""), museum=artwork.get("museum", ""),
@@ -940,6 +940,7 @@ def _select_carousel_artworks(
 
 def _build_carousel_content_plan(
     selected: _SelectedCarousel, *, selection_run_seed: art_fetcher.SelectionRunSeed,
+    use_gemini: bool = True,
 ) -> tuple[CarouselPlan, ControlledCaptionExperiment | None, ControlledCoverExperiment | None]:
     """Sequence the selected works and build grounded copy and presentation assignments."""
     artworks = selected.artworks
@@ -985,7 +986,7 @@ def _build_carousel_content_plan(
         analysis_context["caption_hook_type"] = caption_hook_type.value
     ai_analysis = (
         None
-        if theme_definition.id == ARTFOLIO_SELECTION_THEME.id
+        if not use_gemini or theme_definition.id == ARTFOLIO_SELECTION_THEME.id
         else gemini_ai.analyze_carousel(
             theme_definition.title,
             artworks,
@@ -1226,6 +1227,7 @@ def prepare_carousel_content(args, *, excluded_ids: set[str] | None = None) -> P
     )
     plan, controlled_experiment, controlled_cover_experiment = _build_carousel_content_plan(
         selected, selection_run_seed=selection_run_seed,
+        **({"use_gemini": False} if getattr(args, "automatic_editorial", False) else {}),
     )
     output_media_paths = _render_carousel_content(args, plan, color_tone=color_tone)
 
@@ -1404,9 +1406,12 @@ def _run_fresh_feed(args, mode, authorization):
     if resolve_content_mode(getattr(args, 'content_mode', None)) != 'automatic':
         return runner(args) if args.dry_run else runner(args, authorization)
     from src.automatic_editorial import prepare_automatic_editorial
+    from src.automatic_editorial_copy import require_editorial_provider
+    require_editorial_provider()
     prepare = prepare_single_content if mode is ProductionMode.SINGLE else prepare_carousel_content
     preparation_args = argparse.Namespace(**vars(args))
     preparation_args.prepare_only = True
+    preparation_args.automatic_editorial = True
     with tempfile.TemporaryDirectory(prefix='artfolio-automatic-editorial-') as directory:
         preparation_args.preparation_directory = Path(directory)
         acquired = prepare(preparation_args)
