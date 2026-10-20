@@ -80,8 +80,9 @@ def generate_automatic_brief(sources, *, theme_title):
         client = gemini_ai._create_client(os.environ['GOOGLE_GEMINI_API_KEY'])
         response = client.models.generate_content(
             model=gemini_ai.config.GEMINI_MODEL, contents=contents,
+            # Strict objects need JSON Schema; OpenAPI Schema lacks additionalProperties.
             config=types.GenerateContentConfig(
-                response_mime_type='application/json', response_schema=AutomaticCopy,
+                response_mime_type='application/json', response_json_schema=AutomaticCopy.model_json_schema(),
                 thinking_config=types.ThinkingConfig(thinking_level='MEDIUM'),
                 max_output_tokens=4096,
             ),
