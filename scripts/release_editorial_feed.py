@@ -18,9 +18,12 @@ def run(argv=None, *, manager=None, github=None):
     parser.add_argument('--apply', action='store_true')
     parser.add_argument('--expected-generation', type=int)
     parser.add_argument('--evidence-ref')
+    parser.add_argument('--cadence', choices=('six_hourly_utc17',))
     args = parser.parse_args(argv)
     if not re.fullmatch(r'[0-9a-f]{40}', args.expected_sha):
         parser.error('An exact main SHA is required')
+    if args.cadence and not args.apply:
+        parser.error('Cadence changes require explicit activation')
     if args.apply and (not args.evidence_ref or args.expected_generation is None or args.expected_generation < 1):
         parser.error('Activation requires evidence and the inspected positive generation')
     try:
@@ -39,14 +42,14 @@ def run(argv=None, *, manager=None, github=None):
             if (inspection['safety_generation'] != args.expected_generation
                     or before['generation'] != args.expected_generation):
                 raise FeedScheduleError('RELEASE_GENERATION_CHANGED')
-            cadence = approvals[-1]['cadence']
+            cadence = args.cadence or approvals[-1]['cadence']
             manager.enable_continuous(expected_generation=args.expected_generation,
                                       approved_sha=args.expected_sha, main_sha=args.expected_sha,
                                       cadence=cadence, review_ref=args.evidence_ref)
             value = manager.status(expected_sha=args.expected_sha)
             if (value['approved_sha'] != args.expected_sha or value['cadence'] != cadence
                     or value['last_successful_feed_at'] != before['last_successful_feed_at']
-                    or value['next_eligible_at'] != before['next_eligible_at']):
+                    or (args.cadence is None and value['next_eligible_at'] != before['next_eligible_at'])):
                 raise FeedScheduleError('RELEASE_POSTCHECK_REQUIRES_OPERATOR_REVIEW')
         else:
             value = before

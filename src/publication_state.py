@@ -410,14 +410,15 @@ def state_from_history(history: Mapping[str, Any]) -> dict[str, Any]:
     )
     control = value.get("feed_schedule_control")
     if control is not None:
-        from src.feed_schedule import COOLDOWN, stamp
+        from src.feed_schedule import stamp
+        from src.feed_cadence import eligibility_deadline
         from src.models import parse_receipt_occurrence
         for event in projection["publications"]:
             completed = parse_receipt_occurrence(event["posted_at"])
             if completed > parse_receipt_occurrence(control["latest_successful_feed_at"]):
                 control["latest_successful_feed_at"] = stamp(completed)
                 control["latest_successful_feed_id"] = event["id"]
-                control["next_eligible_at"] = stamp(completed + COOLDOWN)
+                control["next_eligible_at"] = stamp(eligibility_deadline(control))
     value["generation"] += 1
     result = seal(value)
     validate_safety_state(result)
@@ -577,12 +578,19 @@ class PublicationStateStore:
             ledger, _ = self.load_receipts()
             if candidate.feed_schedule_control != initial_control(current, ledger):
                 raise StateValidationError("Schedule initialization requires exact completion evidence")
+        from src.models import parse_receipt_occurrence
         old_control, new_control = current.feed_schedule_control, candidate.feed_schedule_control
+        if old_control is not None and new_control is not None and (
+            parse_receipt_occurrence(new_control.next_eligible_at)
+            < parse_receipt_occurrence(old_control.next_eligible_at)
+        ):
+            from src.feed_schedule import require_cooldown
+            ledger, _ = self.load_receipts()
+            require_cooldown(candidate, ledger, parse_receipt_occurrence(new_control.next_eligible_at))
         if old_control is not None and new_control is not None and (
             old_control.latest_successful_feed_at != new_control.latest_successful_feed_at
             or old_control.latest_successful_feed_id != new_control.latest_successful_feed_id
         ):
-            from src.models import parse_receipt_occurrence
             event = next((p for p in candidate.operational_projection.publications
                           if p["id"] == new_control.latest_successful_feed_id), None)
             if (event is None or parse_receipt_occurrence(event["posted_at"])

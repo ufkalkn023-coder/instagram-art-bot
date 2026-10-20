@@ -18,6 +18,7 @@ from src.models import (
     parse_receipt_occurrence,
 )
 from src import publication_state, r2_media
+from src.feed_cadence import SIX_HOURLY, eligibility_deadline, nominal_success
 from src.production_authorization import (
     ProductionAuthorization,
     ProductionAuthorizationError,
@@ -122,7 +123,8 @@ def safe_completed_attempt(permit: FeedSchedulePermit) -> bool:
 def attempt_backoff(control: FeedScheduleControl) -> datetime | None:
     """Return the latest durable clock from a safely closed failed attempt."""
     failures = [
-        parse_receipt_occurrence(permit.outcome.recorded_at) + FAILURE_BACKOFF
+        parse_receipt_occurrence(permit.outcome.recorded_at)
+        + (timedelta(hours=1) if permit.cadence == SIX_HOURLY else FAILURE_BACKOFF)
         for permit in control.permits
         if permit.status == "DEFINITIVE_FAILURE"
         and permit.outcome is not None
@@ -139,6 +141,10 @@ def cadence_window(now: datetime, cadence: str) -> tuple[datetime, datetime]:
     now = utc(now)
     if cadence == "daily_utc1717":
         slot = now.replace(hour=17, minute=17, second=0, microsecond=0)
+    elif cadence == SIX_HOURLY:
+        slot = now.replace(hour=now.hour - now.hour % 6, minute=17, second=0, microsecond=0)
+        if now < slot:
+            slot -= timedelta(hours=6)
     elif cadence == "hourly_utc17":
         slot = now.replace(minute=17, second=0, microsecond=0)
         if now.minute < 17:
@@ -154,6 +160,8 @@ def next_window_at_or_after(at: datetime, cadence: str) -> datetime:
     slot, expiry = cadence_window(at, cadence)
     if slot <= at < expiry:
         return at
+    if cadence == SIX_HOURLY:
+        return slot + timedelta(hours=6)
     if cadence == "hourly_utc17":
         return at.replace(minute=17, second=0, microsecond=0)
     next_slot = slot if at < slot else slot + timedelta(days=1)
@@ -185,7 +193,13 @@ def require_cooldown(
         or control.latest_successful_feed_id != publication_id
     ):
         raise FeedScheduleError("SCHEDULE_COMPLETION_BASELINE_MISMATCH")
-    if utc(at) < completed + COOLDOWN:
+    raw_control = control.model_dump(mode='json')
+    nominal = nominal_success(raw_control) if control.schema_version == 2 else None
+    if nominal is not None and control.continuous_approvals[-1].cadence == SIX_HOURLY:
+        receipt = next((r for r in ledger.records if r.publication_id == publication_id), None)
+        if receipt is None or receipt.instagram_media_id != nominal['outcome']['instagram_media_id']:
+            raise FeedScheduleError('SCHEDULE_NOMINAL_SUCCESS_EVIDENCE_MISMATCH')
+    if utc(at) < eligibility_deadline(raw_control):
         raise FeedScheduleError("SCHEDULE_COOLDOWN_NOT_SATISFIED")
 
 
@@ -323,6 +337,13 @@ def require_control_update(
     if len(new.permits) > len(old.permits) + 1:
         raise publication_state.StateValidationError("Only one permit may be armed")
     newly_approved = len(new.continuous_approvals) == len(old.continuous_approvals) + 1
+    if new.schema_version < old.schema_version:
+        raise publication_state.StateValidationError('Schedule policy cannot be downgraded')
+    if new.schema_version != old.schema_version and not (
+        old.schema_version == 1 and new.schema_version == 2 and newly_approved
+        and new.continuous_approvals[-1].cadence == SIX_HOURLY
+    ):
+        raise publication_state.StateValidationError('Schedule migration requires a new six-hour approval')
     if not new.paused and (len(new.permits) == len(old.permits) and old.paused) and not newly_approved:
         raise publication_state.StateValidationError(
             "An existing permit cannot be rearmed"
@@ -377,7 +398,7 @@ class FeedScheduleManager:
         ledger, _ = self.store.load_receipts()
         control = state.feed_schedule_control
         completed, publication_id = latest_success(state, ledger)
-        next_eligible = completed + COOLDOWN
+        next_eligible = eligibility_deadline(control.model_dump(mode='json')) if control is not None else completed + COOLDOWN
         active = continuous_approval(control) if control is not None else None
         latest = control.permits[-1] if control is not None and control.permits else None
         cadence = active.cadence if active is not None else (
@@ -408,6 +429,7 @@ class FeedScheduleManager:
             "next_check_at": stamp(next_attempt) if next_attempt is not None else None,
             "next_format": next_format,
             "cadence": cadence,
+            "post_interval_hours": 6 if cadence == SIX_HOURLY else 48,
             "approved_sha": approved_sha,
             "generation": state.generation,
         }
@@ -427,6 +449,7 @@ class FeedScheduleManager:
             or control.latest_successful_feed_id != publication_id
         ):
             raise FeedScheduleError("SCHEDULE_COMPLETION_BASELINE_MISMATCH")
+        require_cooldown(state, ledger, next_eligible)
         if latest is not None and latest.owner_run_id is not None and (
             not safe_completed_attempt(latest) and latest.acknowledgement is None
         ):
@@ -601,6 +624,9 @@ class FeedScheduleManager:
             cadence=cadence, created_at=stamp(now), approval_ref=review_ref,
         )
         control.continuous_approvals.append(approval)
+        if cadence == SIX_HOURLY:
+            control.schema_version = 2
+        control.next_eligible_at = stamp(eligibility_deadline(control.model_dump(mode='json')))
         control.paused = False
         control.pause_reason = "CONTINUOUS_ENABLED"
         self._save(state, etag, control)
@@ -633,7 +659,7 @@ class FeedScheduleManager:
             if prior.owner_run_id is None and prior.status not in {"EXPIRED", "REVOKED"}:
                 raise FeedScheduleError("CONTINUOUS_PREVIOUS_PERMIT_UNRESOLVED")
         completed, _ = latest_success(state, ledger)
-        next_eligible = completed + COOLDOWN
+        next_eligible = eligibility_deadline(control.model_dump(mode='json')) if control is not None else completed + COOLDOWN
         failure_due = attempt_backoff(control)
         due_at = max(next_eligible, failure_due) if failure_due is not None else next_eligible
         if now < due_at:
@@ -757,6 +783,7 @@ class FeedScheduleManager:
         )
         permit.outcome = outcome
         permit.status = outcome.classification
+        control.next_eligible_at = stamp(eligibility_deadline(control.model_dump(mode='json')))
         keep_enabled = (
             not control.paused and permit.continuous_approval_id is not None
             and continuous_approval(control) is not None and safe_completed_attempt(permit)
@@ -806,6 +833,7 @@ class FeedScheduleManager:
             run_ids=ids,
             conclusions=conclusions,
         )
+        control.next_eligible_at = stamp(eligibility_deadline(control.model_dump(mode='json')))
         control.paused = True
         control.pause_reason = "REVIEWED_EXPLICIT_NEW_PERMIT_REQUIRED"
         self._save(state, etag, control)

@@ -4,6 +4,32 @@ Feed supports an operator-reviewed single-slot mode and an explicitly approved
 continuous mode. Initialization, scheduler enablement and publication require
 operator authorization. Existing single-slot approvals keep their original behavior.
 
+## Four daily slots (current policy)
+
+The approved schedule is **03:17 / 09:17 / 15:17 / 21:17 Europe/Istanbul**,
+UTC cron `17 0,6,12,18 * * *`. Explicit `six_hourly_utc17` approval migrates
+control schema v1 to v2 in the normal generation/ETag CAS. Existing approvals,
+permits, successful timestamps, receipts, reservations and consumed authorizations
+remain intact; schema downgrade is rejected. Deploy compatible state readers
+(including the local Insights collector) before persisting schema v2.
+
+A proven SUCCESS outcome with the same publication identity and receipt media ID
+anchors eligibility to the successful permit's nominal slot +6 hours. Before that
+outcome is durable, completion +6 hours is provisional. Manual/unlinked success,
+a different cadence or completion at/after the next slot uses completion +6 hours.
+Only the next regular 60-minute window is admitted; there is no catch-up burst.
+Safe six-hour failures use a one-hour attempt backoff, allowing the next regular
+slot. Legacy failures retain 24 hours. Unknown publication or receipt/cleanup
+state still blocks all admission.
+
+Use the protected release workflow with explicit `cadence=six_hourly_utc17` to
+approve this policy for a reviewed main SHA and freshly inspected generation.
+The default `preserve` release keeps the existing cadence/deadline. The workflow
+shares the publishing concurrency group and changes no Instagram content itself.
+GitHub schedule delays can shift actual publication within the finite window.
+
+The legacy 48-hour details below apply to schema v1 daily/hourly approvals only.
+
 ## Continuous operation
 
 `enable-continuous` records an append-only approval bound to the exact authenticated
@@ -44,8 +70,7 @@ carousel and single through `--mode auto`.
 
 ## Eligibility and admission
 
-Feed cron is `17 * * * *`: one lightweight eligibility check each hour at UTC
-minute **17**. Hourly approvals allow the first eligible window after the 48-hour
+The current Feed cron is `17 0,6,12,18 * * *`: four lightweight checks daily. Hourly approvals allow the first eligible window after the 48-hour
 threshold; existing daily approvals and legacy permits remain restricted to
 **17:17 UTC**. Continuous windows last 60 minutes and adjacent closed windows may
 meet at expiry without overlapping. The

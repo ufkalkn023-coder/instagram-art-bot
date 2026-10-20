@@ -8,7 +8,7 @@ Normal Feed akışının varsayılanı `automatic` modudur. Yayın zamanı geldi
 uygun hazır editorial paket varsa kullanılır; yoksa mevcut müze seçimi, hak ve
 güvenli indirme akışı yeni eserleri edinir ve Museum Journal tasarımında işler.
 İnsan tarafından hazırlanmış stok veya gönderi başına onay gerekmez. Tekli ve
-carousel sırası, en az 48 saatlik yayın aralığı, exact-SHA sürüm izni, tekrar
+carousel sırası, seçilen altı saatlik yayın dilimleri, exact-SHA sürüm izni, tekrar
 koruması ve belirsiz yayın kilitleri korunur.
 
 Otomatik tekli bir tam eser sayfasıdır; carousel seçilen 5–8 eserin tam
@@ -212,7 +212,7 @@ python scripts/plan_editorial_projects.py --history history.json \
   --output data/editorial-rhythm
 ```
 
-Mevcut geçmiş planlayıcısının48saat alt sınırı ve tekli/carousel dönüşümü korunur.
+Mevcut geçmiş planlayıcısınıncadence politikasının yayın aralığı alt sınırı ve tekli/carousel dönüşümü korunur.
 Gerçek sayfa sayısı gönderi türünü belirler; aynı kaynak birden fazla projede
 planlanamaz. Uygun proje olmayan slotlar ve döneme sığmayan projeler açıkça listelenir.
 Bu araç kuyruk önceliğini değiştirmez, yayın tarihi garanti etmez veya onay vermez.
@@ -248,7 +248,7 @@ python scripts/prepare_feed_queue.py --directory data/editorial-queue --target 4
 Bu komut `--r2` verilmeden yalnız yerel kuyruk hazırlar. Varsayılan editoryal modda
 eksik slotlar yeni onay bekler; yalnız açık legacy modunda mevcut eser hazırlayıcısı
 kullanılır. Canlı tüketimde güncel hak, korunan eser,
-TTL,48saat ve exact-SHA yayın yetkisi kontrolleri sürer. İncelenmiş tekli içerik de
+TTL,cadence politikasının yayın aralığı ve exact-SHA yayın yetkisi kontrolleri sürer. İncelenmiş tekli içerik de
 aynı dosya özeti, yayın sınırı, belirsiz sonuç kilidi ve makbuz/uzlaştırma korumalarını
 kullanır. Pilot veya editör açılması canlı kuyruğa kayıt ya da yayın izni değildir.
 
@@ -263,7 +263,7 @@ python scripts/plan_editorial.py --history history.json --weeks 2 \
 ```
 
 `index.html` ve `plan.json` oluşturulur. Gerçek son başarılı yayın sonrası en az
-48 saat ve carousel/tekli dönüşümü korunur. Temalar mevcut registry/planner'dan
+Cadence politikası ve carousel/tekli dönüşümü korunur. Temalar mevcut registry/planner'dan
 gelir. Geçersiz, çelişkili veya gelecekteki yayın geçmişinde plan reddedilir.
 Bu yalnız fikir takvimidir: hazırlanmış eser, mevcut kuyruk sırası, uygunluk
 onayı veya kesin yayın tarihi değildir. `--now` saat dilimli zamanla tekrarlanabilir
@@ -361,18 +361,23 @@ Yeni `main` sürümünün mevcut sürekli üretim iznine aktarımı için `Relea
 editorial Feed` workflow'u önce `inspect`, ardından aynı SHA ve dönen generation
 ile açık `activate` işlemi sağlar. Aktivasyon `DEPLOY_REVIEWED_EDITORIAL_FEED`
 onayı ister. Önceden duraklatılmış veya çözülmemiş bir yayını otomatik açmaz;
-mevcut cadence ve 48 saat sınırını korur. Proje onayı, stok kurulumu ve Instagram
+varsayılan olarak mevcut cadence politikasını korur. Açık `cadence=six_hourly_utc17`
+seçimi altı saatlik politikaya geçişi aynı CAS içinde yeni sürüm iznine bağlar. Proje onayı, stok kurulumu ve Instagram
 yayını yapmaz; production anahtarları yalnız GitHub'daki operatör adımında kalır.
 
-Workflow her saat UTC dakika 17’de Feed yayın uygunluğunu kontrol eder:
+Workflow Türkiye saatiyle **03:17 / 09:17 / 15:17 / 21:17** olmak üzere
+günde dört defa Feed yayın uygunluğunu kontrol eder:
 
 ```text
-Feed:     17 * * * *
+Feed:     17 0,6,12,18 * * *
 ```
 
-GitHub Actions cron ifadeleri UTC’dir. Saatlik cadence için aynı main SHA’sına `hourly_utc17` sürekli çalışma izni gerekir; mevcut `daily_utc1717` izinleri günlük zaman penceresini korur. Experiment metadata’sındaki dört legacy zaman bucket’ı korunur; bunlar publication izni veya cron sıklığı değildir.
+GitHub Actions cron ifadeleri UTC’dir; yeni düzen `six_hourly_utc17` sürekli çalışma
+izni ve control schema v2 gerektirir. Eski `daily_utc1717` / `hourly_utc17`
+izinlerinin 48 saatlik politikası geriye uyumluluk için korunur. Cron tek başına
+kalıcı izni değiştirmez. GitHub koşuyu geciktirebilir; yayın dakikası garanti edilmez. Experiment metadata’sındaki dört legacy zaman bucket’ı korunur; bunlar publication izni veya cron sıklığı değildir.
 
-Scheduled invocation açıkça `python main.py --mode auto` çalıştırır. Scheduled production varsayılan olarak kapalıdır; repository Actions variable `ARTFOLIO_PRODUCTION_SCHEDULE_ENABLED` tam olarak `true` olduğunda publish job’ı çalışabilir. Feed publication ayrıca tek slotluk durable Stage B permit veya açıkça verilmiş sürekli çalışma izni ve en az 48 saatlik completion gate gerektirir. Değişkenin eksik olması veya farklı bir değer taşıması fail-closed davranır. Tek slot modu her denemeden sonra duraklar. `enable-continuous` ile aynı main sürümüne verilen kalıcı izinde normal başarılı yayınlardan sonra bot duraklamaz; izin verilen zaman penceresindeki uygunluk koşusunda sıradaki formatı seçer. Cooldown dolmamışsa içerik üretmeden başarılı biçimde atlar. Belirsiz yayın, eksik receipt veya çözülmemiş cleanup durumunda yeni paylaşım yapmaz; aynı slotta tekrar denemez. Yeni main sürümü için çalışma izni yeniden verilmelidir.
+Scheduled invocation açıkça `python main.py --mode auto` çalıştırır. Scheduled production varsayılan olarak kapalıdır; repository Actions variable `ARTFOLIO_PRODUCTION_SCHEDULE_ENABLED` tam olarak `true` olduğunda publish job’ı çalışabilir. Feed publication ayrıca tek slotluk durable Stage B permit veya açıkça verilmiş sürekli çalışma izni ve onaylanan cadence politikasına uygun yayın kanıtı gerektirir. Değişkenin eksik olması veya farklı bir değer taşıması fail-closed davranır. Tek slot modu her denemeden sonra duraklar. `enable-continuous` ile aynı main sürümüne verilen kalıcı izinde normal başarılı yayınlardan sonra bot duraklamaz; izin verilen zaman penceresindeki uygunluk koşusunda sıradaki formatı seçer. Cooldown dolmamışsa içerik üretmeden başarılı biçimde atlar. Belirsiz yayın, eksik receipt veya çözülmemiş cleanup durumunda yeni paylaşım yapmaz; aynı slotta tekrar denemez. Yeni main sürümü için çalışma izni yeniden verilmelidir.
 
 Workflow manuel olarak da **Actions → Instagram Art Bot Scheduler → Run workflow** üzerinden başlatılabilir. Manuel yol da `auto` sırasını izler; `confirm_publish` alanı tam olarak `PUBLISH_TO_INSTAGRAM` olmalıdır. Operatör her yeni publication izni için rastgele bir UUIDv4 üretir, repository Actions variable `ARTFOLIO_MANUAL_AUTHORIZATION_ID` olarak ayarlar, aynı anda `ARTFOLIO_MANUAL_AUTHORIZATION_ISSUED_AT` değerini UTC ISO-8601 zaman damgası olarak ayarlar ve UUID'yi `authorization_id` dispatch alanına girer. Reel manuel dispatch'i aynı iki variable'ı ve kendi `PUBLISH_REEL_TO_INSTAGRAM` onayını kullanır. Tek bir UUID, Feed veya Reel tarafında yalnız bir reservation CAS yazısında tüketilebilir; ikinci dispatch aynı UUID'yi yeniden kullanamaz. İzin verildikten sonra iki variable yeniden güncellenmeden başka manuel publication yapılamaz.
 
@@ -826,11 +831,15 @@ Insights lane: owned media GET → association → append-only R2 snapshots
 ## Stage B scheduled Feed hardening
 
 Feed supports explicitly approved continuous operation and legacy operator-reviewed
-single-slot permits. Hourly eligibility checks (`17 * * * *`) do not change the minimum
-48-hour gap after a proven successful Feed completion. New hourly operation requires
-`hourly_utc17` approval for the exact main SHA; old approvals default to daily 17:17 UTC.
+single-slot permits. Four daily checks (`17 0,6,12,18 * * *`) use an explicitly approved
+`six_hourly_utc17` policy for the exact main SHA (control schema v2). A receipt-backed
+success anchors the next opportunity to its nominal slot +6 hours, so an ordinary
+completion delay does not skip the next slot. Manual/unlinked or very late completions
+use completion +6 hours. Legacy schema v1 approvals keep their 48-hour rule.
 Safe continuous outcomes keep scheduling enabled. Clean definitive failures retain
-a minimum 24-hour attempt backoff; ambiguous, incomplete or dirty state blocks publication.
+a minimum one-hour backoff for six-hour permits (24 hours for legacy permits);
+the next attempt still requires a new regular slot. Ambiguous, incomplete or dirty
+state blocks publication.
 Waiting checks skip expensive validation and publishing. Manual Feed authorization
 and Reel behavior remain compatible; missing Stage B control still fails closed.
 
@@ -1079,7 +1088,7 @@ Eski manifest önce değişmez arşive alınır. Geçerli READY kayıtları byte
 korunarak yeni üç paket sonlarına eklenir; toplam en fazla beş paket olur.
 CLAIMED, belirsiz yayın sonucu, bozuk kayıt veya eşzamanlı manifest değişikliği
 sessizce onarılmaz. Koşullu yazma çatışması/belirsizliği tekrar denenmez. Hazırlama
-yayın yetkisi vermez; tüketimdeki güncel hak, geçmiş, TTL ve48saat kontrolleri sürer.
+yayın yetkisi vermez; tüketimdeki güncel hak, geçmiş, TTL vecadence politikasının yayın aralığı kontrolleri sürer.
 Eski `--refill` davranışı `--early` olmadan yalnız tükenmiş/eskimiş partiyi değiştirir.
 
 ### Haftalık otomatik rapor
