@@ -1,5 +1,6 @@
 """Scheduled Feed must create the new presentation without pre-approved stock."""
 from datetime import datetime
+import json
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -8,6 +9,72 @@ from PIL import Image
 
 from src.feed_content import PreparedFeedContent
 from tests.test_story_suggestions import make_sources
+
+
+@pytest.fixture(autouse=True)
+def editorial_model_response(monkeypatch):
+    """Replace only paid inference; source validation, copy checks and rendering stay real."""
+    from src import gemini_ai
+    class Models:
+        def generate_content(self, **kwargs):
+            metadata = json.loads(kwargs['contents'][1])
+            return SimpleNamespace(text=json.dumps({
+                'title': 'Blue shapes on an ivory ground',
+                'angle': 'Overlapping rectangular edges organize the visible composition.',
+                'lead': ('Blue rectangles overlap across an ivory ground. Their repeated edges '
+                         'form a diagonal rhythm, while the pale spaces keep each shift in position visible.'),
+                'notes': [{'artwork_id': art['artwork_id'], 'heading': 'Overlapping edges',
+                           'text': 'Each blue rectangle partly covers the next, creating a stepped pattern against the pale background.'}
+                          for art in metadata['artworks']],
+            }))
+    client = SimpleNamespace(models=Models(), close=lambda: None)
+    monkeypatch.setenv('GOOGLE_GEMINI_API_KEY', 'test-key')
+    monkeypatch.setattr(gemini_ai, '_create_client', lambda _key: client)
+    return client.models
+
+
+def test_generated_copy_replaces_raw_catalogue_title_and_materials(tmp_path):
+    from dataclasses import replace
+    from src.automatic_editorial import prepare_automatic_editorial
+    acquired = acquired_content(tmp_path, 'single')
+    art = dict(acquired.artworks[0], title='Fragment van een muurschildering', medium='loam; dye; strohalm')
+    content = prepare_automatic_editorial(replace(acquired, artworks=(art,)), tmp_path / 'rendered')
+    assert content.story_delivery.public_title == 'Blue shapes on an ivory ground'
+    assert 'Blue rectangles overlap across an ivory ground.' in content.caption
+    assert 'loam; dye; strohalm' not in content.caption
+    assert 'Fragment van een muurschildering — Known Artist' in content.caption
+    assert content.story_delivery.headline_kind == 'ai_proposal'
+
+
+@pytest.mark.parametrize('failure', ['missing_key', 'disabled', 'unavailable', 'malformed', 'wrong_source', 'raw_catalogue'])
+def test_unusable_editorial_ai_never_publishes_raw_metadata(monkeypatch, tmp_path, editorial_model_response, failure):
+    from src import gemini_ai
+    from src.automatic_editorial import prepare_automatic_editorial
+    acquired = acquired_content(tmp_path, 'single')
+    if failure == 'missing_key':
+        monkeypatch.delenv('GOOGLE_GEMINI_API_KEY')
+    elif failure == 'disabled':
+        monkeypatch.setattr(gemini_ai.config, 'GEMINI_ENABLED', False)
+    elif failure == 'unavailable':
+        def unavailable(**_kwargs):
+            raise OSError('provider unavailable')
+        monkeypatch.setattr(editorial_model_response, 'generate_content', unavailable)
+    else:
+        response = {'title': 'Blue shapes on an ivory ground', 'angle': 'Repeated edges create a diagonal rhythm.',
+                    'lead': 'Blue rectangles overlap across an ivory ground, creating repeated diagonal steps across the image.',
+                    'notes': [{'artwork_id': 'cleveland_0', 'heading': 'Repeated edges',
+                               'text': 'The rectangles overlap in a diagonal sequence against an ivory background.'}]}
+        if failure == 'wrong_source':
+            response['notes'][0]['artwork_id'] = 'cleveland_other'
+        elif failure == 'raw_catalogue':
+            response.update(title='Painting 0', lead='Painting 0')
+        else:
+            response = {}
+        monkeypatch.setattr(editorial_model_response, 'generate_content',
+                            lambda **_kwargs: SimpleNamespace(text=json.dumps(response)))
+    with pytest.raises((ValueError, RuntimeError)):
+        prepare_automatic_editorial(acquired, tmp_path / 'rendered')
+    assert not list((tmp_path / 'rendered').glob('editorial-*.jpg'))
 
 
 def acquired_content(tmp_path, format_name, *, offset=0):
@@ -30,7 +97,7 @@ def test_automatic_render_uses_new_editorial_pages_and_truthful_provenance(tmp_p
     assert content.publication_format == format_name
     assert len(content.media_paths) == count
     assert content.story_delivery.schema_version == 'artfolio-story-delivery-v3'
-    assert content.story_delivery.headline_kind in {'source_title', 'factual_collection'}
+    assert content.story_delivery.headline_kind in {'ai_proposal'}
     assert content.story_delivery.cover_variant == 'museum_journal'
     assert all(page.role == 'artwork' for page in content.story_delivery.pages)
     expected_ids = prepared.publication_ids if format_name == 'single' else prepared.featured_ids
@@ -255,7 +322,7 @@ def test_generated_single_is_included_in_learning_and_analytics(tmp_path):
     features = EngagementFeatureVector.from_context({'story_delivery': delivery, 'publication_format': 'single'})
     assert features.narrative == 'single_study'
     assert features.page_count == 1
-    assert features.headline_kind == 'source_title'
+    assert features.headline_kind == 'ai_proposal'
     pub = dict(publication(delivery=delivery), type='single')
     report = build_feed_analytics_report({'publications': [pub]}, [snapshot(pub)], now=NOW)
     row = next(row for row in report['windows'] if row['target_age_hours'] == 72)
@@ -296,3 +363,61 @@ def test_generated_packages_survive_queue_storage_and_claim(tmp_path, backend):
     assert claim.content.artworks[0]['image_width'] == 1600
     assert claim.content.artworks[0]['image_height'] == 1800
     validate_story_media(claim.content)
+
+
+def test_gemini_request_uses_default_model_images_and_one_bounded_call(tmp_path, monkeypatch, editorial_model_response):
+    from src.automatic_editorial import prepare_automatic_editorial
+    original = editorial_model_response.generate_content
+    requests = []
+    def capture(**kwargs):
+        requests.append(kwargs)
+        return original(**kwargs)
+    monkeypatch.setattr(editorial_model_response, 'generate_content', capture)
+    prepare_automatic_editorial(acquired_content(tmp_path, 'carousel'), tmp_path / 'rendered')
+    assert len(requests) == 1
+    request = requests[0]
+    assert request['model'] == 'gemini-3.8-flash'
+    assert len([part for part in request['contents'] if getattr(part, 'inline_data', None)]) == 5
+    assert request['config'].max_output_tokens == 4096
+    assert request['config'].thinking_config.thinking_level == 'MEDIUM'
+
+
+def test_ai_failure_stops_before_any_instagram_request(monkeypatch, tmp_path):
+    import main
+    from tests.test_single_feed_runtime import single_runtime
+    store, _, sent, _ = single_runtime(monkeypatch, tmp_path)
+    prepared = acquired_content(tmp_path, 'single')
+    monkeypatch.setattr(main, 'prepare_single_content', lambda *_args, **_kwargs: prepared)
+    monkeypatch.setenv('ARTFOLIO_FEED_CONTENT_MODE', 'automatic')
+    monkeypatch.delenv('ARTFOLIO_FEED_QUEUE_ENABLED', raising=False)
+    monkeypatch.delenv('GOOGLE_GEMINI_API_KEY')
+    assert main.main(['--mode', 'single']) == 1
+    assert sent == []
+    assert store.load_safety()[0].active_publication_state.posted_artworks == []
+
+
+def test_gemini_verification_renders_both_formats_without_publication(tmp_path, monkeypatch, capsys):
+    from scripts import verify_gemini
+    inputs = tmp_path / 'inputs'
+    inputs.mkdir()
+    sources = make_sources(inputs, 6)
+    monkeypatch.setattr(verify_gemini, 'acquire_sources', lambda *_args, **_kwargs: sources)
+    output = tmp_path / 'probe'
+    assert verify_gemini.run(['--output', str(output), '--format', 'both']) == 0
+    report = json.loads(capsys.readouterr().out)
+    assert report['model'] == 'gemini-3.8-flash'
+    assert report['inference_calls'] == 2 and report['publications'] == 0
+    assert [row['pages'] for row in report['results']] == [1, 5]
+    assert (output / 'single' / 'caption.txt').is_file()
+    assert (output / 'carousel' / 'editorial-05.jpg').is_file()
+
+
+def test_automatic_feed_does_not_reuse_catalogue_only_v3_stock(tmp_path):
+    from dataclasses import replace
+    from src.automatic_editorial import prepare_automatic_editorial
+    from src.feed_content_policy import is_automatic_editorial_content
+    content = prepare_automatic_editorial(acquired_content(tmp_path, 'single'), tmp_path / 'rendered')
+    assert is_automatic_editorial_content(content)
+    delivery = content.story_delivery.model_copy(update={'headline_kind': 'source_title'})
+    stale = replace(content, story_delivery=delivery, publication_metadata={'story_delivery': delivery.model_dump(mode='json')})
+    assert not is_automatic_editorial_content(stale)

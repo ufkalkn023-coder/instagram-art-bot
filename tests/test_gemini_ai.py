@@ -10,8 +10,8 @@ class _FakeCarouselResponse:
     text = '{"caption":"Carousel body.","hashtags":"#SpecificTag","recommended_font_size":46,"theme_title":"Theme"}'
 
 
-def test_config_uses_the_stable_gemini_37_flash_model():
-    assert config.GEMINI_MODEL == "gemini-3.7-flash"
+def test_config_uses_the_requested_gemini_38_flash_model():
+    assert config.GEMINI_MODEL == "gemini-3.8-flash"
 
 
 def test_carousel_analysis_returns_fallback_signal_when_gemini_client_fails(monkeypatch):

@@ -18,4 +18,6 @@ def is_editorial_content(content):
 
 def is_automatic_editorial_content(content):
     return (isinstance(content, PreparedStoryContent)
-            and content.story_delivery.schema_version in {'artfolio-story-delivery-v2', 'artfolio-story-delivery-v3'})
+            and (content.story_delivery.schema_version == 'artfolio-story-delivery-v2'
+                 or content.story_delivery.schema_version == 'artfolio-story-delivery-v3'
+                 and content.story_delivery.headline_kind == 'ai_proposal'))

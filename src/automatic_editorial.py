@@ -8,7 +8,9 @@ import json
 from pathlib import Path
 
 from src.carousel_themes import get_default_theme_registry
-from src.editorial_brief import EditorialBrief, EditorialNote
+from src.automatic_editorial_copy import PROTOCOL, generate_automatic_brief
+from src.editorial_copy import source_credit
+from src import gemini_ai
 from src.editorial_art_direction import render_editorial_page
 from src.editorial_draft import build_editorial_draft
 from src.editorial_v2 import SourceArtwork
@@ -59,18 +61,12 @@ def prepare_automatic_editorial(acquired: PreparedFeedContent, output: Path) -> 
     single = acquired.publication_format == 'single'
     theme = next((theme for theme in get_default_theme_registry().enabled_themes
                   if theme.id == acquired.theme_id), None)
-    title = sources[0].artwork.title if single else (theme.title if theme else 'Paintings from museum collections')
-    notes = []
-    for index, source in enumerate(sources):
-        art = source.artwork
-        field, text = ('medium', art.medium) if art.medium else ('title', art.title)
-        notes.append(EditorialNote(id=f'catalogue-{index + 1}', artwork_id=art.canonical_id,
-                                   kind='catalogue_fact', field=field, text=text))
-    brief = EditorialBrief(narrative='single_study' if single else 'thematic_selection',
-                           source_ids=identities, title=title,
-                           angle='A study grounded in the museum catalogue and complete artwork views.',
-                           lead=notes[0].text if notes[0].field == 'medium' else '', notes=tuple(notes))
+    brief = generate_automatic_brief(sources, theme_title=theme.title if theme else ('Single artwork' if single else 'Museum collection'))
     draft = build_editorial_draft(brief, sources)
+    for index, page in enumerate(draft['pages']):
+        note = next(note for note in brief.notes if note.artwork_id == page['artwork_id'])
+        page.update(title=brief.title if index == 0 else note.heading,
+                    text=brief.lead if index == 0 else note.text)
     # Bind the durable metadata projection, excluding acquisition-only local paths.
     # Queue persistence uses this same projection before validating delivery hashes.
     artworks = tuple({key: value for key, value in art.items() if key in ARTWORK_FIELDS}
@@ -86,8 +82,15 @@ def prepare_automatic_editorial(acquired: PreparedFeedContent, output: Path) -> 
         paths.append(str(path))
         pages.append(StoryPage(id=f'artwork-{index + 1}', role='artwork',
                                artwork_ids=(page['artwork_id'],), sha256=hashlib.sha256(path.read_bytes()).hexdigest()))
-    caption = draft['caption']
+    sections = [brief.title, brief.lead]
+    if single:
+        sections.append(brief.notes[0].text)
+    sections.extend(source_credit(source) for source in sources)
+    caption = '\n\n'.join(sections)
+    if len(caption) > 2200:
+        raise ValueError('Automatic editorial caption exceeds Instagram capacity')
     identity = dict(brief=brief.model_dump(mode='json'),
+                    generation=dict(model=gemini_ai.config.GEMINI_MODEL, protocol=PROTOCOL),
                     sources={source.artwork.canonical_id: hashlib.sha256(Path(source.image_path).read_bytes()).hexdigest()
                              for source in sources}, pages=[page.model_dump(mode='json') for page in pages],
                     caption_sha256=hashlib.sha256(caption.encode()).hexdigest())
@@ -98,7 +101,7 @@ def prepare_automatic_editorial(acquired: PreparedFeedContent, output: Path) -> 
                              caption_sha256=identity['caption_sha256'], public_title=brief.title,
                              theme_id=acquired.theme_id or 'single_artwork',
                              theme_title=theme.title if theme else brief.title, narrative=brief.narrative,
-                             cover_variant='museum_journal', headline_kind='source_title' if single else 'factual_collection',
+                             cover_variant='museum_journal', headline_kind='ai_proposal',
                              pages=tuple(pages))
     return PreparedStoryContent(acquired.publication_format, artworks, tuple(paths), caption,
                                 alt_text=acquired.alt_text, publication_metadata={'story_delivery': delivery.model_dump(mode='json')},
