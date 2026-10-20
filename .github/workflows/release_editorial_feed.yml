@@ -14,6 +14,11 @@ name: Release reviewed editorial Feed
       expected_generation:
         description: "Generation returned by inspect; required for activate"
         type: string
+      cadence:
+        description: "Preserve policy, or explicitly activate four daily Feed slots"
+        type: choice
+        options: [preserve, six_hourly_utc17]
+        default: preserve
       confirmation:
         description: "Activate only: DEPLOY_REVIEWED_EDITORIAL_FEED"
         type: string
@@ -46,9 +51,10 @@ jobs:
       - name: Install locked dependencies
         run: python -m pip install --require-hashes -r requirements-dev.lock
       - name: Verify release and schedule guards
-        run: python -m pytest -q tests/test_editorial_release.py tests/test_feed_schedule.py tests/test_continuous_feed_schedule.py tests/test_hourly_feed_schedule.py
+        run: python -m pytest -q tests/test_editorial_release.py tests/test_feed_schedule.py tests/test_continuous_feed_schedule.py tests/test_hourly_feed_schedule.py tests/test_six_hour_feed_schedule.py
       - name: Inspect or activate reviewed release
         env:
+          CADENCE: ${{ inputs.cadence }}
           OPERATION: ${{ inputs.operation }}
           EXPECTED_SHA: ${{ inputs.expected_sha }}
           EXPECTED_GENERATION: ${{ inputs.expected_generation }}
@@ -64,5 +70,8 @@ jobs:
           args=(--expected-sha "$EXPECTED_SHA")
           if [ "$OPERATION" = activate ]; then
             args+=(--apply --expected-generation "$EXPECTED_GENERATION" --evidence-ref "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID")
+            if [ "$CADENCE" = six_hourly_utc17 ]; then
+              args+=(--cadence "$CADENCE")
+            fi
           fi
           python scripts/release_editorial_feed.py "${args[@]}"

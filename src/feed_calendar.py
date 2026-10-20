@@ -3,6 +3,8 @@ from __future__ import annotations
 
 from datetime import datetime, timedelta
 
+from src.feed_cadence import SIX_HOURLY
+from src.feed_schedule import cadence_window, next_window_at_or_after
 from src.insights_storage import parse_aware_timestamp
 
 MAX_CALENDAR_CARDS = 24
@@ -19,6 +21,8 @@ def build_feed_calendar(schedule, queue, *, now: datetime) -> list[dict]:
                 and eligible is not None and expected in {'single', 'carousel'})
     ownership_pending = any(row.get('state') in {'CLAIMED', 'QUARANTINED'} for row in queue)
     candidate = max(value for value in (now, eligible, attempt) if value is not None)
+    if schedule.get('cadence') == SIX_HOURLY:
+        candidate = next_window_at_or_after(candidate, SIX_HOURLY)
     result = []
     for row in queue:
         if row.get('state') == 'CONSUMED':
@@ -44,7 +48,8 @@ def build_feed_calendar(schedule, queue, *, now: datetime) -> list[dict]:
         else:
             earliest = candidate
             note = 'Önceki yayınların başarılı tamamlanmasına bağlı olası alt sınır'
-            candidate += timedelta(hours=48)
+            candidate = (cadence_window(candidate, SIX_HOURLY)[0] + timedelta(hours=6)
+                         if schedule.get('cadence') == SIX_HOURLY else candidate + timedelta(hours=48))
             expected = 'carousel' if expected == 'single' else 'single'
         result.append({**row, 'earliest_at': earliest, 'provisional': earliest is not None,
                        'planning_note': note})

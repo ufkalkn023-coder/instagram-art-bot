@@ -470,7 +470,7 @@ class FeedScheduleReview(_StrictStateModel):
 class FeedContinuousApproval(_StrictStateModel):
     approval_id: str
     approved_sha: str = Field(pattern=r"^[0-9a-f]{40}$")
-    cadence: Literal["daily_utc1717", "hourly_utc17"] = "daily_utc1717"
+    cadence: Literal["daily_utc1717", "hourly_utc17", "six_hourly_utc17"] = "daily_utc1717"
     created_at: str
     approval_ref: str = Field(min_length=1)
     revoked_at: str | None = None
@@ -517,7 +517,7 @@ class FeedSchedulePermit(_StrictStateModel):
     outcome: FeedScheduleOutcome | None = None
     acknowledgement: FeedScheduleReview | None = None
     continuous_approval_id: str | None = None
-    cadence: Literal["daily_utc1717", "hourly_utc17"] = "daily_utc1717"
+    cadence: Literal["daily_utc1717", "hourly_utc17", "six_hourly_utc17"] = "daily_utc1717"
 
     @model_validator(mode="after")
     def consistent_permit(self):
@@ -540,6 +540,7 @@ class FeedSchedulePermit(_StrictStateModel):
             or slot.second != 0
             or slot.microsecond != 0
             or (self.cadence == "daily_utc1717" and slot.hour != 17)
+            or (self.cadence == "six_hourly_utc17" and slot.hour % 6 != 0)
             or not slot < expiry <= slot + timedelta(minutes=60)
         ):
             raise ValueError("permit requires one finite minute-17 UTC slot")
@@ -621,7 +622,7 @@ class FeedSchedulePermit(_StrictStateModel):
 
 
 class FeedScheduleControl(_StrictStateModel):
-    schema_version: Literal[1]
+    schema_version: Literal[1, 2]
     paused: bool
     pause_reason: str = Field(min_length=1)
     latest_successful_feed_at: str
@@ -641,11 +642,12 @@ class FeedScheduleControl(_StrictStateModel):
     def consistent_control(self):
         FeedScheduleOutcome.utc_timestamp(self.latest_successful_feed_at)
         FeedScheduleOutcome.utc_timestamp(self.next_eligible_at)
-        if parse_receipt_occurrence(self.next_eligible_at) != (
-            parse_receipt_occurrence(self.latest_successful_feed_at)
-            + timedelta(hours=48)
-        ):
-            raise ValueError("next eligibility must follow completion by 48 hours")
+        from src.feed_cadence import SIX_HOURLY, eligibility_deadline
+        six_hour_history = any(a.cadence == SIX_HOURLY for a in self.continuous_approvals)
+        if self.schema_version == 1 and six_hour_history or self.schema_version == 2 and not six_hour_history:
+            raise ValueError("Six-hour scheduling requires an explicit version-2 approval history")
+        if parse_receipt_occurrence(self.next_eligible_at) != eligibility_deadline(self.model_dump(mode='json')):
+            raise ValueError("Next eligibility must match the proven schedule policy")
         if len({p.permit_id for p in self.permits}) != len(self.permits):
             raise ValueError("duplicate permit ID")
         owners = [p.owner_run_id for p in self.permits if p.owner_run_id is not None]

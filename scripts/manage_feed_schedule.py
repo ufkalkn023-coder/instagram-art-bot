@@ -134,7 +134,7 @@ def main(
         elif command == "enable-continuous":
             sub.add_argument("--approved-sha", required=True)
             sub.add_argument(
-                "--cadence", choices=("daily_utc1717", "hourly_utc17"),
+                "--cadence", choices=("daily_utc1717", "hourly_utc17", "six_hourly_utc17"),
                 default="daily_utc1717",
             )
     args = parser.parse_args(argv)
