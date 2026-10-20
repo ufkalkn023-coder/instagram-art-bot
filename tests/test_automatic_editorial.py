@@ -421,3 +421,16 @@ def test_automatic_feed_does_not_reuse_catalogue_only_v3_stock(tmp_path):
     delivery = content.story_delivery.model_copy(update={'headline_kind': 'source_title'})
     stale = replace(content, story_delivery=delivery, publication_metadata={'story_delivery': delivery.model_dump(mode='json')})
     assert not is_automatic_editorial_content(stale)
+
+
+def test_provider_rejection_reports_reason_without_exposing_api_key(monkeypatch, tmp_path, editorial_model_response, caplog):
+    from google.genai import errors
+    from src.automatic_editorial import prepare_automatic_editorial
+    def rejected(**_kwargs):
+        raise errors.ClientError(400, {'error': {'message': 'Invalid JSON schema; key=test-key',
+                                                'status': 'INVALID_ARGUMENT'}})
+    monkeypatch.setattr(editorial_model_response, 'generate_content', rejected)
+    with pytest.raises(RuntimeError):
+        prepare_automatic_editorial(acquired_content(tmp_path, 'single'), tmp_path / 'rendered')
+    assert '400' in caplog.text and 'Invalid JSON schema' in caplog.text
+    assert 'test-key' not in caplog.text
