@@ -977,8 +977,9 @@ kilitle korunur; tam sürüm tek atomik işaretçiyle değiştirilir. HTTP sunuc
 Detay sayfalarında özgün eser önizlemesi üzerinde fare veya dokunmayla yeni bir
 alan seçilebilir. Seçim çerçevesi, dört sayısal koordinat ve kırpılmış önizleme
 birlikte güncellenir; koordinatlar klavyeyle de düzenlenebilir. İptal edilen veya
-sıfır alanlı sürükleme önceki seçimi korur. Geçersiz koordinatlar önizlemede
-işaretlenir ve kayıt engellenir; çözünürlük ve içerik kontrolleri kayıt sırasında
+geçersiz alanlı sürükleme önceki seçimi korur. Detay alanı eserin %8–%85’ini
+kapsamalıdır; sınırlar önizleme ve sunucuda aynı kaynaktan alınır. Geçersiz
+koordinatlar önizlemede işaretlenir ve kayıt engellenir; çözünürlük ve içerik kontrolleri kayıt sırasında
 yeniden uygulanır. Görsel önizlemeler yönü düzeltilmiş küçük JPEG'ler olarak
 HTML'e gömülür; TIFF kaynaklar da çevrimdışı görüntülenir, özgün dosyalar değişmez.
 Statik galeride alan denenebilir; kalıcı kayıt için yerel editör sunucusu gerekir.
