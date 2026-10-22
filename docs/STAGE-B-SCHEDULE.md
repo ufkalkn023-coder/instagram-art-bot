@@ -6,18 +6,24 @@ operator authorization. Existing single-slot approvals keep their original behav
 
 ## Four daily slots (current policy)
 
-The approved schedule is **03:17 / 09:17 / 15:17 / 21:17 Europe/Istanbul**,
-UTC cron `17 0,6,12,18 * * *`. Explicit `six_hourly_utc17` approval migrates
+The approved nominal slots are **03:17 / 09:17 / 15:17 / 21:17 Europe/Istanbul**.
+Hourly eligibility checks (`17 * * * *` UTC) tolerate delayed GitHub triggers;
+they do not authorize hourly publication. Explicit `six_hourly_utc17` approval migrates
 control schema v1 to v2 in the normal generation/ETag CAS. Existing approvals,
 permits, successful timestamps, receipts, reservations and consumed authorizations
 remain intact; schema downgrade is rejected. Deploy compatible state readers
 (including the local Insights collector) before persisting schema v2.
 
-A proven SUCCESS outcome with the same publication identity and receipt media ID
-anchors eligibility to the successful permit's nominal slot +6 hours. Before that
+A proven SUCCESS outcome completed within the first hour, with the same publication
+identity and receipt media ID, anchors eligibility to the successful permit's nominal
+slot +6 hours. Before that
 outcome is durable, completion +6 hours is provisional. Manual/unlinked success,
-a different cadence or completion at/after the next slot uses completion +6 hours.
-Only the next regular 60-minute window is admitted; there is no catch-up burst.
+a different cadence or completion at/after the first hour uses completion +6 hours.
+Each new six-hour permit spans its nominal slot until the next slot, exclusively.
+A fresh run delayed by several hours can therefore publish once in the current
+slot. Only one attempt can consume a slot, including after a definitive failure;
+there is no catch-up burst. Existing one-hour permits retain their original expiry
+and nominal deadline derivation, without rewriting historical records.
 Safe six-hour failures use a one-hour attempt backoff, allowing the next regular
 slot. Legacy failures retain 24 hours. Unknown publication or receipt/cleanup
 state still blocks all admission.
@@ -27,6 +33,10 @@ approve this policy for a reviewed main SHA and freshly inspected generation.
 The default `preserve` release keeps the existing cadence/deadline. The workflow
 shares the publishing concurrency group and changes no Instagram content itself.
 GitHub schedule delays can shift actual publication within the finite window.
+Before enabling a release that writes six-hour permits, update all strict state
+readers, including the isolated local Insights release: older readers reject permits
+longer than one hour. Do not roll back to an older reader after wider permits exist.
+No schema migration, receipt rewrite or change to the 60-minute run freshness is needed.
 
 The legacy 48-hour details below apply to schema v1 daily/hourly approvals only.
 
@@ -70,9 +80,11 @@ carousel and single through `--mode auto`.
 
 ## Eligibility and admission
 
-The current Feed cron is `17 0,6,12,18 * * *`: four lightweight checks daily. Hourly approvals allow the first eligible window after the 48-hour
+The current Feed cron is `17 * * * *`: hourly lightweight eligibility checks.
+Six-hour approvals admit one attempt per nominal six-hour slot. Legacy hourly approvals allow the first eligible window after the 48-hour
 threshold; existing daily approvals and legacy permits remain restricted to
-**17:17 UTC**. Continuous windows last 60 minutes and adjacent closed windows may
+**17:17 UTC**. Legacy continuous windows last 60 minutes; new six-hour permits
+last until the next nominal slot. Adjacent closed windows may
 meet at expiry without overlapping. The
 repository variable `ARTFOLIO_PRODUCTION_SCHEDULE_ENABLED=true` is only an outer
 switch. A valid durable single-slot permit or continuous approval is also mandatory. Manual UUIDv4 Feed authorization
@@ -87,6 +99,10 @@ paused, mismatched SHA or blocked). Invalid or unreadable evidence returns a non
 exit; ordinary waiting reports `ready=false`. The scheduled workflow runs this
 check before expensive validation and gates later steps on an explicit `ready=true`.
 This is advisory: actual admission and publication still reload every guard.
+An unconditional final read-only `status --github-summary` step compares the latest
+receipt-backed Feed identity and its consumed authorization with the current run.
+The Actions summary explicitly distinguishes confirmed Instagram publication from
+no confirmed publication for that run, even when ordinary waiting exits successfully.
 
 The Feed workflow invokes `--mode auto`: a finalized carousel is followed by a
 single-image post, and a finalized single is followed by a carousel. With no

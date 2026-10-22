@@ -37,7 +37,11 @@ def nominal_success(control):
             or timestamp(outcome['recorded_at']) < completed):
         return None
     slot = timestamp(permit['slot_at'])
-    if not slot <= completed < slot + SIX_HOUR_SPACING:
+    # Keep the derivation for historical one-hour permits immutable. New wider
+    # permits use completion+6h after a delayed success to prevent catch-up bursts.
+    historical_window = timestamp(permit['expires_at']) <= slot + timedelta(hours=1)
+    timely_completion = SIX_HOUR_SPACING if historical_window else timedelta(hours=1)
+    if not slot <= completed < slot + timely_completion:
         return None
     return permit
 

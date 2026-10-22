@@ -48,8 +48,12 @@ def build_feed_calendar(schedule, queue, *, now: datetime) -> list[dict]:
         else:
             earliest = candidate
             note = 'Önceki yayınların başarılı tamamlanmasına bağlı olası alt sınır'
-            candidate = (cadence_window(candidate, SIX_HOURLY)[0] + timedelta(hours=6)
-                         if schedule.get('cadence') == SIX_HOURLY else candidate + timedelta(hours=48))
+            if schedule.get('cadence') == SIX_HOURLY:
+                slot, _ = cadence_window(candidate, SIX_HOURLY)
+                anchor = slot if candidate < slot + timedelta(hours=1) else candidate
+                candidate = anchor + timedelta(hours=6)
+            else:
+                candidate += timedelta(hours=48)
             expected = 'carousel' if expected == 'single' else 'single'
         result.append({**row, 'earliest_at': earliest, 'provisional': earliest is not None,
                        'planning_note': note})

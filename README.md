@@ -365,17 +365,25 @@ varsayılan olarak mevcut cadence politikasını korur. Açık `cadence=six_hour
 seçimi altı saatlik politikaya geçişi aynı CAS içinde yeni sürüm iznine bağlar. Proje onayı, stok kurulumu ve Instagram
 yayını yapmaz; production anahtarları yalnız GitHub'daki operatör adımında kalır.
 
-Workflow Türkiye saatiyle **03:17 / 09:17 / 15:17 / 21:17** olmak üzere
-günde dört defa Feed yayın uygunluğunu kontrol eder:
+Nominal Feed saatleri Türkiye saatiyle **03:17 / 09:17 / 15:17 / 21:17**'dir.
+GitHub gecikmelerini karşılamak için uygunluk saatte bir kontrol edilir:
 
 ```text
-Feed:     17 0,6,12,18 * * *
+Feed:     17 * * * *
 ```
 
 GitHub Actions cron ifadeleri UTC’dir; yeni düzen `six_hourly_utc17` sürekli çalışma
 izni ve control schema v2 gerektirir. Eski `daily_utc1717` / `hourly_utc17`
 izinlerinin 48 saatlik politikası geriye uyumluluk için korunur. Cron tek başına
-kalıcı izni değiştirmez. GitHub koşuyu geciktirebilir; yayın dakikası garanti edilmez. Experiment metadata’sındaki dört legacy zaman bucket’ı korunur; bunlar publication izni veya cron sıklığı değildir.
+kalıcı izni değiştirmez. Yeni altı saatlik permit bir sonraki nominal saate kadar
+geçerlidir; aynı aralıkta yalnız bir deneme yapılır. İlk saatten sonra tamamlanan
+gecikmiş yayın, peş peşe telafi yayını yapmamak için sonraki uygunluğu gerçek
+tamamlanma +6 saat olarak belirler. Eski bir saatlik permit kayıtlarının hesabı
+korunur. GitHub koşuyu geciktirebilir; yayın dakikası garanti edilmez.
+Her koşunun Actions özeti, receipt ve tüketilmiş izin kanıtıyla Instagram'a yayın
+yapılıp yapılmadığını açıkça gösterir; yeşil çalışma tek başına yayın kanıtı değildir.
+Yeni geniş permit yazılmadan önce yerel Insights dahil tüm state okuyucuları uyumlu
+sürüme geçirilmelidir. Experiment metadata’sındaki dört legacy zaman bucket’ı korunur; bunlar publication izni veya cron sıklığı değildir.
 
 Scheduled invocation açıkça `python main.py --mode auto` çalıştırır. Scheduled production varsayılan olarak kapalıdır; repository Actions variable `ARTFOLIO_PRODUCTION_SCHEDULE_ENABLED` tam olarak `true` olduğunda publish job’ı çalışabilir. Feed publication ayrıca tek slotluk durable Stage B permit veya açıkça verilmiş sürekli çalışma izni ve onaylanan cadence politikasına uygun yayın kanıtı gerektirir. Değişkenin eksik olması veya farklı bir değer taşıması fail-closed davranır. Tek slot modu her denemeden sonra duraklar. `enable-continuous` ile aynı main sürümüne verilen kalıcı izinde normal başarılı yayınlardan sonra bot duraklamaz; izin verilen zaman penceresindeki uygunluk koşusunda sıradaki formatı seçer. Cooldown dolmamışsa içerik üretmeden başarılı biçimde atlar. Belirsiz yayın, eksik receipt veya çözülmemiş cleanup durumunda yeni paylaşım yapmaz; aynı slotta tekrar denemez. Yeni main sürümü için çalışma izni yeniden verilmelidir.
 
@@ -831,11 +839,13 @@ Insights lane: owned media GET → association → append-only R2 snapshots
 ## Stage B scheduled Feed hardening
 
 Feed supports explicitly approved continuous operation and legacy operator-reviewed
-single-slot permits. Four daily checks (`17 0,6,12,18 * * *`) use an explicitly approved
+single-slot permits. Hourly checks (`17 * * * *`) use an explicitly approved
 `six_hourly_utc17` policy for the exact main SHA (control schema v2). A receipt-backed
-success anchors the next opportunity to its nominal slot +6 hours, so an ordinary
-completion delay does not skip the next slot. Manual/unlinked or very late completions
-use completion +6 hours. Legacy schema v1 approvals keep their 48-hour rule.
+success completed in the first hour anchors the next opportunity to its nominal
+slot +6 hours. Each new six-hour admission window lasts until the next slot;
+delayed starts can still publish once. Manual/unlinked or later completions use
+completion +6 hours to prevent catch-up bursts. Historical one-hour permits retain
+their deadline derivation. Legacy schema v1 approvals keep their 48-hour rule.
 Safe continuous outcomes keep scheduling enabled. Clean definitive failures retain
 a minimum one-hour backoff for six-hour permits (24 hours for legacy permits);
 the next attempt still requires a new regular slot. Ambiguous, incomplete or dirty

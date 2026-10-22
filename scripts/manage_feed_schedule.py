@@ -119,6 +119,7 @@ def main(
     status = commands.add_parser("status")
     status.add_argument("--expected-sha")
     status.add_argument("--github-output", action="store_true")
+    status.add_argument("--github-summary", action="store_true")
     for command in ("arm", "enable-continuous", "pause", "revoke", "acknowledge"):
         sub = commands.add_parser(command)
         sub.add_argument("--apply", action="store_true", required=True)
@@ -158,6 +159,21 @@ def main(
                     raise FeedScheduleError("FEED_STATUS_GITHUB_OUTPUT_REQUIRED")
                 with Path(output_path).open("a", encoding="utf-8") as output:
                     output.write(f"ready={str(ready).lower()}\nstatus={state}\n")
+            if args.github_summary:
+                summary_path = os.environ.get("GITHUB_STEP_SUMMARY")
+                run_id = os.environ.get("GITHUB_RUN_ID", "")
+                if not summary_path or not re.fullmatch(r"[1-9][0-9]*", run_id):
+                    raise FeedScheduleError("FEED_STATUS_GITHUB_SUMMARY_CONTEXT_REQUIRED")
+                confirmed = value.get("last_successful_feed_run_id") == int(run_id)
+                headline = (
+                    "Instagram publication confirmed" if confirmed
+                    else "No confirmed Instagram publication for this run"
+                )
+                with Path(summary_path).open("a", encoding="utf-8") as summary:
+                    summary.write(f"### {headline}\n\n")
+                    summary.write("Read-only receipt and schedule verification:\n\n```json\n")
+                    summary.write(json.dumps(value, sort_keys=True, indent=2))
+                    summary.write("\n```\n")
             print(json.dumps(value, sort_keys=True, indent=2))
         elif args.command == "arm":
             permit_id = manager.arm(

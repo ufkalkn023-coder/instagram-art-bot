@@ -535,13 +535,14 @@ class FeedSchedulePermit(_StrictStateModel):
         slot = parse_receipt_occurrence(self.slot_at)
         expiry = parse_receipt_occurrence(self.expires_at)
         created = parse_receipt_occurrence(self.created_at)
+        window_hours = 6 if self.cadence == "six_hourly_utc17" else 1
         if (
             slot.minute != 17
             or slot.second != 0
             or slot.microsecond != 0
             or (self.cadence == "daily_utc1717" and slot.hour != 17)
             or (self.cadence == "six_hourly_utc17" and slot.hour % 6 != 0)
-            or not slot < expiry <= slot + timedelta(minutes=60)
+            or not slot < expiry <= slot + timedelta(hours=window_hours)
         ):
             raise ValueError("permit requires one finite minute-17 UTC slot")
         if self.continuous_approval_id is None and not created < slot:

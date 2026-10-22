@@ -137,7 +137,7 @@ def attempt_backoff(control: FeedScheduleControl) -> datetime | None:
 
 
 def cadence_window(now: datetime, cadence: str) -> tuple[datetime, datetime]:
-    """Return the daily or hourly window containing ``now``."""
+    """Return the current nominal slot and its exclusive admission deadline."""
     now = utc(now)
     if cadence == "daily_utc1717":
         slot = now.replace(hour=17, minute=17, second=0, microsecond=0)
@@ -151,7 +151,7 @@ def cadence_window(now: datetime, cadence: str) -> tuple[datetime, datetime]:
             slot -= timedelta(hours=1)
     else:
         raise FeedScheduleError("SCHEDULE_CADENCE_INVALID")
-    return slot, slot + timedelta(minutes=60)
+    return slot, slot + timedelta(hours=6 if cadence == SIX_HOURLY else 1)
 
 
 def next_window_at_or_after(at: datetime, cadence: str) -> datetime:
@@ -424,6 +424,12 @@ class FeedScheduleManager:
             "checked_at": stamp(now),
             "last_successful_feed_at": stamp(completed),
             "last_successful_feed_id": publication_id,
+            "last_successful_feed_run_id": next(
+                (item["run_id"] for item in state.active_publication_state.consumed_authorizations
+                 if item["publication_id"] == publication_id),
+                next(receipt.workflow_run_id for receipt in ledger.records
+                     if receipt.publication_id == publication_id),
+            ),
             "next_eligible_at": stamp(next_eligible),
             "next_attempt_at": stamp(next_attempt) if next_attempt is not None else None,
             "next_check_at": stamp(next_attempt) if next_attempt is not None else None,
@@ -518,6 +524,16 @@ class FeedScheduleManager:
         if not slot <= now < expiry:
             base.update(status="WAITING_WINDOW", reason="OUTSIDE_CADENCE_WINDOW")
             base["next_check_at"] = stamp(next_attempt)
+            return base
+        if latest is not None and latest.owner_run_id is not None and (
+            parse_receipt_occurrence(latest.slot_at) == slot
+            or slot < parse_receipt_occurrence(latest.expires_at)
+        ):
+            next_attempt = next_window_at_or_after(max(due_at, expiry), cadence)
+            base.update(
+                status="WAITING_WINDOW", reason="SLOT_ALREADY_CONSUMED",
+                next_attempt_at=stamp(next_attempt), next_check_at=stamp(next_attempt),
+            )
             return base
         base.update(ready=True, status="READY", reason="READY", next_check_at=None)
         return base
