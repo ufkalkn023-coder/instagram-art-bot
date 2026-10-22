@@ -2,7 +2,8 @@ name: Instagram Art Bot Scheduler
 
 "on":
   schedule:
-    - cron: "17 0,6,12,18 * * *"
+    # Hourly checks tolerate delayed triggers; durable policy allows four slots daily.
+    - cron: "17 * * * *"
   workflow_dispatch: # Allows manual trigger from GitHub Actions tab
     inputs:
       confirm_publish:
@@ -128,6 +129,18 @@ jobs:
           CLOUDFLARE_STATE_R2_SECRET_ACCESS_KEY: ${{ secrets.CLOUDFLARE_STATE_R2_SECRET_ACCESS_KEY }}
           CLOUDFLARE_R2_PUBLIC_URL: ${{ secrets.CLOUDFLARE_R2_PUBLIC_URL }}
         run: python main.py --mode auto
+
+      - name: Report verified Instagram publication result
+        if: always()
+        env:
+          CLOUDFLARE_R2_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_R2_ACCOUNT_ID }}
+          CLOUDFLARE_R2_ACCESS_KEY_ID: ${{ secrets.CLOUDFLARE_R2_ACCESS_KEY_ID }}
+          CLOUDFLARE_R2_SECRET_ACCESS_KEY: ${{ secrets.CLOUDFLARE_R2_SECRET_ACCESS_KEY }}
+          CLOUDFLARE_R2_BUCKET_NAME: ${{ secrets.CLOUDFLARE_R2_BUCKET_NAME }}
+          CLOUDFLARE_STATE_R2_BUCKET_NAME: ${{ secrets.CLOUDFLARE_STATE_R2_BUCKET_NAME }}
+          CLOUDFLARE_STATE_R2_ACCESS_KEY_ID: ${{ secrets.CLOUDFLARE_STATE_R2_ACCESS_KEY_ID }}
+          CLOUDFLARE_STATE_R2_SECRET_ACCESS_KEY: ${{ secrets.CLOUDFLARE_STATE_R2_SECRET_ACCESS_KEY }}
+        run: python scripts/manage_feed_schedule.py status --expected-sha "$GITHUB_SHA" --github-summary
 
       - name: Report consolidated Feed status changes
         if: always() && vars.ARTFOLIO_FEED_STATUS_ENABLED == 'true'

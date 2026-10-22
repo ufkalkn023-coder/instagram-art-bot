@@ -68,10 +68,10 @@ def test_legacy_feed_wrapper_rejects_unpublishable_aspect_without_crop(tmp_path)
     assert not output_path.exists()
 
 
-def test_workflow_checks_four_daily_slots_and_keeps_auto_rotation():
+def test_workflow_checks_hourly_and_keeps_auto_rotation():
     workflow = Path(".github/workflows/instagram_bot.yml").read_text()
 
-    assert 'cron: "17 0,6,12,18 * * *"' in workflow
+    assert 'cron: "17 * * * *"' in workflow
     assert "python main.py --mode single" not in workflow
     assert "python main.py --mode auto" in workflow
     assert "workflow_dispatch" in workflow

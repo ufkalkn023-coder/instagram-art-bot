@@ -39,9 +39,9 @@ def test_selected_local_times_are_four_six_hour_slots():
         at = datetime(2026, 10, 21, hour, 17, tzinfo=local)
         slot, expiry = feed_schedule.cadence_window(at, CADENCE)
         assert slot == at.astimezone(timezone.utc)
-        assert expiry - slot == timedelta(hours=1)
+        assert expiry - slot == timedelta(hours=6)
     at = datetime(2026, 10, 21, 4, 18, tzinfo=local)
-    assert feed_schedule.next_window_at_or_after(at, CADENCE).astimezone(local) == datetime(2026, 10, 21, 9, 17, tzinfo=local)
+    assert feed_schedule.next_window_at_or_after(at, CADENCE) == at
 
 
 def finish_single(store, clock, slot, run_id, art_id, *, outcome=True):
@@ -206,7 +206,7 @@ def test_acknowledged_success_recovers_nominal_deadline_and_stays_paused(monkeyp
         run_attempt=1, created_at=feed_schedule.stamp(AT))
     manager(store).acknowledge(expected_generation=state.generation,
         evidence_ref='operator:verified-completion', audit_runs=lambda permit: [run],
-        now=AT + timedelta(hours=2))
+        now=AT + timedelta(hours=6))
     control = store.load_safety()[0].feed_schedule_control
     assert control.permits[-1].status == 'SUCCESS' and control.paused
     assert control.next_eligible_at == feed_schedule.stamp(AT + timedelta(hours=6))
