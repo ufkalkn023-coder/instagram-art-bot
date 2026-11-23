@@ -1,0 +1,2718 @@
+{
+  "schema_version": "artfolio-design-catalog-v1",
+  "collection": "neon",
+  "designs": [
+    {
+      "id": "neon-001",
+      "collection": "neon",
+      "number": 1,
+      "name": "The Curatorial Aperture",
+      "family": "gallery",
+      "family_name": "Galeri duvarı",
+      "description": "Kapak serisinden The Curatorial Aperture kompozisyonu (Puan: 9.5/10).",
+      "sample_image": "designs_50/design_01.jpg",
+      "source_keys": [
+        "artwork_1"
+      ],
+      "required_sources": 1,
+      "sample_head": "The Curatorial Aperture"
+    },
+    {
+      "id": "neon-002",
+      "collection": "neon",
+      "number": 2,
+      "name": "Macro Gaze + Smart Scrim",
+      "family": "gallery",
+      "family_name": "Galeri duvarı",
+      "description": "Kapak serisinden Macro Gaze + Smart Scrim kompozisyonu (Puan: 9.4/10).",
+      "sample_image": "designs_50/design_02.jpg",
+      "source_keys": [
+        "artwork_1"
+      ],
+      "required_sources": 1,
+      "sample_head": "Macro Gaze + Smart Scrim"
+    },
+    {
+      "id": "neon-003",
+      "collection": "neon",
+      "number": 3,
+      "name": "Swiss Museum Poster",
+      "family": "gallery",
+      "family_name": "Galeri duvarı",
+      "description": "Kapak serisinden Swiss Museum Poster kompozisyonu (Puan: 9.6/10).",
+      "sample_image": "designs_50/design_03.jpg",
+      "source_keys": [
+        "artwork_1"
+      ],
+      "required_sources": 1,
+      "sample_head": "Swiss Museum Poster"
+    },
+    {
+      "id": "neon-004",
+      "collection": "neon",
+      "number": 4,
+      "name": "Belly-Band Triptych",
+      "family": "gallery",
+      "family_name": "Galeri duvarı",
+      "description": "Kapak serisinden Belly-Band Triptych kompozisyonu (Puan: 9.1/10).",
+      "sample_image": "designs_50/design_04.jpg",
+      "source_keys": [
+        "artwork_1",
+        "artwork_2",
+        "artwork_3"
+      ],
+      "required_sources": 3,
+      "sample_head": "Belly-Band Triptych"
+    },
+    {
+      "id": "neon-005",
+      "collection": "neon",
+      "number": 5,
+      "name": "Asymmetric Pigment Split",
+      "family": "gallery",
+      "family_name": "Galeri duvarı",
+      "description": "Kapak serisinden Asymmetric Pigment Split kompozisyonu (Puan: 9.0/10).",
+      "sample_image": "designs_50/design_05.jpg",
+      "source_keys": [
+        "artwork_1"
+      ],
+      "required_sources": 1,
+      "sample_head": "Asymmetric Pigment Split"
+    },
+    {
+      "id": "neon-006",
+      "collection": "neon",
+      "number": 6,
+      "name": "Typographic Ghost Layer",
+      "family": "gallery",
+      "family_name": "Galeri duvarı",
+      "description": "Kapak serisinden Typographic Ghost Layer kompozisyonu (Puan: 8.6/10).",
+      "sample_image": "designs_50/design_06.jpg",
+      "source_keys": [
+        "artwork_1"
+      ],
+      "required_sources": 1,
+      "sample_head": "Typographic Ghost Layer"
+    },
+    {
+      "id": "neon-007",
+      "collection": "neon",
+      "number": 7,
+      "name": "Archival Index Card",
+      "family": "gallery",
+      "family_name": "Galeri duvarı",
+      "description": "Kapak serisinden Archival Index Card kompozisyonu (Puan: 9.2/10).",
+      "sample_image": "designs_50/design_07.jpg",
+      "source_keys": [
+        "artwork_1"
+      ],
+      "required_sources": 1,
+      "sample_head": "Archival Index Card"
+    },
+    {
+      "id": "neon-008",
+      "collection": "neon",
+      "number": 8,
+      "name": "Chromatic Swatch Header",
+      "family": "gallery",
+      "family_name": "Galeri duvarı",
+      "description": "Kapak serisinden Chromatic Swatch Header kompozisyonu (Puan: 9.3/10).",
+      "sample_image": "designs_50/design_08.jpg",
+      "source_keys": [
+        "artwork_1"
+      ],
+      "required_sources": 1,
+      "sample_head": "Chromatic Swatch Header"
+    },
+    {
+      "id": "neon-009",
+      "collection": "neon",
+      "number": 9,
+      "name": "Conservator's Loupe",
+      "family": "detail",
+      "family_name": "Yakın bakış",
+      "description": "Detay serisinden Conservator's Loupe kompozisyonu (Puan: 9.7/10).",
+      "sample_image": "designs_50/design_09.jpg",
+      "source_keys": [
+        "artwork_1"
+      ],
+      "required_sources": 1,
+      "sample_head": "Conservator's Loupe"
+    },
+    {
+      "id": "neon-010",
+      "collection": "neon",
+      "number": 10,
+      "name": "Two-Beat Mystery Reveal",
+      "family": "detail",
+      "family_name": "Yakın bakış",
+      "description": "Detay serisinden Two-Beat Mystery Reveal kompozisyonu (Puan: 9.6/10).",
+      "sample_image": "designs_50/design_10.jpg",
+      "source_keys": [
+        "artwork_1"
+      ],
+      "required_sources": 1,
+      "sample_head": "Two-Beat Mystery Reveal"
+    },
+    {
+      "id": "neon-011",
+      "collection": "neon",
+      "number": 11,
+      "name": "Spotlight Dimming Mask",
+      "family": "detail",
+      "family_name": "Yakın bakış",
+      "description": "Detay serisinden Spotlight Dimming Mask kompozisyonu (Puan: 9.2/10).",
+      "sample_image": "designs_50/design_11.jpg",
+      "source_keys": [
+        "artwork_1"
+      ],
+      "required_sources": 1,
+      "sample_head": "Spotlight Dimming Mask"
+    },
+    {
+      "id": "neon-012",
+      "collection": "neon",
+      "number": 12,
+      "name": "Numbered Anatomy Pins",
+      "family": "detail",
+      "family_name": "Yakın bakış",
+      "description": "Detay serisinden Numbered Anatomy Pins kompozisyonu (Puan: 9.0/10).",
+      "sample_image": "designs_50/design_12.jpg",
+      "source_keys": [
+        "artwork_1"
+      ],
+      "required_sources": 1,
+      "sample_head": "Numbered Anatomy Pins"
+    },
+    {
+      "id": "neon-013",
+      "collection": "neon",
+      "number": 13,
+      "name": "Brushstroke 1:1 Strip",
+      "family": "detail",
+      "family_name": "Yakın bakış",
+      "description": "Detay serisinden Brushstroke 1:1 Strip kompozisyonu (Puan: 9.1/10).",
+      "sample_image": "designs_50/design_13.jpg",
+      "source_keys": [
+        "artwork_1"
+      ],
+      "required_sources": 1,
+      "sample_head": "Brushstroke 1:1 Strip"
+    },
+    {
+      "id": "neon-014",
+      "collection": "neon",
+      "number": 14,
+      "name": "Compositional Sightlines",
+      "family": "detail",
+      "family_name": "Yakın bakış",
+      "description": "Detay serisinden Compositional Sightlines kompozisyonu (Puan: 8.7/10).",
+      "sample_image": "designs_50/design_14.jpg",
+      "source_keys": [
+        "artwork_1"
+      ],
+      "required_sources": 1,
+      "sample_head": "Compositional Sightlines"
+    },
+    {
+      "id": "neon-015",
+      "collection": "neon",
+      "number": 15,
+      "name": "Mini-Map Locator Detail",
+      "family": "detail",
+      "family_name": "Yakın bakış",
+      "description": "Detay serisinden Mini-Map Locator Detail kompozisyonu (Puan: 9.2/10).",
+      "sample_image": "designs_50/design_15.jpg",
+      "source_keys": [
+        "artwork_1"
+      ],
+      "required_sources": 1,
+      "sample_head": "Mini-Map Locator Detail"
+    },
+    {
+      "id": "neon-016",
+      "collection": "neon",
+      "number": 16,
+      "name": "Iconography Decoder Card",
+      "family": "detail",
+      "family_name": "Yakın bakış",
+      "description": "Detay serisinden Iconography Decoder Card kompozisyonu (Puan: 8.9/10).",
+      "sample_image": "designs_50/design_16.jpg",
+      "source_keys": [
+        "artwork_1"
+      ],
+      "required_sources": 1,
+      "sample_head": "Iconography Decoder Card"
+    },
+    {
+      "id": "neon-017",
+      "collection": "neon",
+      "number": 17,
+      "name": "Museum Wall Placard",
+      "family": "gallery",
+      "family_name": "Galeri duvarı",
+      "description": "Galeri serisinden Museum Wall Placard kompozisyonu (Puan: 9.6/10).",
+      "sample_image": "designs_50/design_17.jpg",
+      "source_keys": [
+        "artwork_1"
+      ],
+      "required_sources": 1,
+      "sample_head": "Museum Wall Placard"
+    },
+    {
+      "id": "neon-018",
+      "collection": "neon",
+      "number": 18,
+      "name": "Dark Vault Chiaroscuro",
+      "family": "gallery",
+      "family_name": "Galeri duvarı",
+      "description": "Galeri serisinden Dark Vault Chiaroscuro kompozisyonu (Puan: 9.3/10).",
+      "sample_image": "designs_50/design_18.jpg",
+      "source_keys": [
+        "artwork_1"
+      ],
+      "required_sources": 1,
+      "sample_head": "Dark Vault Chiaroscuro"
+    },
+    {
+      "id": "neon-019",
+      "collection": "neon",
+      "number": 19,
+      "name": "Phaidon Margin-Note Page",
+      "family": "gallery",
+      "family_name": "Galeri duvarı",
+      "description": "Galeri serisinden Phaidon Margin-Note Page kompozisyonu (Puan: 9.4/10).",
+      "sample_image": "designs_50/design_19.jpg",
+      "source_keys": [
+        "artwork_1"
+      ],
+      "required_sources": 1,
+      "sample_head": "Phaidon Margin-Note Page"
+    },
+    {
+      "id": "neon-020",
+      "collection": "neon",
+      "number": 20,
+      "name": "Safe-Zone Cinema Slide",
+      "family": "gallery",
+      "family_name": "Galeri duvarı",
+      "description": "Galeri serisinden Safe-Zone Cinema Slide kompozisyonu (Puan: 9.5/10).",
+      "sample_image": "designs_50/design_20.jpg",
+      "source_keys": [
+        "artwork_1"
+      ],
+      "required_sources": 1,
+      "sample_head": "Safe-Zone Cinema Slide"
+    },
+    {
+      "id": "neon-021",
+      "collection": "neon",
+      "number": 21,
+      "name": "Adaptive Edge Mat-Board",
+      "family": "gallery",
+      "family_name": "Galeri duvarı",
+      "description": "Galeri serisinden Adaptive Edge Mat-Board kompozisyonu (Puan: 9.3/10).",
+      "sample_image": "designs_50/design_21.jpg",
+      "source_keys": [
+        "artwork_1"
+      ],
+      "required_sources": 1,
+      "sample_head": "Adaptive Edge Mat-Board"
+    },
+    {
+      "id": "neon-022",
+      "collection": "neon",
+      "number": 22,
+      "name": "Top-Band Archival Ledger",
+      "family": "gallery",
+      "family_name": "Galeri duvarı",
+      "description": "Galeri serisinden Top-Band Archival Ledger kompozisyonu (Puan: 9.1/10).",
+      "sample_image": "designs_50/design_22.jpg",
+      "source_keys": [
+        "artwork_1"
+      ],
+      "required_sources": 1,
+      "sample_head": "Top-Band Archival Ledger"
+    },
+    {
+      "id": "neon-023",
+      "collection": "neon",
+      "number": 23,
+      "name": "Smart Quiet-Corner Tag",
+      "family": "gallery",
+      "family_name": "Galeri duvarı",
+      "description": "Galeri serisinden Smart Quiet-Corner Tag kompozisyonu (Puan: 8.9/10).",
+      "sample_image": "designs_50/design_23.jpg",
+      "source_keys": [
+        "artwork_1"
+      ],
+      "required_sources": 1,
+      "sample_head": "Smart Quiet-Corner Tag"
+    },
+    {
+      "id": "neon-024",
+      "collection": "neon",
+      "number": 24,
+      "name": "Museum Excerpt Diptych",
+      "family": "gallery",
+      "family_name": "Galeri duvarı",
+      "description": "Galeri serisinden Museum Excerpt Diptych kompozisyonu (Puan: 8.8/10).",
+      "sample_image": "designs_50/design_24.jpg",
+      "source_keys": [
+        "artwork_1"
+      ],
+      "required_sources": 1,
+      "sample_head": "Museum Excerpt Diptych"
+    },
+    {
+      "id": "neon-025",
+      "collection": "neon",
+      "number": 25,
+      "name": "Centuries Apart Split",
+      "family": "duet",
+      "family_name": "Görsel düetler",
+      "description": "Karşılaştırma serisinden Centuries Apart Split kompozisyonu (Puan: 9.6/10).",
+      "sample_image": "designs_50/design_25.jpg",
+      "source_keys": [
+        "artwork_1",
+        "artwork_2"
+      ],
+      "required_sources": 2,
+      "sample_head": "Centuries Apart Split"
+    },
+    {
+      "id": "neon-026",
+      "collection": "neon",
+      "number": 26,
+      "name": "Cinema Before Film Echo",
+      "family": "duet",
+      "family_name": "Görsel düetler",
+      "description": "Karşılaştırma serisinden Cinema Before Film Echo kompozisyonu (Puan: 9.1/10).",
+      "sample_image": "designs_50/design_26.jpg",
+      "source_keys": [
+        "artwork_1"
+      ],
+      "required_sources": 1,
+      "sample_head": "Cinema Before Film Echo"
+    },
+    {
+      "id": "neon-027",
+      "collection": "neon",
+      "number": 27,
+      "name": "Four Centuries 2x2 Grid",
+      "family": "duet",
+      "family_name": "Görsel düetler",
+      "description": "Karşılaştırma serisinden Four Centuries 2x2 Grid kompozisyonu (Puan: 9.5/10).",
+      "sample_image": "designs_50/design_27.jpg",
+      "source_keys": [
+        "artwork_1",
+        "artwork_2",
+        "artwork_3",
+        "artwork_4"
+      ],
+      "required_sources": 4,
+      "sample_head": "Four Centuries 2x2 Grid"
+    },
+    {
+      "id": "neon-028",
+      "collection": "neon",
+      "number": 28,
+      "name": "Early vs Late Masterwork",
+      "family": "duet",
+      "family_name": "Görsel düetler",
+      "description": "Karşılaştırma serisinden Early vs Late Masterwork kompozisyonu (Puan: 9.3/10).",
+      "sample_image": "designs_50/design_28.jpg",
+      "source_keys": [
+        "artwork_1",
+        "artwork_2"
+      ],
+      "required_sources": 2,
+      "sample_head": "Early vs Late Masterwork"
+    },
+    {
+      "id": "neon-029",
+      "collection": "neon",
+      "number": 29,
+      "name": "First Glance / Closer Look",
+      "family": "duet",
+      "family_name": "Görsel düetler",
+      "description": "Karşılaştırma serisinden First Glance / Closer Look kompozisyonu (Puan: 9.2/10).",
+      "sample_image": "designs_50/design_29.jpg",
+      "source_keys": [
+        "artwork_1"
+      ],
+      "required_sources": 1,
+      "sample_head": "First Glance / Closer Look"
+    },
+    {
+      "id": "neon-030",
+      "collection": "neon",
+      "number": 30,
+      "name": "True Museum Scale Check",
+      "family": "duet",
+      "family_name": "Görsel düetler",
+      "description": "Karşılaştırma serisinden True Museum Scale Check kompozisyonu (Puan: 9.0/10).",
+      "sample_image": "designs_50/design_30.jpg",
+      "source_keys": [
+        "artwork_1"
+      ],
+      "required_sources": 1,
+      "sample_head": "True Museum Scale Check"
+    },
+    {
+      "id": "neon-031",
+      "collection": "neon",
+      "number": 31,
+      "name": "East Meets West Mirror",
+      "family": "duet",
+      "family_name": "Görsel düetler",
+      "description": "Karşılaştırma serisinden East Meets West Mirror kompozisyonu (Puan: 9.1/10).",
+      "sample_image": "designs_50/design_31.jpg",
+      "source_keys": [
+        "artwork_1",
+        "artwork_2"
+      ],
+      "required_sources": 2,
+      "sample_head": "East Meets West Mirror"
+    },
+    {
+      "id": "neon-032",
+      "collection": "neon",
+      "number": 32,
+      "name": "Proportional Pigment Bar",
+      "family": "colors",
+      "family_name": "Palet serileri",
+      "description": "Renk serisinden Proportional Pigment Bar kompozisyonu (Puan: 9.6/10).",
+      "sample_image": "designs_50/design_32.jpg",
+      "source_keys": [
+        "artwork_1"
+      ],
+      "required_sources": 1,
+      "sample_head": "Proportional Pigment Bar"
+    },
+    {
+      "id": "neon-033",
+      "collection": "neon",
+      "number": 33,
+      "name": "Temperature Gradient Arc",
+      "family": "colors",
+      "family_name": "Palet serileri",
+      "description": "Renk serisinden Temperature Gradient Arc kompozisyonu (Puan: 9.1/10).",
+      "sample_image": "designs_50/design_33.jpg",
+      "source_keys": [
+        "artwork_1"
+      ],
+      "required_sources": 1,
+      "sample_head": "Temperature Gradient Arc"
+    },
+    {
+      "id": "neon-034",
+      "collection": "neon",
+      "number": 34,
+      "name": "3-Tone Chiaroscuro Map",
+      "family": "colors",
+      "family_name": "Palet serileri",
+      "description": "Renk serisinden 3-Tone Chiaroscuro Map kompozisyonu (Puan: 9.0/10).",
+      "sample_image": "designs_50/design_34.jpg",
+      "source_keys": [
+        "artwork_1"
+      ],
+      "required_sources": 1,
+      "sample_head": "3-Tone Chiaroscuro Map"
+    },
+    {
+      "id": "neon-035",
+      "collection": "neon",
+      "number": 35,
+      "name": "Single-Hue Monograph Spine",
+      "family": "colors",
+      "family_name": "Palet serileri",
+      "description": "Renk serisinden Single-Hue Monograph Spine kompozisyonu (Puan: 8.9/10).",
+      "sample_image": "designs_50/design_35.jpg",
+      "source_keys": [
+        "artwork_1"
+      ],
+      "required_sources": 1,
+      "sample_head": "Single-Hue Monograph Spine"
+    },
+    {
+      "id": "neon-036",
+      "collection": "neon",
+      "number": 36,
+      "name": "Physical Medium Specimen",
+      "family": "colors",
+      "family_name": "Palet serileri",
+      "description": "Renk serisinden Physical Medium Specimen kompozisyonu (Puan: 8.8/10).",
+      "sample_image": "designs_50/design_36.jpg",
+      "source_keys": [
+        "artwork_1"
+      ],
+      "required_sources": 1,
+      "sample_head": "Physical Medium Specimen"
+    },
+    {
+      "id": "neon-037",
+      "collection": "neon",
+      "number": 37,
+      "name": "Nocturne Candlelight Mode",
+      "family": "colors",
+      "family_name": "Palet serileri",
+      "description": "Renk serisinden Nocturne Candlelight Mode kompozisyonu (Puan: 9.1/10).",
+      "sample_image": "designs_50/design_37.jpg",
+      "source_keys": [
+        "artwork_1"
+      ],
+      "required_sources": 1,
+      "sample_head": "Nocturne Candlelight Mode"
+    },
+    {
+      "id": "neon-038",
+      "collection": "neon",
+      "number": 38,
+      "name": "Seamless Panorama Split",
+      "family": "story",
+      "family_name": "Hikâye kapakları",
+      "description": "Anlatı serisinden Seamless Panorama Split kompozisyonu (Puan: 9.8/10).",
+      "sample_image": "designs_50/design_38.jpg",
+      "source_keys": [
+        "artwork_1"
+      ],
+      "required_sources": 1,
+      "sample_head": "Seamless Panorama Split"
+    },
+    {
+      "id": "neon-039",
+      "collection": "neon",
+      "number": 39,
+      "name": "Chronology Timeline Ribbon",
+      "family": "story",
+      "family_name": "Hikâye kapakları",
+      "description": "Anlatı serisinden Chronology Timeline Ribbon kompozisyonu (Puan: 9.4/10).",
+      "sample_image": "designs_50/design_39.jpg",
+      "source_keys": [
+        "artwork_1"
+      ],
+      "required_sources": 1,
+      "sample_head": "Chronology Timeline Ribbon"
+    },
+    {
+      "id": "neon-040",
+      "collection": "neon",
+      "number": 40,
+      "name": "3-Act Curatorial Wall Text",
+      "family": "story",
+      "family_name": "Hikâye kapakları",
+      "description": "Anlatı serisinden 3-Act Curatorial Wall Text kompozisyonu (Puan: 9.3/10).",
+      "sample_image": "designs_50/design_40.jpg",
+      "source_keys": [
+        "artwork_1"
+      ],
+      "required_sources": 1,
+      "sample_head": "3-Act Curatorial Wall Text"
+    },
+    {
+      "id": "neon-041",
+      "collection": "neon",
+      "number": 41,
+      "name": "Slow Looking Meditation",
+      "family": "story",
+      "family_name": "Hikâye kapakları",
+      "description": "Anlatı serisinden Slow Looking Meditation kompozisyonu (Puan: 9.5/10).",
+      "sample_image": "designs_50/design_41.jpg",
+      "source_keys": [
+        "artwork_1"
+      ],
+      "required_sources": 1,
+      "sample_head": "Slow Looking Meditation"
+    },
+    {
+      "id": "neon-042",
+      "collection": "neon",
+      "number": 42,
+      "name": "World Museum Passport",
+      "family": "story",
+      "family_name": "Hikâye kapakları",
+      "description": "Anlatı serisinden World Museum Passport kompozisyonu (Puan: 8.9/10).",
+      "sample_image": "designs_50/design_42.jpg",
+      "source_keys": [
+        "artwork_1"
+      ],
+      "required_sources": 1,
+      "sample_head": "World Museum Passport"
+    },
+    {
+      "id": "neon-043",
+      "collection": "neon",
+      "number": 43,
+      "name": "Emotion Index Series",
+      "family": "story",
+      "family_name": "Hikâye kapakları",
+      "description": "Anlatı serisinden Emotion Index Series kompozisyonu (Puan: 9.2/10).",
+      "sample_image": "designs_50/design_43.jpg",
+      "source_keys": [
+        "artwork_1"
+      ],
+      "required_sources": 1,
+      "sample_head": "Emotion Index Series"
+    },
+    {
+      "id": "neon-044",
+      "collection": "neon",
+      "number": 44,
+      "name": "Contact-Sheet Outro",
+      "family": "archive",
+      "family_name": "Analog arşiv",
+      "description": "Grid & Outro serisinden Contact-Sheet Outro kompozisyonu (Puan: 9.7/10).",
+      "sample_image": "designs_50/design_44.jpg",
+      "source_keys": [
+        "artwork_1"
+      ],
+      "required_sources": 1,
+      "sample_head": "Contact-Sheet Outro"
+    },
+    {
+      "id": "neon-045",
+      "collection": "neon",
+      "number": 45,
+      "name": "3-Column Grid Cadence",
+      "family": "archive",
+      "family_name": "Analog arşiv",
+      "description": "Grid & Outro serisinden 3-Column Grid Cadence kompozisyonu (Puan: 9.1/10).",
+      "sample_image": "designs_50/design_45.jpg",
+      "source_keys": [
+        "artwork_1"
+      ],
+      "required_sources": 1,
+      "sample_head": "3-Column Grid Cadence"
+    },
+    {
+      "id": "neon-046",
+      "collection": "neon",
+      "number": 46,
+      "name": "Collector's Back Index",
+      "family": "archive",
+      "family_name": "Analog arşiv",
+      "description": "Grid & Outro serisinden Collector's Back Index kompozisyonu (Puan: 9.0/10).",
+      "sample_image": "designs_50/design_46.jpg",
+      "source_keys": [
+        "artwork_1"
+      ],
+      "required_sources": 1,
+      "sample_head": "Collector's Back Index"
+    },
+    {
+      "id": "neon-047",
+      "collection": "neon",
+      "number": 47,
+      "name": "Vertical Catalog Spine",
+      "family": "archive",
+      "family_name": "Analog arşiv",
+      "description": "Grid & Outro serisinden Vertical Catalog Spine kompozisyonu (Puan: 9.3/10).",
+      "sample_image": "designs_50/design_47.jpg",
+      "source_keys": [
+        "artwork_1"
+      ],
+      "required_sources": 1,
+      "sample_head": "Vertical Catalog Spine"
+    },
+    {
+      "id": "neon-048",
+      "collection": "neon",
+      "number": 48,
+      "name": "Print-Shop Single Plate",
+      "family": "cinema",
+      "family_name": "Sinematik kapaklar",
+      "description": "Single & Reel serisinden Print-Shop Single Plate kompozisyonu (Puan: 9.2/10).",
+      "sample_image": "designs_50/design_48.jpg",
+      "source_keys": [
+        "artwork_1"
+      ],
+      "required_sources": 1,
+      "sample_head": "Print-Shop Single Plate"
+    },
+    {
+      "id": "neon-049",
+      "collection": "neon",
+      "number": 49,
+      "name": "Verified Aphorism Plate",
+      "family": "cinema",
+      "family_name": "Sinematik kapaklar",
+      "description": "Single & Reel serisinden Verified Aphorism Plate kompozisyonu (Puan: 8.8/10).",
+      "sample_image": "designs_50/design_49.jpg",
+      "source_keys": [
+        "artwork_1"
+      ],
+      "required_sources": 1,
+      "sample_head": "Verified Aphorism Plate"
+    },
+    {
+      "id": "neon-050",
+      "collection": "neon",
+      "number": 50,
+      "name": "Ken Burns Detail-to-Full",
+      "family": "cinema",
+      "family_name": "Sinematik kapaklar",
+      "description": "Single & Reel serisinden Ken Burns Detail-to-Full kompozisyonu (Puan: 9.5/10).",
+      "sample_image": "designs_50/design_50.jpg",
+      "source_keys": [
+        "artwork_1"
+      ],
+      "required_sources": 1,
+      "sample_head": "Ken Burns Detail-to-Full"
+    },
+    {
+      "id": "neon-051",
+      "collection": "neon",
+      "number": 51,
+      "name": "Museum Postage Stamp",
+      "family": "archive",
+      "family_name": "Analog arşiv",
+      "description": "Fiziksel Obje serisinden Museum Postage Stamp kompozisyonu (Puan: 9.5/10).",
+      "sample_image": "designs_extra_30/design_51.jpg",
+      "source_keys": [
+        "artwork_1"
+      ],
+      "required_sources": 1,
+      "sample_head": "Museum Postage Stamp"
+    },
+    {
+      "id": "neon-052",
+      "collection": "neon",
+      "number": 52,
+      "name": "Vinyl Record Sleeve",
+      "family": "archive",
+      "family_name": "Analog arşiv",
+      "description": "Fiziksel Obje serisinden Vinyl Record Sleeve kompozisyonu (Puan: 9.4/10).",
+      "sample_image": "designs_extra_30/design_52.jpg",
+      "source_keys": [
+        "artwork_1"
+      ],
+      "required_sources": 1,
+      "sample_head": "Vinyl Record Sleeve"
+    },
+    {
+      "id": "neon-053",
+      "collection": "neon",
+      "number": 53,
+      "name": "Exhibition Ticket Stub",
+      "family": "archive",
+      "family_name": "Analog arşiv",
+      "description": "Fiziksel Obje serisinden Exhibition Ticket Stub kompozisyonu (Puan: 9.3/10).",
+      "sample_image": "designs_extra_30/design_53.jpg",
+      "source_keys": [
+        "artwork_1"
+      ],
+      "required_sources": 1,
+      "sample_head": "Exhibition Ticket Stub"
+    },
+    {
+      "id": "neon-054",
+      "collection": "neon",
+      "number": 54,
+      "name": "35mm Kodachrome Slide",
+      "family": "archive",
+      "family_name": "Analog arşiv",
+      "description": "Fiziksel Obje serisinden 35mm Kodachrome Slide kompozisyonu (Puan: 9.6/10).",
+      "sample_image": "designs_extra_30/design_54.jpg",
+      "source_keys": [
+        "artwork_1"
+      ],
+      "required_sources": 1,
+      "sample_head": "35mm Kodachrome Slide"
+    },
+    {
+      "id": "neon-055",
+      "collection": "neon",
+      "number": 55,
+      "name": "Wax-Sealed Auction Lot",
+      "family": "archive",
+      "family_name": "Analog arşiv",
+      "description": "Fiziksel Obje serisinden Wax-Sealed Auction Lot kompozisyonu (Puan: 9.1/10).",
+      "sample_image": "designs_extra_30/design_55.jpg",
+      "source_keys": [
+        "artwork_1"
+      ],
+      "required_sources": 1,
+      "sample_head": "Wax-Sealed Auction Lot"
+    },
+    {
+      "id": "neon-056",
+      "collection": "neon",
+      "number": 56,
+      "name": "Vertical Tategaki Strip",
+      "family": "gallery",
+      "family_name": "Galeri duvarı",
+      "description": "Japon & Ma serisinden Vertical Tategaki Strip kompozisyonu (Puan: 9.5/10).",
+      "sample_image": "designs_extra_30/design_56.jpg",
+      "source_keys": [
+        "artwork_1"
+      ],
+      "required_sources": 1,
+      "sample_head": "Vertical Tategaki Strip"
+    },
+    {
+      "id": "neon-057",
+      "collection": "neon",
+      "number": 57,
+      "name": "Asymmetric Ma Silence",
+      "family": "gallery",
+      "family_name": "Galeri duvarı",
+      "description": "Japon & Ma serisinden Asymmetric Ma Silence kompozisyonu (Puan: 9.2/10).",
+      "sample_image": "designs_extra_30/design_57.jpg",
+      "source_keys": [
+        "artwork_1"
+      ],
+      "required_sources": 1,
+      "sample_head": "Asymmetric Ma Silence"
+    },
+    {
+      "id": "neon-058",
+      "collection": "neon",
+      "number": 58,
+      "name": "L-Shaped Obi & Hanko",
+      "family": "gallery",
+      "family_name": "Galeri duvarı",
+      "description": "Japon & Ma serisinden L-Shaped Obi & Hanko kompozisyonu (Puan: 9.1/10).",
+      "sample_image": "designs_extra_30/design_58.jpg",
+      "source_keys": [
+        "artwork_1"
+      ],
+      "required_sources": 1,
+      "sample_head": "L-Shaped Obi & Hanko"
+    },
+    {
+      "id": "neon-059",
+      "collection": "neon",
+      "number": 59,
+      "name": "Shoji Lattice Window",
+      "family": "gallery",
+      "family_name": "Galeri duvarı",
+      "description": "Japon & Ma serisinden Shoji Lattice Window kompozisyonu (Puan: 9.0/10).",
+      "sample_image": "designs_extra_30/design_59.jpg",
+      "source_keys": [
+        "artwork_1"
+      ],
+      "required_sources": 1,
+      "sample_head": "Shoji Lattice Window"
+    },
+    {
+      "id": "neon-060",
+      "collection": "neon",
+      "number": 60,
+      "name": "Kintsugi Gold Seam",
+      "family": "gallery",
+      "family_name": "Galeri duvarı",
+      "description": "Japon & Ma serisinden Kintsugi Gold Seam kompozisyonu (Puan: 9.4/10).",
+      "sample_image": "designs_extra_30/design_60.jpg",
+      "source_keys": [
+        "artwork_1",
+        "artwork_2"
+      ],
+      "required_sources": 2,
+      "sample_head": "Kintsugi Gold Seam"
+    },
+    {
+      "id": "neon-061",
+      "collection": "neon",
+      "number": 61,
+      "name": "Bauhaus Primary Poster",
+      "family": "poster",
+      "family_name": "Grafik afiş",
+      "description": "Bauhaus & Kinetik serisinden Bauhaus Primary Poster kompozisyonu (Puan: 9.2/10).",
+      "sample_image": "designs_extra_30/design_61.jpg",
+      "source_keys": [
+        "artwork_1"
+      ],
+      "required_sources": 1,
+      "sample_head": "Bauhaus Primary Poster"
+    },
+    {
+      "id": "neon-062",
+      "collection": "neon",
+      "number": 62,
+      "name": "Giant Knockout Letter Mask",
+      "family": "poster",
+      "family_name": "Grafik afiş",
+      "description": "Bauhaus & Kinetik serisinden Giant Knockout Letter Mask kompozisyonu (Puan: 9.7/10).",
+      "sample_image": "designs_extra_30/design_62.jpg",
+      "source_keys": [
+        "artwork_1"
+      ],
+      "required_sources": 1,
+      "sample_head": "Giant Knockout Letter Mask"
+    },
+    {
+      "id": "neon-063",
+      "collection": "neon",
+      "number": 63,
+      "name": "Kinetic Echo Poster",
+      "family": "poster",
+      "family_name": "Grafik afiş",
+      "description": "Bauhaus & Kinetik serisinden Kinetic Echo Poster kompozisyonu (Puan: 9.1/10).",
+      "sample_image": "designs_extra_30/design_63.jpg",
+      "source_keys": [
+        "artwork_1"
+      ],
+      "required_sources": 1,
+      "sample_head": "Kinetic Echo Poster"
+    },
+    {
+      "id": "neon-064",
+      "collection": "neon",
+      "number": 64,
+      "name": "Neo-Brutalist Spec Card",
+      "family": "poster",
+      "family_name": "Grafik afiş",
+      "description": "Bauhaus & Kinetik serisinden Neo-Brutalist Spec Card kompozisyonu (Puan: 8.9/10).",
+      "sample_image": "designs_extra_30/design_64.jpg",
+      "source_keys": [
+        "artwork_1"
+      ],
+      "required_sources": 1,
+      "sample_head": "Neo-Brutalist Spec Card"
+    },
+    {
+      "id": "neon-065",
+      "collection": "neon",
+      "number": 65,
+      "name": "Oversized Bleed Numeral",
+      "family": "poster",
+      "family_name": "Grafik afiş",
+      "description": "Bauhaus & Kinetik serisinden Oversized Bleed Numeral kompozisyonu (Puan: 9.4/10).",
+      "sample_image": "designs_extra_30/design_65.jpg",
+      "source_keys": [
+        "artwork_1"
+      ],
+      "required_sources": 1,
+      "sample_head": "Oversized Bleed Numeral"
+    },
+    {
+      "id": "neon-066",
+      "collection": "neon",
+      "number": 66,
+      "name": "Broadsheet Art Newspaper",
+      "family": "cinema",
+      "family_name": "Sinematik kapaklar",
+      "description": "Gazete & Sinema serisinden Broadsheet Art Newspaper kompozisyonu (Puan: 9.5/10).",
+      "sample_image": "designs_extra_30/design_66.jpg",
+      "source_keys": [
+        "artwork_1"
+      ],
+      "required_sources": 1,
+      "sample_head": "Broadsheet Art Newspaper"
+    },
+    {
+      "id": "neon-067",
+      "collection": "neon",
+      "number": 67,
+      "name": "Criterion Collection Cover",
+      "family": "cinema",
+      "family_name": "Sinematik kapaklar",
+      "description": "Gazete & Sinema serisinden Criterion Collection Cover kompozisyonu (Puan: 9.6/10).",
+      "sample_image": "designs_extra_30/design_67.jpg",
+      "source_keys": [
+        "artwork_1"
+      ],
+      "required_sources": 1,
+      "sample_head": "Criterion Collection Cover"
+    },
+    {
+      "id": "neon-068",
+      "collection": "neon",
+      "number": 68,
+      "name": "High-Fashion Masthead",
+      "family": "cinema",
+      "family_name": "Sinematik kapaklar",
+      "description": "Gazete & Sinema serisinden High-Fashion Masthead kompozisyonu (Puan: 9.3/10).",
+      "sample_image": "designs_extra_30/design_68.jpg",
+      "source_keys": [
+        "artwork_1"
+      ],
+      "required_sources": 1,
+      "sample_head": "High-Fashion Masthead"
+    },
+    {
+      "id": "neon-069",
+      "collection": "neon",
+      "number": 69,
+      "name": "35mm Cinema Filmstrip",
+      "family": "cinema",
+      "family_name": "Sinematik kapaklar",
+      "description": "Gazete & Sinema serisinden 35mm Cinema Filmstrip kompozisyonu (Puan: 9.4/10).",
+      "sample_image": "designs_extra_30/design_69.jpg",
+      "source_keys": [
+        "artwork_1"
+      ],
+      "required_sources": 1,
+      "sample_head": "35mm Cinema Filmstrip"
+    },
+    {
+      "id": "neon-070",
+      "collection": "neon",
+      "number": 70,
+      "name": "Indie Art Zine Collage",
+      "family": "cinema",
+      "family_name": "Sinematik kapaklar",
+      "description": "Gazete & Sinema serisinden Indie Art Zine Collage kompozisyonu (Puan: 9.0/10).",
+      "sample_image": "designs_extra_30/design_70.jpg",
+      "source_keys": [
+        "artwork_1"
+      ],
+      "required_sources": 1,
+      "sample_head": "Indie Art Zine Collage"
+    },
+    {
+      "id": "neon-071",
+      "collection": "neon",
+      "number": 71,
+      "name": "Architectural Cyanotype",
+      "family": "colors",
+      "family_name": "Palet serileri",
+      "description": "Bilim & Veri serisinden Architectural Cyanotype kompozisyonu (Puan: 9.5/10).",
+      "sample_image": "designs_extra_30/design_71.jpg",
+      "source_keys": [
+        "artwork_1"
+      ],
+      "required_sources": 1,
+      "sample_head": "Architectural Cyanotype"
+    },
+    {
+      "id": "neon-072",
+      "collection": "neon",
+      "number": 72,
+      "name": "Natural History Herbarium",
+      "family": "colors",
+      "family_name": "Palet serileri",
+      "description": "Bilim & Veri serisinden Natural History Herbarium kompozisyonu (Puan: 9.1/10).",
+      "sample_image": "designs_extra_30/design_72.jpg",
+      "source_keys": [
+        "artwork_1"
+      ],
+      "required_sources": 1,
+      "sample_head": "Natural History Herbarium"
+    },
+    {
+      "id": "neon-073",
+      "collection": "neon",
+      "number": 73,
+      "name": "Optical 360° Color Wheel",
+      "family": "colors",
+      "family_name": "Palet serileri",
+      "description": "Bilim & Veri serisinden Optical 360° Color Wheel kompozisyonu (Puan: 9.6/10).",
+      "sample_image": "designs_extra_30/design_73.jpg",
+      "source_keys": [
+        "artwork_1"
+      ],
+      "required_sources": 1,
+      "sample_head": "Optical 360° Color Wheel"
+    },
+    {
+      "id": "neon-074",
+      "collection": "neon",
+      "number": 74,
+      "name": "Golden Ratio Fibonacci",
+      "family": "colors",
+      "family_name": "Palet serileri",
+      "description": "Bilim & Veri serisinden Golden Ratio Fibonacci kompozisyonu (Puan: 9.2/10).",
+      "sample_image": "designs_extra_30/design_74.jpg",
+      "source_keys": [
+        "artwork_1"
+      ],
+      "required_sources": 1,
+      "sample_head": "Golden Ratio Fibonacci"
+    },
+    {
+      "id": "neon-075",
+      "collection": "neon",
+      "number": 75,
+      "name": "Coordinate & Distance Card",
+      "family": "colors",
+      "family_name": "Palet serileri",
+      "description": "Bilim & Veri serisinden Coordinate & Distance Card kompozisyonu (Puan: 9.0/10).",
+      "sample_image": "designs_extra_30/design_75.jpg",
+      "source_keys": [
+        "artwork_1"
+      ],
+      "required_sources": 1,
+      "sample_head": "Coordinate & Distance Card"
+    },
+    {
+      "id": "neon-076",
+      "collection": "neon",
+      "number": 76,
+      "name": "Circular Medallion Monolith",
+      "family": "experimental",
+      "family_name": "Deneysel formlar",
+      "description": "İkonik Siluet serisinden Circular Medallion Monolith kompozisyonu (Puan: 9.5/10).",
+      "sample_image": "designs_extra_30/design_76.jpg",
+      "source_keys": [
+        "artwork_1"
+      ],
+      "required_sources": 1,
+      "sample_head": "Circular Medallion Monolith"
+    },
+    {
+      "id": "neon-077",
+      "collection": "neon",
+      "number": 77,
+      "name": "Diagonal Razor Cut",
+      "family": "experimental",
+      "family_name": "Deneysel formlar",
+      "description": "İkonik Siluet serisinden Diagonal Razor Cut kompozisyonu (Puan: 9.2/10).",
+      "sample_image": "designs_extra_30/design_77.jpg",
+      "source_keys": [
+        "artwork_1"
+      ],
+      "required_sources": 1,
+      "sample_head": "Diagonal Razor Cut"
+    },
+    {
+      "id": "neon-078",
+      "collection": "neon",
+      "number": 78,
+      "name": "Frosted Glassmorphism",
+      "family": "experimental",
+      "family_name": "Deneysel formlar",
+      "description": "İkonik Siluet serisinden Frosted Glassmorphism kompozisyonu (Puan: 9.3/10).",
+      "sample_image": "designs_extra_30/design_78.jpg",
+      "source_keys": [
+        "artwork_1"
+      ],
+      "required_sources": 1,
+      "sample_head": "Frosted Glassmorphism"
+    },
+    {
+      "id": "neon-079",
+      "collection": "neon",
+      "number": 79,
+      "name": "Risograph Duotone Window",
+      "family": "experimental",
+      "family_name": "Deneysel formlar",
+      "description": "İkonik Siluet serisinden Risograph Duotone Window kompozisyonu (Puan: 9.4/10).",
+      "sample_image": "designs_extra_30/design_79.jpg",
+      "source_keys": [
+        "artwork_1"
+      ],
+      "required_sources": 1,
+      "sample_head": "Risograph Duotone Window"
+    },
+    {
+      "id": "neon-080",
+      "collection": "neon",
+      "number": 80,
+      "name": "Continuous Perimeter Frame",
+      "family": "experimental",
+      "family_name": "Deneysel formlar",
+      "description": "İkonik Siluet serisinden Continuous Perimeter Frame kompozisyonu (Puan: 9.6/10).",
+      "sample_image": "designs_extra_30/design_80.jpg",
+      "source_keys": [
+        "artwork_1"
+      ],
+      "required_sources": 1,
+      "sample_head": "Continuous Perimeter Frame"
+    },
+    {
+      "id": "neon-081",
+      "collection": "neon",
+      "number": 81,
+      "name": "Gothic Lancet Triptych",
+      "family": "experimental",
+      "family_name": "Deneysel formlar",
+      "description": "Mimari Portal serisinden Gothic Lancet Triptych kompozisyonu (Puan: 9.4/10).",
+      "sample_image": "designs_extra_100/design_081.jpg",
+      "source_keys": [
+        "artwork_1"
+      ],
+      "required_sources": 1,
+      "sample_head": "Gothic Lancet Triptych"
+    },
+    {
+      "id": "neon-082",
+      "collection": "neon",
+      "number": 82,
+      "name": "Keyhole Voyeur Portal",
+      "family": "experimental",
+      "family_name": "Deneysel formlar",
+      "description": "Mimari Portal serisinden Keyhole Voyeur Portal kompozisyonu (Puan: 9.6/10).",
+      "sample_image": "designs_extra_100/design_082.jpg",
+      "source_keys": [
+        "artwork_1"
+      ],
+      "required_sources": 1,
+      "sample_head": "Keyhole Voyeur Portal"
+    },
+    {
+      "id": "neon-083",
+      "collection": "neon",
+      "number": 83,
+      "name": "Venetian Blind Slats",
+      "family": "experimental",
+      "family_name": "Deneysel formlar",
+      "description": "Mimari Portal serisinden Venetian Blind Slats kompozisyonu (Puan: 9.1/10).",
+      "sample_image": "designs_extra_100/design_083.jpg",
+      "source_keys": [
+        "artwork_1"
+      ],
+      "required_sources": 1,
+      "sample_head": "Venetian Blind Slats"
+    },
+    {
+      "id": "neon-084",
+      "collection": "neon",
+      "number": 84,
+      "name": "Brutalist Concrete Plinth",
+      "family": "experimental",
+      "family_name": "Deneysel formlar",
+      "description": "Mimari Portal serisinden Brutalist Concrete Plinth kompozisyonu (Puan: 9.3/10).",
+      "sample_image": "designs_extra_100/design_084.jpg",
+      "source_keys": [
+        "artwork_1"
+      ],
+      "required_sources": 1,
+      "sample_head": "Brutalist Concrete Plinth"
+    },
+    {
+      "id": "neon-085",
+      "collection": "neon",
+      "number": 85,
+      "name": "Isometric 3D Canvas Slab",
+      "family": "experimental",
+      "family_name": "Deneysel formlar",
+      "description": "Mimari Portal serisinden Isometric 3D Canvas Slab kompozisyonu (Puan: 9.4/10).",
+      "sample_image": "designs_extra_100/design_085.jpg",
+      "source_keys": [
+        "artwork_1"
+      ],
+      "required_sources": 1,
+      "sample_head": "Isometric 3D Canvas Slab"
+    },
+    {
+      "id": "neon-086",
+      "collection": "neon",
+      "number": 86,
+      "name": "Staircase Stepped Mask",
+      "family": "experimental",
+      "family_name": "Deneysel formlar",
+      "description": "Mimari Portal serisinden Staircase Stepped Mask kompozisyonu (Puan: 9.2/10).",
+      "sample_image": "designs_extra_100/design_086.jpg",
+      "source_keys": [
+        "artwork_1"
+      ],
+      "required_sources": 1,
+      "sample_head": "Staircase Stepped Mask"
+    },
+    {
+      "id": "neon-087",
+      "collection": "neon",
+      "number": 87,
+      "name": "Maritime Brass Porthole",
+      "family": "experimental",
+      "family_name": "Deneysel formlar",
+      "description": "Mimari Portal serisinden Maritime Brass Porthole kompozisyonu (Puan: 9.3/10).",
+      "sample_image": "designs_extra_100/design_087.jpg",
+      "source_keys": [
+        "artwork_1"
+      ],
+      "required_sources": 1,
+      "sample_head": "Maritime Brass Porthole"
+    },
+    {
+      "id": "neon-088",
+      "collection": "neon",
+      "number": 88,
+      "name": "Museum Floorplan Wall",
+      "family": "experimental",
+      "family_name": "Deneysel formlar",
+      "description": "Mimari Portal serisinden Museum Floorplan Wall kompozisyonu (Puan: 9.2/10).",
+      "sample_image": "designs_extra_100/design_088.jpg",
+      "source_keys": [
+        "artwork_1"
+      ],
+      "required_sources": 1,
+      "sample_head": "Museum Floorplan Wall"
+    },
+    {
+      "id": "neon-089",
+      "collection": "neon",
+      "number": 89,
+      "name": "Split-Door Curtain Reveal",
+      "family": "experimental",
+      "family_name": "Deneysel formlar",
+      "description": "Mimari Portal serisinden Split-Door Curtain Reveal kompozisyonu (Puan: 9.0/10).",
+      "sample_image": "designs_extra_100/design_089.jpg",
+      "source_keys": [
+        "artwork_1"
+      ],
+      "required_sources": 1,
+      "sample_head": "Split-Door Curtain Reveal"
+    },
+    {
+      "id": "neon-090",
+      "collection": "neon",
+      "number": 90,
+      "name": "Octagonal Oculus Vault",
+      "family": "experimental",
+      "family_name": "Deneysel formlar",
+      "description": "Mimari Portal serisinden Octagonal Oculus Vault kompozisyonu (Puan: 9.4/10).",
+      "sample_image": "designs_extra_100/design_090.jpg",
+      "source_keys": [
+        "artwork_1"
+      ],
+      "required_sources": 1,
+      "sample_head": "Octagonal Oculus Vault"
+    },
+    {
+      "id": "neon-091",
+      "collection": "neon",
+      "number": 91,
+      "name": "Concentric Zoom Ripples",
+      "family": "experimental",
+      "family_name": "Deneysel formlar",
+      "description": "Optik Deney serisinden Concentric Zoom Ripples kompozisyonu (Puan: 9.7/10).",
+      "sample_image": "designs_extra_100/design_091.jpg",
+      "source_keys": [
+        "artwork_1"
+      ],
+      "required_sources": 1,
+      "sample_head": "Concentric Zoom Ripples"
+    },
+    {
+      "id": "neon-092",
+      "collection": "neon",
+      "number": 92,
+      "name": "Fluted Glass Prism Shift",
+      "family": "experimental",
+      "family_name": "Deneysel formlar",
+      "description": "Optik Deney serisinden Fluted Glass Prism Shift kompozisyonu (Puan: 9.5/10).",
+      "sample_image": "designs_extra_100/design_092.jpg",
+      "source_keys": [
+        "artwork_1"
+      ],
+      "required_sources": 1,
+      "sample_head": "Fluted Glass Prism Shift"
+    },
+    {
+      "id": "neon-093",
+      "collection": "neon",
+      "number": 93,
+      "name": "Negative / Positive Split",
+      "family": "experimental",
+      "family_name": "Deneysel formlar",
+      "description": "Optik Deney serisinden Negative / Positive Split kompozisyonu (Puan: 9.4/10).",
+      "sample_image": "designs_extra_100/design_093.jpg",
+      "source_keys": [
+        "artwork_1"
+      ],
+      "required_sources": 1,
+      "sample_head": "Negative / Positive Split"
+    },
+    {
+      "id": "neon-094",
+      "collection": "neon",
+      "number": 94,
+      "name": "Pixel-to-HD Ladder",
+      "family": "experimental",
+      "family_name": "Deneysel formlar",
+      "description": "Optik Deney serisinden Pixel-to-HD Ladder kompozisyonu (Puan: 9.5/10).",
+      "sample_image": "designs_extra_100/design_094.jpg",
+      "source_keys": [
+        "artwork_1"
+      ],
+      "required_sources": 1,
+      "sample_head": "Pixel-to-HD Ladder"
+    },
+    {
+      "id": "neon-095",
+      "collection": "neon",
+      "number": 95,
+      "name": "Dual-Exposure Reflection",
+      "family": "experimental",
+      "family_name": "Deneysel formlar",
+      "description": "Optik Deney serisinden Dual-Exposure Reflection kompozisyonu (Puan: 9.3/10).",
+      "sample_image": "designs_extra_100/design_095.jpg",
+      "source_keys": [
+        "artwork_1"
+      ],
+      "required_sources": 1,
+      "sample_head": "Dual-Exposure Reflection"
+    },
+    {
+      "id": "neon-096",
+      "collection": "neon",
+      "number": 96,
+      "name": "Halftone + True-Color",
+      "family": "experimental",
+      "family_name": "Deneysel formlar",
+      "description": "Optik Deney serisinden Halftone + True-Color kompozisyonu (Puan: 9.4/10).",
+      "sample_image": "designs_extra_100/design_096.jpg",
+      "source_keys": [
+        "artwork_1"
+      ],
+      "required_sources": 1,
+      "sample_head": "Halftone + True-Color"
+    },
+    {
+      "id": "neon-097",
+      "collection": "neon",
+      "number": 97,
+      "name": "Spectral RGB Offset Frame",
+      "family": "experimental",
+      "family_name": "Deneysel formlar",
+      "description": "Optik Deney serisinden Spectral RGB Offset Frame kompozisyonu (Puan: 9.0/10).",
+      "sample_image": "designs_extra_100/design_097.jpg",
+      "source_keys": [
+        "artwork_1"
+      ],
+      "required_sources": 1,
+      "sample_head": "Spectral RGB Offset Frame"
+    },
+    {
+      "id": "neon-098",
+      "collection": "neon",
+      "number": 98,
+      "name": "Kaleidoscope Quad Border",
+      "family": "experimental",
+      "family_name": "Deneysel formlar",
+      "description": "Optik Deney serisinden Kaleidoscope Quad Border kompozisyonu (Puan: 9.2/10).",
+      "sample_image": "designs_extra_100/design_098.jpg",
+      "source_keys": [
+        "artwork_1"
+      ],
+      "required_sources": 1,
+      "sample_head": "Kaleidoscope Quad Border"
+    },
+    {
+      "id": "neon-099",
+      "collection": "neon",
+      "number": 99,
+      "name": "Louvered Perspective",
+      "family": "experimental",
+      "family_name": "Deneysel formlar",
+      "description": "Optik Deney serisinden Louvered Perspective kompozisyonu (Puan: 9.1/10).",
+      "sample_image": "designs_extra_100/design_099.jpg",
+      "source_keys": [
+        "artwork_1"
+      ],
+      "required_sources": 1,
+      "sample_head": "Louvered Perspective"
+    },
+    {
+      "id": "neon-100",
+      "collection": "neon",
+      "number": 100,
+      "name": "Infrared Thermal Scan",
+      "family": "experimental",
+      "family_name": "Deneysel formlar",
+      "description": "Optik Deney serisinden Infrared Thermal Scan kompozisyonu (Puan: 9.8/10).",
+      "sample_image": "designs_extra_100/design_100.jpg",
+      "source_keys": [
+        "artwork_1"
+      ],
+      "required_sources": 1,
+      "sample_head": "Infrared Thermal Scan"
+    },
+    {
+      "id": "neon-101",
+      "collection": "neon",
+      "number": 101,
+      "name": "Penguin Tri-Band Classic",
+      "family": "archive",
+      "family_name": "Analog arşiv",
+      "description": "Kitap & Baskı serisinden Penguin Tri-Band Classic kompozisyonu (Puan: 9.5/10).",
+      "sample_image": "designs_extra_100/design_101.jpg",
+      "source_keys": [
+        "artwork_1"
+      ],
+      "required_sources": 1,
+      "sample_head": "Penguin Tri-Band Classic"
+    },
+    {
+      "id": "neon-102",
+      "collection": "neon",
+      "number": 102,
+      "name": "Linen Hardcover Jacket",
+      "family": "archive",
+      "family_name": "Analog arşiv",
+      "description": "Kitap & Baskı serisinden Linen Hardcover Jacket kompozisyonu (Puan: 9.4/10).",
+      "sample_image": "designs_extra_100/design_102.jpg",
+      "source_keys": [
+        "artwork_1"
+      ],
+      "required_sources": 1,
+      "sample_head": "Linen Hardcover Jacket"
+    },
+    {
+      "id": "neon-103",
+      "collection": "neon",
+      "number": 103,
+      "name": "Open Book Spread",
+      "family": "archive",
+      "family_name": "Analog arşiv",
+      "description": "Kitap & Baskı serisinden Open Book Spread kompozisyonu (Puan: 9.7/10).",
+      "sample_image": "designs_extra_100/design_103.jpg",
+      "source_keys": [
+        "artwork_1"
+      ],
+      "required_sources": 1,
+      "sample_head": "Open Book Spread"
+    },
+    {
+      "id": "neon-104",
+      "collection": "neon",
+      "number": 104,
+      "name": "Illuminated Manuscript",
+      "family": "archive",
+      "family_name": "Analog arşiv",
+      "description": "Kitap & Baskı serisinden Illuminated Manuscript kompozisyonu (Puan: 9.3/10).",
+      "sample_image": "designs_extra_100/design_104.jpg",
+      "source_keys": [
+        "artwork_1"
+      ],
+      "required_sources": 1,
+      "sample_head": "Illuminated Manuscript"
+    },
+    {
+      "id": "neon-105",
+      "collection": "neon",
+      "number": 105,
+      "name": "Ex-Libris Bookplate",
+      "family": "archive",
+      "family_name": "Analog arşiv",
+      "description": "Kitap & Baskı serisinden Ex-Libris Bookplate kompozisyonu (Puan: 9.2/10).",
+      "sample_image": "designs_extra_100/design_105.jpg",
+      "source_keys": [
+        "artwork_1"
+      ],
+      "required_sources": 1,
+      "sample_head": "Ex-Libris Bookplate"
+    },
+    {
+      "id": "neon-106",
+      "collection": "neon",
+      "number": 106,
+      "name": "Encyclopedia Lexicon",
+      "family": "archive",
+      "family_name": "Analog arşiv",
+      "description": "Kitap & Baskı serisinden Encyclopedia Lexicon kompozisyonu (Puan: 9.6/10).",
+      "sample_image": "designs_extra_100/design_106.jpg",
+      "source_keys": [
+        "artwork_1"
+      ],
+      "required_sources": 1,
+      "sample_head": "Encyclopedia Lexicon"
+    },
+    {
+      "id": "neon-107",
+      "collection": "neon",
+      "number": 107,
+      "name": "Library Due-Date Slip",
+      "family": "archive",
+      "family_name": "Analog arşiv",
+      "description": "Kitap & Baskı serisinden Library Due-Date Slip kompozisyonu (Puan: 9.3/10).",
+      "sample_image": "designs_extra_100/design_107.jpg",
+      "source_keys": [
+        "artwork_1"
+      ],
+      "required_sources": 1,
+      "sample_head": "Library Due-Date Slip"
+    },
+    {
+      "id": "neon-108",
+      "collection": "neon",
+      "number": 108,
+      "name": "Deckle-Edge Lithograph",
+      "family": "archive",
+      "family_name": "Analog arşiv",
+      "description": "Kitap & Baskı serisinden Deckle-Edge Lithograph kompozisyonu (Puan: 9.4/10).",
+      "sample_image": "designs_extra_100/design_108.jpg",
+      "source_keys": [
+        "artwork_1"
+      ],
+      "required_sources": 1,
+      "sample_head": "Deckle-Edge Lithograph"
+    },
+    {
+      "id": "neon-109",
+      "collection": "neon",
+      "number": 109,
+      "name": "Silk Bookmark Ribbon",
+      "family": "archive",
+      "family_name": "Analog arşiv",
+      "description": "Kitap & Baskı serisinden Silk Bookmark Ribbon kompozisyonu (Puan: 9.2/10).",
+      "sample_image": "designs_extra_100/design_109.jpg",
+      "source_keys": [
+        "artwork_1"
+      ],
+      "required_sources": 1,
+      "sample_head": "Silk Bookmark Ribbon"
+    },
+    {
+      "id": "neon-110",
+      "collection": "neon",
+      "number": 110,
+      "name": "Press Proof & CMYK Marks",
+      "family": "archive",
+      "family_name": "Analog arşiv",
+      "description": "Kitap & Baskı serisinden Press Proof & CMYK Marks kompozisyonu (Puan: 9.4/10).",
+      "sample_image": "designs_extra_100/design_110.jpg",
+      "source_keys": [
+        "artwork_1"
+      ],
+      "required_sources": 1,
+      "sample_head": "Press Proof & CMYK Marks"
+    },
+    {
+      "id": "neon-111",
+      "collection": "neon",
+      "number": 111,
+      "name": "SLR Camera Viewfinder",
+      "family": "archive",
+      "family_name": "Analog arşiv",
+      "description": "Analog & Retro serisinden SLR Camera Viewfinder kompozisyonu (Puan: 9.7/10).",
+      "sample_image": "designs_extra_100/design_111.jpg",
+      "source_keys": [
+        "artwork_1"
+      ],
+      "required_sources": 1,
+      "sample_head": "SLR Camera Viewfinder"
+    },
+    {
+      "id": "neon-112",
+      "collection": "neon",
+      "number": 112,
+      "name": "Cassette Tape J-Card",
+      "family": "archive",
+      "family_name": "Analog arşiv",
+      "description": "Analog & Retro serisinden Cassette Tape J-Card kompozisyonu (Puan: 9.3/10).",
+      "sample_image": "designs_extra_100/design_112.jpg",
+      "source_keys": [
+        "artwork_1"
+      ],
+      "required_sources": 1,
+      "sample_head": "Cassette Tape J-Card"
+    },
+    {
+      "id": "neon-113",
+      "collection": "neon",
+      "number": 113,
+      "name": "Museum Audio Player",
+      "family": "archive",
+      "family_name": "Analog arşiv",
+      "description": "Analog & Retro serisinden Museum Audio Player kompozisyonu (Puan: 9.6/10).",
+      "sample_image": "designs_extra_100/design_113.jpg",
+      "source_keys": [
+        "artwork_1"
+      ],
+      "required_sources": 1,
+      "sample_head": "Museum Audio Player"
+    },
+    {
+      "id": "neon-114",
+      "collection": "neon",
+      "number": 114,
+      "name": "Polaroid SX-70 Print",
+      "family": "archive",
+      "family_name": "Analog arşiv",
+      "description": "Analog & Retro serisinden Polaroid SX-70 Print kompozisyonu (Puan: 9.2/10).",
+      "sample_image": "designs_extra_100/design_114.jpg",
+      "source_keys": [
+        "artwork_1"
+      ],
+      "required_sources": 1,
+      "sample_head": "Polaroid SX-70 Print"
+    },
+    {
+      "id": "neon-115",
+      "collection": "neon",
+      "number": 115,
+      "name": "CRT Phosphor Scanlines",
+      "family": "archive",
+      "family_name": "Analog arşiv",
+      "description": "Analog & Retro serisinden CRT Phosphor Scanlines kompozisyonu (Puan: 9.1/10).",
+      "sample_image": "designs_extra_100/design_115.jpg",
+      "source_keys": [
+        "artwork_1"
+      ],
+      "required_sources": 1,
+      "sample_head": "CRT Phosphor Scanlines"
+    },
+    {
+      "id": "neon-116",
+      "collection": "neon",
+      "number": 116,
+      "name": "Dieter Rams Braun Panel",
+      "family": "archive",
+      "family_name": "Analog arşiv",
+      "description": "Analog & Retro serisinden Dieter Rams Braun Panel kompozisyonu (Puan: 9.5/10).",
+      "sample_image": "designs_extra_100/design_116.jpg",
+      "source_keys": [
+        "artwork_1"
+      ],
+      "required_sources": 1,
+      "sample_head": "Dieter Rams Braun Panel"
+    },
+    {
+      "id": "neon-117",
+      "collection": "neon",
+      "number": 117,
+      "name": "Oscilloscope Luma Wave",
+      "family": "archive",
+      "family_name": "Analog arşiv",
+      "description": "Analog & Retro serisinden Oscilloscope Luma Wave kompozisyonu (Puan: 9.4/10).",
+      "sample_image": "designs_extra_100/design_117.jpg",
+      "source_keys": [
+        "artwork_1"
+      ],
+      "required_sources": 1,
+      "sample_head": "Oscilloscope Luma Wave"
+    },
+    {
+      "id": "neon-118",
+      "collection": "neon",
+      "number": 118,
+      "name": "Microfiche Archive Card",
+      "family": "archive",
+      "family_name": "Analog arşiv",
+      "description": "Analog & Retro serisinden Microfiche Archive Card kompozisyonu (Puan: 9.2/10).",
+      "sample_image": "designs_extra_100/design_118.jpg",
+      "source_keys": [
+        "artwork_1"
+      ],
+      "required_sources": 1,
+      "sample_head": "Microfiche Archive Card"
+    },
+    {
+      "id": "neon-119",
+      "collection": "neon",
+      "number": 119,
+      "name": "Typewriter Field Dispatch",
+      "family": "archive",
+      "family_name": "Analog arşiv",
+      "description": "Analog & Retro serisinden Typewriter Field Dispatch kompozisyonu (Puan: 9.3/10).",
+      "sample_image": "designs_extra_100/design_119.jpg",
+      "source_keys": [
+        "artwork_1"
+      ],
+      "required_sources": 1,
+      "sample_head": "Typewriter Field Dispatch"
+    },
+    {
+      "id": "neon-120",
+      "collection": "neon",
+      "number": 120,
+      "name": "Museum Boarding Pass",
+      "family": "archive",
+      "family_name": "Analog arşiv",
+      "description": "Analog & Retro serisinden Museum Boarding Pass kompozisyonu (Puan: 9.6/10).",
+      "sample_image": "designs_extra_100/design_120.jpg",
+      "source_keys": [
+        "artwork_1"
+      ],
+      "required_sources": 1,
+      "sample_head": "Museum Boarding Pass"
+    },
+    {
+      "id": "neon-121",
+      "collection": "neon",
+      "number": 121,
+      "name": "Celestial Star Astrolabe",
+      "family": "colors",
+      "family_name": "Palet serileri",
+      "description": "Bilim & Harita serisinden Celestial Star Astrolabe kompozisyonu (Puan: 9.5/10).",
+      "sample_image": "designs_extra_100/design_121.jpg",
+      "source_keys": [
+        "artwork_1"
+      ],
+      "required_sources": 1,
+      "sample_head": "Celestial Star Astrolabe"
+    },
+    {
+      "id": "neon-122",
+      "collection": "neon",
+      "number": 122,
+      "name": "Periodic Pigment Table",
+      "family": "colors",
+      "family_name": "Palet serileri",
+      "description": "Bilim & Harita serisinden Periodic Pigment Table kompozisyonu (Puan: 9.7/10).",
+      "sample_image": "designs_extra_100/design_122.jpg",
+      "source_keys": [
+        "artwork_1"
+      ],
+      "required_sources": 1,
+      "sample_head": "Periodic Pigment Table"
+    },
+    {
+      "id": "neon-123",
+      "collection": "neon",
+      "number": 123,
+      "name": "Topographic Contours",
+      "family": "colors",
+      "family_name": "Palet serileri",
+      "description": "Bilim & Harita serisinden Topographic Contours kompozisyonu (Puan: 9.3/10).",
+      "sample_image": "designs_extra_100/design_123.jpg",
+      "source_keys": [
+        "artwork_1"
+      ],
+      "required_sources": 1,
+      "sample_head": "Topographic Contours"
+    },
+    {
+      "id": "neon-124",
+      "collection": "neon",
+      "number": 124,
+      "name": "Real RGB Histogram",
+      "family": "colors",
+      "family_name": "Palet serileri",
+      "description": "Bilim & Harita serisinden Real RGB Histogram kompozisyonu (Puan: 9.6/10).",
+      "sample_image": "designs_extra_100/design_124.jpg",
+      "source_keys": [
+        "artwork_1"
+      ],
+      "required_sources": 1,
+      "sample_head": "Real RGB Histogram"
+    },
+    {
+      "id": "neon-125",
+      "collection": "neon",
+      "number": 125,
+      "name": "Sundial Hour-of-Light",
+      "family": "colors",
+      "family_name": "Palet serileri",
+      "description": "Bilim & Harita serisinden Sundial Hour-of-Light kompozisyonu (Puan: 9.4/10).",
+      "sample_image": "designs_extra_100/design_125.jpg",
+      "source_keys": [
+        "artwork_1"
+      ],
+      "required_sources": 1,
+      "sample_head": "Sundial Hour-of-Light"
+    },
+    {
+      "id": "neon-126",
+      "collection": "neon",
+      "number": 126,
+      "name": "Vernier Caliper Scale",
+      "family": "colors",
+      "family_name": "Palet serileri",
+      "description": "Bilim & Harita serisinden Vernier Caliper Scale kompozisyonu (Puan: 9.1/10).",
+      "sample_image": "designs_extra_100/design_126.jpg",
+      "source_keys": [
+        "artwork_1"
+      ],
+      "required_sources": 1,
+      "sample_head": "Vernier Caliper Scale"
+    },
+    {
+      "id": "neon-127",
+      "collection": "neon",
+      "number": 127,
+      "name": "Geological Pigment Strata",
+      "family": "colors",
+      "family_name": "Palet serileri",
+      "description": "Bilim & Harita serisinden Geological Pigment Strata kompozisyonu (Puan: 9.5/10).",
+      "sample_image": "designs_extra_100/design_127.jpg",
+      "source_keys": [
+        "artwork_1"
+      ],
+      "required_sources": 1,
+      "sample_head": "Geological Pigment Strata"
+    },
+    {
+      "id": "neon-128",
+      "collection": "neon",
+      "number": 128,
+      "name": "Microscope Glass Slide",
+      "family": "colors",
+      "family_name": "Palet serileri",
+      "description": "Bilim & Harita serisinden Microscope Glass Slide kompozisyonu (Puan: 9.3/10).",
+      "sample_image": "designs_extra_100/design_128.jpg",
+      "source_keys": [
+        "artwork_1"
+      ],
+      "required_sources": 1,
+      "sample_head": "Microscope Glass Slide"
+    },
+    {
+      "id": "neon-129",
+      "collection": "neon",
+      "number": 129,
+      "name": "Maritime Compass Chart",
+      "family": "colors",
+      "family_name": "Palet serileri",
+      "description": "Bilim & Harita serisinden Maritime Compass Chart kompozisyonu (Puan: 9.2/10).",
+      "sample_image": "designs_extra_100/design_129.jpg",
+      "source_keys": [
+        "artwork_1"
+      ],
+      "required_sources": 1,
+      "sample_head": "Maritime Compass Chart"
+    },
+    {
+      "id": "neon-130",
+      "collection": "neon",
+      "number": 130,
+      "name": "Emotion Scatter Plot",
+      "family": "colors",
+      "family_name": "Palet serileri",
+      "description": "Bilim & Harita serisinden Emotion Scatter Plot kompozisyonu (Puan: 9.4/10).",
+      "sample_image": "designs_extra_100/design_130.jpg",
+      "source_keys": [
+        "artwork_1"
+      ],
+      "required_sources": 1,
+      "sample_head": "Emotion Scatter Plot"
+    },
+    {
+      "id": "neon-131",
+      "collection": "neon",
+      "number": 131,
+      "name": "Art Deco Gatsby Frame",
+      "family": "gallery",
+      "family_name": "Galeri duvarı",
+      "description": "Moda & Lüks serisinden Art Deco Gatsby Frame kompozisyonu (Puan: 9.4/10).",
+      "sample_image": "designs_extra_100/design_131.jpg",
+      "source_keys": [
+        "artwork_1"
+      ],
+      "required_sources": 1,
+      "sample_head": "Art Deco Gatsby Frame"
+    },
+    {
+      "id": "neon-132",
+      "collection": "neon",
+      "number": 132,
+      "name": "Apothecary Perfume Label",
+      "family": "gallery",
+      "family_name": "Galeri duvarı",
+      "description": "Moda & Lüks serisinden Apothecary Perfume Label kompozisyonu (Puan: 9.8/10).",
+      "sample_image": "designs_extra_100/design_132.jpg",
+      "source_keys": [
+        "artwork_1"
+      ],
+      "required_sources": 1,
+      "sample_head": "Apothecary Perfume Label"
+    },
+    {
+      "id": "neon-133",
+      "collection": "neon",
+      "number": 133,
+      "name": "Velvet Jewelry Box",
+      "family": "gallery",
+      "family_name": "Galeri duvarı",
+      "description": "Moda & Lüks serisinden Velvet Jewelry Box kompozisyonu (Puan: 9.3/10).",
+      "sample_image": "designs_extra_100/design_133.jpg",
+      "source_keys": [
+        "artwork_1"
+      ],
+      "required_sources": 1,
+      "sample_head": "Velvet Jewelry Box"
+    },
+    {
+      "id": "neon-134",
+      "collection": "neon",
+      "number": 134,
+      "name": "Heraldic Crest Shield",
+      "family": "gallery",
+      "family_name": "Galeri duvarı",
+      "description": "Moda & Lüks serisinden Heraldic Crest Shield kompozisyonu (Puan: 9.2/10).",
+      "sample_image": "designs_extra_100/design_134.jpg",
+      "source_keys": [
+        "artwork_1"
+      ],
+      "required_sources": 1,
+      "sample_head": "Heraldic Crest Shield"
+    },
+    {
+      "id": "neon-135",
+      "collection": "neon",
+      "number": 135,
+      "name": "Silk Scarf Border",
+      "family": "gallery",
+      "family_name": "Galeri duvarı",
+      "description": "Moda & Lüks serisinden Silk Scarf Border kompozisyonu (Puan: 9.5/10).",
+      "sample_image": "designs_extra_100/design_135.jpg",
+      "source_keys": [
+        "artwork_1"
+      ],
+      "required_sources": 1,
+      "sample_head": "Silk Scarf Border"
+    },
+    {
+      "id": "neon-136",
+      "collection": "neon",
+      "number": 136,
+      "name": "Marble Pedestal Card",
+      "family": "gallery",
+      "family_name": "Galeri duvarı",
+      "description": "Moda & Lüks serisinden Marble Pedestal Card kompozisyonu (Puan: 9.3/10).",
+      "sample_image": "designs_extra_100/design_136.jpg",
+      "source_keys": [
+        "artwork_1"
+      ],
+      "required_sources": 1,
+      "sample_head": "Marble Pedestal Card"
+    },
+    {
+      "id": "neon-137",
+      "collection": "neon",
+      "number": 137,
+      "name": "Oval Cameo Brooch",
+      "family": "gallery",
+      "family_name": "Galeri duvarı",
+      "description": "Moda & Lüks serisinden Oval Cameo Brooch kompozisyonu (Puan: 9.4/10).",
+      "sample_image": "designs_extra_100/design_137.jpg",
+      "source_keys": [
+        "artwork_1"
+      ],
+      "required_sources": 1,
+      "sample_head": "Oval Cameo Brooch"
+    },
+    {
+      "id": "neon-138",
+      "collection": "neon",
+      "number": 138,
+      "name": "Fashion Lookbook Sheet",
+      "family": "gallery",
+      "family_name": "Galeri duvarı",
+      "description": "Moda & Lüks serisinden Fashion Lookbook Sheet kompozisyonu (Puan: 9.5/10).",
+      "sample_image": "designs_extra_100/design_138.jpg",
+      "source_keys": [
+        "artwork_1"
+      ],
+      "required_sources": 1,
+      "sample_head": "Fashion Lookbook Sheet"
+    },
+    {
+      "id": "neon-139",
+      "collection": "neon",
+      "number": 139,
+      "name": "Vintage Grand Reserve",
+      "family": "gallery",
+      "family_name": "Galeri duvarı",
+      "description": "Moda & Lüks serisinden Vintage Grand Reserve kompozisyonu (Puan: 9.4/10).",
+      "sample_image": "designs_extra_100/design_139.jpg",
+      "source_keys": [
+        "artwork_1"
+      ],
+      "required_sources": 1,
+      "sample_head": "Vintage Grand Reserve"
+    },
+    {
+      "id": "neon-140",
+      "collection": "neon",
+      "number": 140,
+      "name": "Monogrammed Stationery",
+      "family": "gallery",
+      "family_name": "Galeri duvarı",
+      "description": "Moda & Lüks serisinden Monogrammed Stationery kompozisyonu (Puan: 9.1/10).",
+      "sample_image": "designs_extra_100/design_140.jpg",
+      "source_keys": [
+        "artwork_1"
+      ],
+      "required_sources": 1,
+      "sample_head": "Monogrammed Stationery"
+    },
+    {
+      "id": "neon-141",
+      "collection": "neon",
+      "number": 141,
+      "name": "Warhol 2x2 Pop-Art",
+      "family": "poster",
+      "family_name": "Grafik afiş",
+      "description": "Pop & Sokak serisinden Warhol 2x2 Pop-Art kompozisyonu (Puan: 9.5/10).",
+      "sample_image": "designs_extra_100/design_141.jpg",
+      "source_keys": [
+        "artwork_1"
+      ],
+      "required_sources": 1,
+      "sample_head": "Warhol 2x2 Pop-Art"
+    },
+    {
+      "id": "neon-142",
+      "collection": "neon",
+      "number": 142,
+      "name": "Wheatpaste Street Poster",
+      "family": "poster",
+      "family_name": "Grafik afiş",
+      "description": "Pop & Sokak serisinden Wheatpaste Street Poster kompozisyonu (Puan: 9.2/10).",
+      "sample_image": "designs_extra_100/design_142.jpg",
+      "source_keys": [
+        "artwork_1"
+      ],
+      "required_sources": 1,
+      "sample_head": "Wheatpaste Street Poster"
+    },
+    {
+      "id": "neon-143",
+      "collection": "neon",
+      "number": 143,
+      "name": "Curator Sticker Notebook",
+      "family": "poster",
+      "family_name": "Grafik afiş",
+      "description": "Pop & Sokak serisinden Curator Sticker Notebook kompozisyonu (Puan: 9.4/10).",
+      "sample_image": "designs_extra_100/design_143.jpg",
+      "source_keys": [
+        "artwork_1"
+      ],
+      "required_sources": 1,
+      "sample_head": "Curator Sticker Notebook"
+    },
+    {
+      "id": "neon-144",
+      "collection": "neon",
+      "number": 144,
+      "name": "Swiss Punk Diagonal Band",
+      "family": "poster",
+      "family_name": "Grafik afiş",
+      "description": "Pop & Sokak serisinden Swiss Punk Diagonal Band kompozisyonu (Puan: 9.2/10).",
+      "sample_image": "designs_extra_100/design_144.jpg",
+      "source_keys": [
+        "artwork_1"
+      ],
+      "required_sources": 1,
+      "sample_head": "Swiss Punk Diagonal Band"
+    },
+    {
+      "id": "neon-145",
+      "collection": "neon",
+      "number": 145,
+      "name": "Cutout Block Headline",
+      "family": "poster",
+      "family_name": "Grafik afiş",
+      "description": "Pop & Sokak serisinden Cutout Block Headline kompozisyonu (Puan: 9.1/10).",
+      "sample_image": "designs_extra_100/design_145.jpg",
+      "source_keys": [
+        "artwork_1"
+      ],
+      "required_sources": 1,
+      "sample_head": "Cutout Block Headline"
+    },
+    {
+      "id": "neon-146",
+      "collection": "neon",
+      "number": 146,
+      "name": "Op-Art Checkerboard",
+      "family": "poster",
+      "family_name": "Grafik afiş",
+      "description": "Pop & Sokak serisinden Op-Art Checkerboard kompozisyonu (Puan: 9.3/10).",
+      "sample_image": "designs_extra_100/design_146.jpg",
+      "source_keys": [
+        "artwork_1"
+      ],
+      "required_sources": 1,
+      "sample_head": "Op-Art Checkerboard"
+    },
+    {
+      "id": "neon-147",
+      "collection": "neon",
+      "number": 147,
+      "name": "De Stijl Mondrian Grid",
+      "family": "poster",
+      "family_name": "Grafik afiş",
+      "description": "Pop & Sokak serisinden De Stijl Mondrian Grid kompozisyonu (Puan: 9.5/10).",
+      "sample_image": "designs_extra_100/design_147.jpg",
+      "source_keys": [
+        "artwork_1"
+      ],
+      "required_sources": 1,
+      "sample_head": "De Stijl Mondrian Grid"
+    },
+    {
+      "id": "neon-148",
+      "collection": "neon",
+      "number": 148,
+      "name": "Stencil Exhibition Banner",
+      "family": "poster",
+      "family_name": "Grafik afiş",
+      "description": "Pop & Sokak serisinden Stencil Exhibition Banner kompozisyonu (Puan: 9.1/10).",
+      "sample_image": "designs_extra_100/design_148.jpg",
+      "source_keys": [
+        "artwork_1"
+      ],
+      "required_sources": 1,
+      "sample_head": "Stencil Exhibition Banner"
+    },
+    {
+      "id": "neon-149",
+      "collection": "neon",
+      "number": 149,
+      "name": "Tri-Fold Gallery Brochure",
+      "family": "poster",
+      "family_name": "Grafik afiş",
+      "description": "Pop & Sokak serisinden Tri-Fold Gallery Brochure kompozisyonu (Puan: 9.3/10).",
+      "sample_image": "designs_extra_100/design_149.jpg",
+      "source_keys": [
+        "artwork_1"
+      ],
+      "required_sources": 1,
+      "sample_head": "Tri-Fold Gallery Brochure"
+    },
+    {
+      "id": "neon-150",
+      "collection": "neon",
+      "number": 150,
+      "name": "Diagonal B&W / Color",
+      "family": "poster",
+      "family_name": "Grafik afiş",
+      "description": "Pop & Sokak serisinden Diagonal B&W / Color kompozisyonu (Puan: 9.6/10).",
+      "sample_image": "designs_extra_100/design_150.jpg",
+      "source_keys": [
+        "artwork_1"
+      ],
+      "required_sources": 1,
+      "sample_head": "Diagonal B&W / Color"
+    },
+    {
+      "id": "neon-151",
+      "collection": "neon",
+      "number": 151,
+      "name": "Guess the Year Quiz",
+      "family": "story",
+      "family_name": "Hikâye kapakları",
+      "description": "Quiz & Veri serisinden Guess the Year Quiz kompozisyonu (Puan: 9.7/10).",
+      "sample_image": "designs_extra_100/design_151.jpg",
+      "source_keys": [
+        "artwork_1"
+      ],
+      "required_sources": 1,
+      "sample_head": "Guess the Year Quiz"
+    },
+    {
+      "id": "neon-152",
+      "collection": "neon",
+      "number": 152,
+      "name": "3-Step Zoom Mystery",
+      "family": "story",
+      "family_name": "Hikâye kapakları",
+      "description": "Quiz & Veri serisinden 3-Step Zoom Mystery kompozisyonu (Puan: 9.6/10).",
+      "sample_image": "designs_extra_100/design_152.jpg",
+      "source_keys": [
+        "artwork_1"
+      ],
+      "required_sources": 1,
+      "sample_head": "3-Step Zoom Mystery"
+    },
+    {
+      "id": "neon-153",
+      "collection": "neon",
+      "number": 153,
+      "name": "Art DNA Recipe Bars",
+      "family": "story",
+      "family_name": "Hikâye kapakları",
+      "description": "Quiz & Veri serisinden Art DNA Recipe Bars kompozisyonu (Puan: 9.5/10).",
+      "sample_image": "designs_extra_100/design_153.jpg",
+      "source_keys": [
+        "artwork_1"
+      ],
+      "required_sources": 1,
+      "sample_head": "Art DNA Recipe Bars"
+    },
+    {
+      "id": "neon-154",
+      "collection": "neon",
+      "number": 154,
+      "name": "Spot 3 Details Checklist",
+      "family": "story",
+      "family_name": "Hikâye kapakları",
+      "description": "Quiz & Veri serisinden Spot 3 Details Checklist kompozisyonu (Puan: 9.4/10).",
+      "sample_image": "designs_extra_100/design_154.jpg",
+      "source_keys": [
+        "artwork_1"
+      ],
+      "required_sources": 1,
+      "sample_head": "Spot 3 Details Checklist"
+    },
+    {
+      "id": "neon-155",
+      "collection": "neon",
+      "number": 155,
+      "name": "First Glance vs Remains",
+      "family": "story",
+      "family_name": "Hikâye kapakları",
+      "description": "Quiz & Veri serisinden First Glance vs Remains kompozisyonu (Puan: 9.2/10).",
+      "sample_image": "designs_extra_100/design_155.jpg",
+      "source_keys": [
+        "artwork_1"
+      ],
+      "required_sources": 1,
+      "sample_head": "First Glance vs Remains"
+    },
+    {
+      "id": "neon-156",
+      "collection": "neon",
+      "number": 156,
+      "name": "Sensory Moodboard Card",
+      "family": "story",
+      "family_name": "Hikâye kapakları",
+      "description": "Quiz & Veri serisinden Sensory Moodboard Card kompozisyonu (Puan: 9.5/10).",
+      "sample_image": "designs_extra_100/design_156.jpg",
+      "source_keys": [
+        "artwork_1"
+      ],
+      "required_sources": 1,
+      "sample_head": "Sensory Moodboard Card"
+    },
+    {
+      "id": "neon-157",
+      "collection": "neon",
+      "number": 157,
+      "name": "Palette-First Mystery",
+      "family": "story",
+      "family_name": "Hikâye kapakları",
+      "description": "Quiz & Veri serisinden Palette-First Mystery kompozisyonu (Puan: 9.6/10).",
+      "sample_image": "designs_extra_100/design_157.jpg",
+      "source_keys": [
+        "artwork_1"
+      ],
+      "required_sources": 1,
+      "sample_head": "Palette-First Mystery"
+    },
+    {
+      "id": "neon-158",
+      "collection": "neon",
+      "number": 158,
+      "name": "Art History Lineage Map",
+      "family": "story",
+      "family_name": "Hikâye kapakları",
+      "description": "Quiz & Veri serisinden Art History Lineage Map kompozisyonu (Puan: 9.3/10).",
+      "sample_image": "designs_extra_100/design_158.jpg",
+      "source_keys": [
+        "artwork_1"
+      ],
+      "required_sources": 1,
+      "sample_head": "Art History Lineage Map"
+    },
+    {
+      "id": "neon-159",
+      "collection": "neon",
+      "number": 159,
+      "name": "Frame vs Pure Canvas",
+      "family": "story",
+      "family_name": "Hikâye kapakları",
+      "description": "Quiz & Veri serisinden Frame vs Pure Canvas kompozisyonu (Puan: 9.5/10).",
+      "sample_image": "designs_extra_100/design_159.jpg",
+      "source_keys": [
+        "artwork_1"
+      ],
+      "required_sources": 1,
+      "sample_head": "Frame vs Pure Canvas"
+    },
+    {
+      "id": "neon-160",
+      "collection": "neon",
+      "number": 160,
+      "name": "Vote Your Room 4-Tile",
+      "family": "story",
+      "family_name": "Hikâye kapakları",
+      "description": "Quiz & Veri serisinden Vote Your Room 4-Tile kompozisyonu (Puan: 9.6/10).",
+      "sample_image": "designs_extra_100/design_160.jpg",
+      "source_keys": [
+        "artwork_1",
+        "artwork_2",
+        "artwork_3",
+        "artwork_4"
+      ],
+      "required_sources": 4,
+      "sample_head": "Vote Your Room 4-Tile"
+    },
+    {
+      "id": "neon-161",
+      "collection": "neon",
+      "number": 161,
+      "name": "Vintage Postcard Split",
+      "family": "typography",
+      "family_name": "Tipografi deneyleri",
+      "description": "Şiirsel & Mektup serisinden Vintage Postcard Split kompozisyonu (Puan: 9.4/10).",
+      "sample_image": "designs_extra_100/design_161.jpg",
+      "source_keys": [
+        "artwork_1"
+      ],
+      "required_sources": 1,
+      "sample_head": "Vintage Postcard Split"
+    },
+    {
+      "id": "neon-162",
+      "collection": "neon",
+      "number": 162,
+      "name": "Letterpress Poem Plate",
+      "family": "typography",
+      "family_name": "Tipografi deneyleri",
+      "description": "Şiirsel & Mektup serisinden Letterpress Poem Plate kompozisyonu (Puan: 9.3/10).",
+      "sample_image": "designs_extra_100/design_162.jpg",
+      "source_keys": [
+        "artwork_1"
+      ],
+      "required_sources": 1,
+      "sample_head": "Letterpress Poem Plate"
+    },
+    {
+      "id": "neon-163",
+      "collection": "neon",
+      "number": 163,
+      "name": "Midnight Moon Phases",
+      "family": "typography",
+      "family_name": "Tipografi deneyleri",
+      "description": "Şiirsel & Mektup serisinden Midnight Moon Phases kompozisyonu (Puan: 9.5/10).",
+      "sample_image": "designs_extra_100/design_163.jpg",
+      "source_keys": [
+        "artwork_1"
+      ],
+      "required_sources": 1,
+      "sample_head": "Midnight Moon Phases"
+    },
+    {
+      "id": "neon-164",
+      "collection": "neon",
+      "number": 164,
+      "name": "Archival Envelope Peek",
+      "family": "typography",
+      "family_name": "Tipografi deneyleri",
+      "description": "Şiirsel & Mektup serisinden Archival Envelope Peek kompozisyonu (Puan: 9.6/10).",
+      "sample_image": "designs_extra_100/design_164.jpg",
+      "source_keys": [
+        "artwork_1"
+      ],
+      "required_sources": 1,
+      "sample_head": "Archival Envelope Peek"
+    },
+    {
+      "id": "neon-165",
+      "collection": "neon",
+      "number": 165,
+      "name": "Horizon-Resting Serif",
+      "family": "typography",
+      "family_name": "Tipografi deneyleri",
+      "description": "Şiirsel & Mektup serisinden Horizon-Resting Serif kompozisyonu (Puan: 9.4/10).",
+      "sample_image": "designs_extra_100/design_165.jpg",
+      "source_keys": [
+        "artwork_1"
+      ],
+      "required_sources": 1,
+      "sample_head": "Horizon-Resting Serif"
+    },
+    {
+      "id": "neon-166",
+      "collection": "neon",
+      "number": 166,
+      "name": "Triple Shadowbox Frame",
+      "family": "typography",
+      "family_name": "Tipografi deneyleri",
+      "description": "Şiirsel & Mektup serisinden Triple Shadowbox Frame kompozisyonu (Puan: 9.2/10).",
+      "sample_image": "designs_extra_100/design_166.jpg",
+      "source_keys": [
+        "artwork_1"
+      ],
+      "required_sources": 1,
+      "sample_head": "Triple Shadowbox Frame"
+    },
+    {
+      "id": "neon-167",
+      "collection": "neon",
+      "number": 167,
+      "name": "Stained Glass Border",
+      "family": "typography",
+      "family_name": "Tipografi deneyleri",
+      "description": "Şiirsel & Mektup serisinden Stained Glass Border kompozisyonu (Puan: 9.1/10).",
+      "sample_image": "designs_extra_100/design_167.jpg",
+      "source_keys": [
+        "artwork_1"
+      ],
+      "required_sources": 1,
+      "sample_head": "Stained Glass Border"
+    },
+    {
+      "id": "neon-168",
+      "collection": "neon",
+      "number": 168,
+      "name": "Candlelight Vignette",
+      "family": "typography",
+      "family_name": "Tipografi deneyleri",
+      "description": "Şiirsel & Mektup serisinden Candlelight Vignette kompozisyonu (Puan: 9.5/10).",
+      "sample_image": "designs_extra_100/design_168.jpg",
+      "source_keys": [
+        "artwork_1"
+      ],
+      "required_sources": 1,
+      "sample_head": "Candlelight Vignette"
+    },
+    {
+      "id": "neon-169",
+      "collection": "neon",
+      "number": 169,
+      "name": "Swiss Hairline 3x4 Grid",
+      "family": "typography",
+      "family_name": "Tipografi deneyleri",
+      "description": "Şiirsel & Mektup serisinden Swiss Hairline 3x4 Grid kompozisyonu (Puan: 9.2/10).",
+      "sample_image": "designs_extra_100/design_169.jpg",
+      "source_keys": [
+        "artwork_1"
+      ],
+      "required_sources": 1,
+      "sample_head": "Swiss Hairline 3x4 Grid"
+    },
+    {
+      "id": "neon-170",
+      "collection": "neon",
+      "number": 170,
+      "name": "Translucent Glassine Veil",
+      "family": "typography",
+      "family_name": "Tipografi deneyleri",
+      "description": "Şiirsel & Mektup serisinden Translucent Glassine Veil kompozisyonu (Puan: 9.6/10).",
+      "sample_image": "designs_extra_100/design_170.jpg",
+      "source_keys": [
+        "artwork_1"
+      ],
+      "required_sources": 1,
+      "sample_head": "Translucent Glassine Veil"
+    },
+    {
+      "id": "neon-171",
+      "collection": "neon",
+      "number": 171,
+      "name": "4-Corner Crop Brackets",
+      "family": "typography",
+      "family_name": "Tipografi deneyleri",
+      "description": "Yeni İmza serisinden 4-Corner Crop Brackets kompozisyonu (Puan: 9.6/10).",
+      "sample_image": "designs_extra_100/design_171.jpg",
+      "source_keys": [
+        "artwork_1"
+      ],
+      "required_sources": 1,
+      "sample_head": "4-Corner Crop Brackets"
+    },
+    {
+      "id": "neon-172",
+      "collection": "neon",
+      "number": 172,
+      "name": "Giant Split Monogram AF",
+      "family": "typography",
+      "family_name": "Tipografi deneyleri",
+      "description": "Yeni İmza serisinden Giant Split Monogram AF kompozisyonu (Puan: 9.4/10).",
+      "sample_image": "designs_extra_100/design_172.jpg",
+      "source_keys": [
+        "artwork_1"
+      ],
+      "required_sources": 1,
+      "sample_head": "Giant Split Monogram AF"
+    },
+    {
+      "id": "neon-173",
+      "collection": "neon",
+      "number": 173,
+      "name": "Century Ruler & Needle",
+      "family": "typography",
+      "family_name": "Tipografi deneyleri",
+      "description": "Yeni İmza serisinden Century Ruler & Needle kompozisyonu (Puan: 9.7/10).",
+      "sample_image": "designs_extra_100/design_173.jpg",
+      "source_keys": [
+        "artwork_1"
+      ],
+      "required_sources": 1,
+      "sample_head": "Century Ruler & Needle"
+    },
+    {
+      "id": "neon-174",
+      "collection": "neon",
+      "number": 174,
+      "name": "Pixel-Stretch Waterfall",
+      "family": "typography",
+      "family_name": "Tipografi deneyleri",
+      "description": "Yeni İmza serisinden Pixel-Stretch Waterfall kompozisyonu (Puan: 9.8/10).",
+      "sample_image": "designs_extra_100/design_174.jpg",
+      "source_keys": [
+        "artwork_1"
+      ],
+      "required_sources": 1,
+      "sample_head": "Pixel-Stretch Waterfall"
+    },
+    {
+      "id": "neon-175",
+      "collection": "neon",
+      "number": 175,
+      "name": "Modern Pill-Tag Cover",
+      "family": "typography",
+      "family_name": "Tipografi deneyleri",
+      "description": "Yeni İmza serisinden Modern Pill-Tag Cover kompozisyonu (Puan: 9.4/10).",
+      "sample_image": "designs_extra_100/design_175.jpg",
+      "source_keys": [
+        "artwork_1"
+      ],
+      "required_sources": 1,
+      "sample_head": "Modern Pill-Tag Cover"
+    },
+    {
+      "id": "neon-176",
+      "collection": "neon",
+      "number": 176,
+      "name": "Double-Framed Mirror",
+      "family": "typography",
+      "family_name": "Tipografi deneyleri",
+      "description": "Yeni İmza serisinden Double-Framed Mirror kompozisyonu (Puan: 9.3/10).",
+      "sample_image": "designs_extra_100/design_176.jpg",
+      "source_keys": [
+        "artwork_1"
+      ],
+      "required_sources": 1,
+      "sample_head": "Double-Framed Mirror"
+    },
+    {
+      "id": "neon-177",
+      "collection": "neon",
+      "number": 177,
+      "name": "Horizontal Ribbon Cut",
+      "family": "typography",
+      "family_name": "Tipografi deneyleri",
+      "description": "Yeni İmza serisinden Horizontal Ribbon Cut kompozisyonu (Puan: 9.7/10).",
+      "sample_image": "designs_extra_100/design_177.jpg",
+      "source_keys": [
+        "artwork_1"
+      ],
+      "required_sources": 1,
+      "sample_head": "Horizontal Ribbon Cut"
+    },
+    {
+      "id": "neon-178",
+      "collection": "neon",
+      "number": 178,
+      "name": "Asymmetric Right-Bleed",
+      "family": "typography",
+      "family_name": "Tipografi deneyleri",
+      "description": "Yeni İmza serisinden Asymmetric Right-Bleed kompozisyonu (Puan: 9.5/10).",
+      "sample_image": "designs_extra_100/design_178.jpg",
+      "source_keys": [
+        "artwork_1"
+      ],
+      "required_sources": 1,
+      "sample_head": "Asymmetric Right-Bleed"
+    },
+    {
+      "id": "neon-179",
+      "collection": "neon",
+      "number": 179,
+      "name": "Crosshair Quartet Split",
+      "family": "typography",
+      "family_name": "Tipografi deneyleri",
+      "description": "Yeni İmza serisinden Crosshair Quartet Split kompozisyonu (Puan: 9.6/10).",
+      "sample_image": "designs_extra_100/design_179.jpg",
+      "source_keys": [
+        "artwork_1"
+      ],
+      "required_sources": 1,
+      "sample_head": "Crosshair Quartet Split"
+    },
+    {
+      "id": "neon-180",
+      "collection": "neon",
+      "number": 180,
+      "name": "Museum Room Number",
+      "family": "typography",
+      "family_name": "Tipografi deneyleri",
+      "description": "Yeni İmza serisinden Museum Room Number kompozisyonu (Puan: 9.7/10).",
+      "sample_image": "designs_extra_100/design_180.jpg",
+      "source_keys": [
+        "artwork_1"
+      ],
+      "required_sources": 1,
+      "sample_head": "Museum Room Number"
+    }
+  ]
+}

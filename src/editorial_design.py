@@ -186,3 +186,28 @@ def render_editorial_cover(
         "actual_style": actual_style,
         "crop_basis": basis,
     }
+
+
+def render_astra_editorial_cover(
+    design_id: str,
+    sources: list[dict] | tuple[dict, ...],
+    public_title: str,
+    output_path: str,
+    *,
+    detail_focuses: list[tuple[float, float] | tuple[float, float, float, float]] | None = None,
+) -> dict:
+    """Render a 1080×1350 JPEG using a ready Artfolio Astra catalog template."""
+    from src.astra_renderer import AstraArtworkInput, render_astra_design
+
+    parsed = [
+        item if isinstance(item, AstraArtworkInput) else AstraArtworkInput(**item)
+        for item in sources
+    ]
+    return render_astra_design(
+        design_id,
+        parsed,
+        public_title,
+        output_path,
+        detail_focuses=detail_focuses,
+    )
+
