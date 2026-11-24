@@ -66,6 +66,18 @@ def run(argv: list[str] | None = None) -> int:
     ins_cmd.add_argument("--csv", type=Path, required=True)
     ins_cmd.add_argument("--out-json", type=Path, default=None)
 
+    car_cmd = sub.add_parser(
+        "build-carousel-delivery",
+        help="Build portable weekly Carousel delivery package (2-tier pairing, single-work fallback, exact slide numbering)",
+    )
+    car_cmd.add_argument("--pool", type=Path, required=True, help="Verified museum pool_index.json path")
+    car_cmd.add_argument("--output", type=Path, required=True, help="Destination directory for portable weekly package")
+    car_cmd.add_argument("--from-rehearsal", type=Path, default=None, help="Optional existing v2 rehearsal dir to reuse unaffected covers")
+    car_cmd.add_argument("--days", type=int, default=30, help="Days to generate when building fresh without --from-rehearsal")
+    car_cmd.add_argument("--carousels-per-day", type=int, default=4)
+    car_cmd.add_argument("--reels-per-day", type=int, default=2)
+    car_cmd.add_argument("--reuse-ledger", type=Path, default=None, help="180-day ArtworkReuseLedger JSON to prevent repeats across consecutive months")
+
     args = parser.parse_args(argv)
     try:
         if args.command == "list-designs":
@@ -86,6 +98,46 @@ def run(argv: list[str] | None = None) -> int:
                 args.out_json.parent.mkdir(parents=True, exist_ok=True)
                 args.out_json.write_text(json.dumps(scorecard, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
             print(json.dumps(scorecard, ensure_ascii=False, indent=2))
+            return 0
+
+        if args.command == "build-carousel-delivery":
+            import tempfile
+            from src.carousel_delivery import build_weekly_carousel_delivery
+            from src.profile_rehearsal import build_real_museum_rehearsal
+
+            if args.from_rehearsal is not None:
+                res = build_weekly_carousel_delivery(
+                    args.from_rehearsal,
+                    args.pool,
+                    args.output,
+                    reuse_ledger_path=args.reuse_ledger,
+                )
+            else:
+                pool_arts = json.loads(args.pool.read_text(encoding="utf-8"))["artworks"]
+                with tempfile.TemporaryDirectory(prefix="artfolio-rehearsal-stage-") as stage:
+                    build_real_museum_rehearsal(
+                        pool_arts,
+                        stage,
+                        days=args.days,
+                        carousels_per_day=args.carousels_per_day,
+                        reels_per_day=args.reels_per_day,
+                        render_sample_mp4_count=0,
+                        reuse_ledger_path=args.reuse_ledger,
+                    )
+                    res = build_weekly_carousel_delivery(
+                        stage,
+                        args.pool,
+                        args.output,
+                        reuse_ledger_path=args.reuse_ledger,
+                    )
+            s = res["summary"]
+            print(
+                f"Carousel delivery ready: {res['html_path']} "
+                f"(shareable={s['shareable_carousels']}/{s['total_carousels']}, "
+                f"slides={s['total_carousel_slides']}, slide_dist={s['slide_count_distribution']}, "
+                f"repaired={s['repaired_multi_work_carousels']}, fallback_single={s['auto_fallback_to_single_carousels']}, "
+                f"preflight_errors={s['preflight']['error_count']})"
+            )
             return 0
 
         if args.command == "create":

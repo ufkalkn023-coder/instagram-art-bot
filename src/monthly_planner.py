@@ -249,12 +249,11 @@ def _render_inner_carousel_slides(
     workspace_dir: Path,
     post: MonthlyPlanPost,
     sources: list[AstraArtworkInput],
+    *,
+    explicit_slide_specs: Sequence[str] | None = None,
 ) -> list[str]:
-    """Generate rich ordered inner slides (2..N):
-    - Slide 2: Curiosity Reward (#13) OR Quiz Answer Reveal (#16)
-    - Slide 3: Full Uncropped Museum Plate (#17 unified page numbering)
-    - Optional Slide (Monumental Scale #18): ONLY when max_dim_cm >= 180 cm (170cm visitor silhouette)
-    - Final Slide: Archival Save Card (#14) with 5 real HEX pigments + museum credit
+    """Generate rich ordered inner slides (2..N) from a single finalized slide_specs list so
+    every JPG's corner page number (e.g. 02/03, 03/03) matches the exact exported slide count.
     """
     art = sources[0]
     pil_raw = load_source_image(art.validated_path())
@@ -281,32 +280,32 @@ def _render_inner_carousel_slides(
         pool = [d for d in _INNER_POOLS[pool_key] if d != post.design_id]
         return pool[(seed_int + salt) % len(pool)]
 
-    if is_quiz:
-        slide_specs: list[str] = ["quiz_reveal", "full_plate"]
-    elif len(sources) >= 3:
-        # Three-Room Exhibition Arc (0 detail crops)
-        slide_specs = ["room_1_gallery", "room_2_archive", "room_3_colors"]
-    elif len(sources) == 2:
-        # Duet Dialogue Arc (0 detail crops)
-        slide_specs = ["duet_work_1", "duet_work_2"]
+    if explicit_slide_specs is not None:
+        slide_specs = list(explicit_slide_specs)
     else:
-        # 5 distinct 1-artwork editorial arcs -> Detail zoom is ONLY 1 in 5 (20%)!
-        arc = seed_int % 5
-        if arc == 0:
-            slide_specs = ["template_gallery", "template_archive"]
-        elif arc == 1:
-            slide_specs = ["template_colors", "full_plate"]
-        elif arc == 2:
-            slide_specs = ["detail_callout", "full_plate"]
-        elif arc == 3:
-            slide_specs = ["template_story", "template_cinema"]
+        if is_quiz:
+            slide_specs = ["quiz_reveal", "full_plate"]
+        elif len(sources) >= 3:
+            slide_specs = ["room_1_gallery", "room_2_archive", "room_3_colors"]
+        elif len(sources) == 2:
+            slide_specs = ["duet_work_1", "duet_work_2"]
         else:
-            slide_specs = ["full_plate", "template_experimental"]
+            arc = seed_int % 5
+            if arc == 0:
+                slide_specs = ["template_gallery", "template_archive"]
+            elif arc == 1:
+                slide_specs = ["template_colors", "full_plate"]
+            elif arc == 2:
+                slide_specs = ["detail_callout", "full_plate"]
+            elif arc == 3:
+                slide_specs = ["template_story", "template_cinema"]
+            else:
+                slide_specs = ["full_plate", "template_experimental"]
 
-    if show_scale and dims_cm is not None:
-        slide_specs.append("monumental_scale")
-    if len(sources) < 3:
-        slide_specs.append("save_card")
+        if show_scale and dims_cm is not None:
+            slide_specs.append("monumental_scale")
+        if len(sources) < 3:
+            slide_specs.append("save_card")
 
     total_slides = 1 + len(slide_specs)
     inner_paths: list[str] = []

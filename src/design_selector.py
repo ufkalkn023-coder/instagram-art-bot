@@ -204,6 +204,7 @@ def select_profile_design(
     usage_counts: Counter[str],
     family_counts: Counter[str],
     is_quiz: bool = False,
+    soft_nudges: dict[str, float] | None = None,
 ) -> tuple[str, dict]:
     """Select the strongest design from the full 280-design catalog for artwork fit & 3-column grid rhythm."""
     usable = list_usable_designs()
@@ -213,6 +214,9 @@ def select_profile_design(
         if quiz_ids:
             chosen = min(quiz_ids, key=lambda d: usage_counts[d.id])
             return chosen.id, {"family": chosen.family, "reasons": ["friday_quiz_slot"], "score": 10.0}
+    else:
+        # Never accidentally assign exact-year quiz templates to non-quiz posts
+        candidates = [d for d in candidates if d.id not in {"neon-151", "neon-157"}]
 
     if post_format == "reel" and required_sources == 1:
         reel_pool = [d for d in candidates if d.family in REEL_PREFERRED_FAMILIES]
@@ -227,6 +231,7 @@ def select_profile_design(
     best_design: Any = None
     best_score = -1e9
     best_reasons: list[str] = []
+    nudges = soft_nudges or {}
 
     for d in candidates:
         sc, reasons = _score_candidate(
@@ -239,6 +244,9 @@ def select_profile_design(
             usage_counts=usage_counts,
             family_counts=family_counts,
         )
+        if d.id in nudges:
+            sc += nudges[d.id]
+            reasons.append(f"operator_nudge:{nudges[d.id]:+.1f}")
         if sc > best_score:
             best_score = sc
             best_design = d

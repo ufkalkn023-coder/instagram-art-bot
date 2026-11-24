@@ -16,12 +16,17 @@ from PIL import Image, ImageDraw
 from src.art_calendar import find_anniversaries_for_date, match_anniversary_artist
 from src.astra_catalog import get_design
 from src.astra_renderer import AstraArtworkInput, render_astra_design
+from src.curatorial_brief import (
+    COPY_VERSION,
+    build_curatorial_brief,
+    clean_editorial_title,
+    clean_museum_artwork,
+)
 from src.design_selector import (
     audit_design_catalog_eligibility,
     extract_artwork_visual_profile,
     select_profile_design,
 )
-from src.editorial_copy_rules import compose_curated_caption, compose_first_comment, compose_seo_alt_text
 from src.grid_choreography import SIGNATURE_DAYS, analyze_grid_rhythm, compute_cover_tone
 from src.monthly_planner import (
     MonthlyPlanPost,
@@ -30,11 +35,17 @@ from src.monthly_planner import (
     build_daily_cadence_schedule,
 )
 from src.museum_pool import (
+    ArtworkReuseLedger,
     calculate_schedule_artwork_need,
     flag_visual_near_duplicates,
     normalize_artist_name,
 )
 from src.neon_kit import F, GOLD, MUTED_LIGHT, OBSIDIAN, PURE_WHITE, SOFT_IVORY
+from src.preflight_and_feedback import (
+    EditorialFeedbackStore,
+    InsightsMediaLinkRegistry,
+    run_preflight_checks,
+)
 from src.reel_studio import REEL_MOTION_PRESETS, ReelMotionPreset, render_local_reel_mp4, render_reel_9x16_cover
 
 ISTANBUL_TZ = ZoneInfo("Europe/Istanbul")
@@ -102,11 +113,13 @@ def build_real_museum_rehearsal(
     reels_per_day: int = 2,
     start_at: datetime | None = None,
     render_sample_mp4_count: int = 2,
+    reuse_ledger_path: str | Path | None = None,
+    cooldown_days: int = 180,
 ) -> dict:
     """Build a standalone, phone-width local 30-day Instagram profile rehearsal from REAL verified museum artworks.
 
-    Never pads with demo/synthetic artworks. If the verified pool is smaller than the full 30-day need,
-    builds only as many complete days as verified artworks support and reports exact shortfall.
+    Never pads with demo/synthetic artworks. If reuse_ledger_path is provided, blocks artworks used in
+    prior months within cooldown_days and records newly scheduled artworks to prevent cross-month repeats.
     """
     root = Path(output_dir).resolve()
     renders_dir = root / "renders"
@@ -120,7 +133,19 @@ def build_real_museum_rehearsal(
         reels_per_day=reels_per_day,
         reel_revisit_ratio=0.20,
     )
-    pool = _order_diverse_real_pool(pool_artworks)
+    raw_pool = _order_diverse_real_pool(pool_artworks)
+    ledger = ArtworkReuseLedger(reuse_ledger_path) if reuse_ledger_path else None
+    blocked_by_reuse_ledger = 0
+    if ledger is not None:
+        pool = []
+        for aw in raw_pool:
+            if ledger.is_blocked(aw["canonical_id"], cooldown_days=cooldown_days):
+                blocked_by_reuse_ledger += 1
+            else:
+                pool.append(aw)
+    else:
+        pool = raw_pool
+
     vis_flags = flag_visual_near_duplicates(pool, max_distance=8)
     flag_by_id: dict[str, list[dict]] = {}
     for fl in vis_flags:
@@ -129,21 +154,27 @@ def build_real_museum_rehearsal(
 
     # Determine how many full days can be honestly filled with zero fake padding
     per_day_posts = carousels_per_day + reels_per_day
-    # Approximate unique works per day from need
     works_per_day_avg = need["total_unique_artworks_needed"] / max(1, days)
     if len(pool) >= need["total_unique_artworks_needed"]:
         build_days = days
         shortfall_works = 0
+    elif len(pool) == 0:
+        build_days = 0
+        shortfall_works = need["total_unique_artworks_needed"]
     else:
         build_days = max(1, int(len(pool) // max(1.0, works_per_day_avg)))
         shortfall_works = max(0, need["total_unique_artworks_needed"] - len(pool))
 
     start_dt = start_at or datetime(2026, 11, 24, 9, 30, tzinfo=ISTANBUL_TZ)
-    slots = build_daily_cadence_schedule(
-        start_dt,
-        days=build_days,
-        carousels_per_day=carousels_per_day,
-        reels_per_day=reels_per_day,
+    slots = (
+        build_daily_cadence_schedule(
+            start_dt,
+            days=build_days,
+            carousels_per_day=carousels_per_day,
+            reels_per_day=reels_per_day,
+        )
+        if build_days > 0
+        else []
     )
 
     pool_cursor = 0
@@ -192,15 +223,27 @@ def build_real_museum_rehearsal(
                 req_n = 1
             arts = _take_fresh(req_n)
             if arts is None:
-                # Graceful degradation to 1-work if 2/3-work couldn't fit remaining pool
                 arts = _take_fresh(1)
                 req_n = 1
             if arts is None:
                 missing_posts.append({"id": pid, "day": day_num, "post_format": fmt, "reason": "insufficient_verified_artworks"})
                 continue
 
-            is_quiz = (req_n == 1 and c_idx % max(1, carousels_per_day) == 0 and slot_dt.weekday() == 4)
-            lead_prof = extract_artwork_visual_profile(arts[0]["image_path"], arts[0]["title"])
+            cleaned_arts = [clean_museum_artwork(a) for a in arts]
+            # Only allow exact-year Friday Quiz when museum date is a verified single 4-digit year!
+            is_quiz = (
+                req_n == 1
+                and c_idx % max(1, carousels_per_day) == 0
+                and slot_dt.weekday() == 4
+                and cleaned_arts[0]["date_is_exact_year"]
+            )
+            brief = build_curatorial_brief(
+                cleaned_arts,
+                post_format="carousel",
+                slot_index=slot_num,
+                is_quiz=is_quiz,
+            )
+            lead_prof = extract_artwork_visual_profile(cleaned_arts[0]["image_path"], cleaned_arts[0]["title_clean"])
             design_id, decision = select_profile_design(
                 post_format="carousel",
                 required_sources=req_n,
@@ -211,40 +254,41 @@ def build_real_museum_rehearsal(
                 is_quiz=is_quiz,
             )
             if req_n == 3:
-                headline = f"{_clean_artist_surname(arts[0]['artist'])}, {_clean_artist_surname(arts[1]['artist'])} & {_clean_artist_surname(arts[2]['artist'])}"
+                headline = f"{cleaned_arts[0]['artist_surname']}, {cleaned_arts[1]['artist_surname']} & {cleaned_arts[2]['artist_surname']}"
             elif req_n == 2:
-                headline = f"{_clean_artist_surname(arts[0]['artist'])} / {_clean_artist_surname(arts[1]['artist'])}"
+                headline = f"{cleaned_arts[0]['artist_surname']} / {cleaned_arts[1]['artist_surname']}"
             elif is_quiz:
-                headline = f"Guess the year: {_clean_artist_surname(arts[0]['artist'])}"
+                headline = f"Guess the year: {cleaned_arts[0]['artist_surname']}"
             else:
-                headline = _short_title(arts[0]["title"], 46)
+                headline = cleaned_arts[0]["title_clean"]
 
-            caption = compose_curated_caption(post_format="carousel", artworks=arts, slot_index=slot_num, is_quiz=is_quiz)
             if req_n == 1:
-                earlier_carousel_candidates.append((pid, arts[0]))
+                earlier_carousel_candidates.append((pid, cleaned_arts[0]))
             c_idx += 1
         else:
-            # 1 in 5 Reels intentionally revisits an earlier Carousel work with a distinct detail focus
             want_revisit = (r_idx % 5 == 4 and len(earlier_carousel_candidates) > (r_idx // 5))
             if want_revisit:
                 revisits_post_id, revisited_art = earlier_carousel_candidates[r_idx // 5]
                 arts = [revisited_art]
             else:
                 arts = _take_fresh(1)
-                if arts is None and earlier_carousel_candidates:
-                    # Do not invent fake works; mark as missing if pool exhausted
-                    missing_posts.append({"id": pid, "day": day_num, "post_format": fmt, "reason": "insufficient_verified_artworks"})
-                    continue
                 if arts is None:
                     missing_posts.append({"id": pid, "day": day_num, "post_format": fmt, "reason": "insufficient_verified_artworks"})
                     continue
 
+            cleaned_arts = [clean_museum_artwork(a) for a in arts]
             if slot_dt.hour >= 18:
                 anns = find_anniversaries_for_date(slot_dt.date())
                 if anns:
                     ann_note = anns[0].format_badge()
 
-            lead_prof = extract_artwork_visual_profile(arts[0]["image_path"], arts[0]["title"])
+            brief = build_curatorial_brief(
+                cleaned_arts,
+                post_format="reel",
+                slot_index=slot_num,
+                revisits_post_id=revisits_post_id,
+            )
+            lead_prof = extract_artwork_visual_profile(cleaned_arts[0]["image_path"], cleaned_arts[0]["title_clean"])
             design_id, decision = select_profile_design(
                 post_format="reel",
                 required_sources=1,
@@ -254,28 +298,26 @@ def build_real_museum_rehearsal(
                 family_counts=family_counts,
                 is_quiz=False,
             )
-            short_t = _short_title(arts[0]["title"], 34)
+            short_t = clean_editorial_title(cleaned_arts[0]["title"], max_len=36)
             if revisits_post_id:
                 headline = f"Closer look: {short_t}"
-            elif short_t.lower().startswith(("in ", "inside ")):
-                headline = short_t
             else:
-                headline = f"Inside {short_t}"
-            caption = compose_curated_caption(post_format="reel", artworks=arts, slot_index=slot_num)
+                headline = short_t
             preset = motion_presets[r_idx % len(motion_presets)]
             r_idx += 1
 
-        # Render the real 1080x1350 cover (and 9:16 cover for Reels)
+        # Render the real 1080x1350 cover (and inner slides OR 9:16 Reel cover + optional MP4)
         sources = [
             AstraArtworkInput(
                 image_path=Path(a["image_path"]),
-                title=a["title"],
+                title=a["title_clean"],
                 artist=a["artist"],
                 date=a.get("date", ""),
                 institution=a.get("institution", ""),
                 museum_url=a.get("museum_url", ""),
+                focus=brief["motion_start"],
             )
-            for a in arts
+            for a in cleaned_arts
         ]
         cover_rel = f"renders/{pid}-{design_id}.jpg"
         render_astra_design(design_id, sources, headline, root / cover_rel)
@@ -284,34 +326,36 @@ def build_real_museum_rehearsal(
         slides_rel: list[str] = [cover_rel]
         reel_9x16_rel = ""
         reel_mp4_rel = ""
+        reel_delivery_status = "not_applicable"
         if fmt == "carousel":
             stub_post = MonthlyPlanPost(
                 id=pid,
                 post_format="carousel",
                 design_id=design_id,
                 editorial_title=headline,
-                caption_en=caption,
+                caption_en=brief["caption_en"],
                 scheduled_at=ts,
                 artworks=tuple(
                     PilotArtworkRecord(
                         source_key=a["source_key"],
                         image_path=a["image_path"],
                         artist=a["artist"],
-                        title=a["title"],
+                        title=a["title_clean"],
                         date=a.get("date", ""),
                         institution=a.get("institution", ""),
                         museum_url=a.get("museum_url", ""),
                     )
-                    for a in arts
+                    for a in cleaned_arts
                 ),
                 slide_count=4,
-                dimensions_cm_text=arts[0].get("dimensions_cm", ""),
+                dimensions_cm_text=cleaned_arts[0].get("dimensions_cm", ""),
             )
             inner_rels = _render_inner_carousel_slides(root, stub_post, sources)
             slides_rel.extend(inner_rels)
         else:
             reel_9x16_rel = f"renders/{pid}-{design_id}-9x16.jpg"
             render_reel_9x16_cover(root / cover_rel, root / reel_9x16_rel)
+            reel_delivery_status = "cover_ready_mp4_pending"
             if len(mp4_rendered_ids) < render_sample_mp4_count:
                 reel_mp4_rel = f"videos/{pid}-{preset}.mp4"
                 render_local_reel_mp4(
@@ -320,15 +364,19 @@ def build_real_museum_rehearsal(
                     root / reel_mp4_rel,
                     preset=preset,
                     fps=24,
+                    zoom_start=brief["motion_start"],
+                    zoom_end=brief["motion_end"],
                     seamless_loop=True,
+                    kinetic_hook=brief["reel_subtitle_en"],
                 )
                 mp4_rendered_ids.append(pid)
+                reel_delivery_status = "mp4_rendered"
 
         usage_counts[design_id] += 1
         family_counts[decision["family"]] += 1
 
         art_sim_flags = []
-        for a in arts:
+        for a in cleaned_arts:
             art_sim_flags.extend(flag_by_id.get(a["canonical_id"], []))
 
         placed_posts.append(
@@ -342,15 +390,24 @@ def build_real_museum_rehearsal(
                 "design_id": design_id,
                 "family": decision["family"],
                 "decision_reasons": decision["reasons"],
+                "copy_version": brief["copy_version"],
+                "curatorial_angle": brief["curatorial_angle"],
+                "curatorial_basis": brief["curatorial_basis"],
+                "focus_region": brief["focus_region"],
+                "motion_start": list(brief["motion_start"]),
+                "motion_end": list(brief["motion_end"]),
+                "slide_note_en": brief["slide_note_en"],
+                "reel_subtitle_en": brief["reel_subtitle_en"] if fmt == "reel" else "",
+                "reel_delivery_status": reel_delivery_status,
                 "editorial_title": headline,
-                "caption_en": caption,
-                "first_comment_en": compose_first_comment(arts),
-                "alt_text_en": compose_seo_alt_text(arts, post_format=fmt, tone_band=tone["tone_band"]),
+                "caption_en": brief["caption_en"],
+                "first_comment_en": brief["first_comment_en"],
+                "alt_text_en": brief["alt_text_en"],
                 "anniversary_note": ann_note,
                 "signature_day_label": sig_day["label"],
                 "revisits_post_id": revisits_post_id,
                 "revisit_note": (
-                    f"Revisits {revisits_post_id} with a dedicated vertical motion detail study"
+                    f"Revisits {revisits_post_id} in motion: starts on {brief['focus_region']} before revealing the full composition."
                     if revisits_post_id
                     else ""
                 ),
@@ -368,22 +425,38 @@ def build_real_museum_rehearsal(
                     {
                         "canonical_id": a["canonical_id"],
                         "artist": a["artist"],
-                        "artist_normalized": a.get("artist_normalized", normalize_artist_name(a["artist"])),
+                        "artist_short": a["artist_short"],
+                        "artist_normalized": a.get("artist_normalized", normalize_artist_name(a["artist_short"])),
+                        "attribution_note": a["attribution_note"],
+                        "is_anonymous": a["is_anonymous"],
                         "title": a["title"],
+                        "title_clean": a["title_clean"],
                         "date": a.get("date", ""),
                         "institution": a.get("institution", ""),
                         "museum_url": a.get("museum_url", ""),
                         "rights_status": a.get("rights_status", ""),
                         "rights_basis": a.get("rights_basis", ""),
+                        "series_relation": a.get("series_relation", ""),
                         "dhash": a.get("dhash", ""),
                     }
-                    for a in arts
+                    for a in cleaned_arts
                 ],
             }
         )
 
     # Render Same-9 Old vs New 3x3 comparison using first 9 posts' EXACT real artworks & order
     ab_report = render_same_9_ab_comparison(placed_posts[:9], pool, root)
+
+    # Run pre-publication quality gate & persist Insights link registry
+    preflight = run_preflight_checks(placed_posts, root)
+    insights_registry = InsightsMediaLinkRegistry(root / "insights_media_links.json")
+    for p in placed_posts:
+        insights_registry.register_post(p)
+    insights_registry.save()
+
+    # Record newly scheduled artworks into reuse ledger (if provided) so Month 2 skips them
+    if ledger is not None and used_artwork_ids:
+        ledger.mark_used(sorted(used_artwork_ids))
 
     # Compute comprehensive audit summary
     all_used_artists = {
@@ -397,7 +470,8 @@ def build_real_museum_rehearsal(
         ]
     )
     summary = {
-        "schema_version": "artfolio-profile-rehearsal-v1",
+        "schema_version": "artfolio-profile-rehearsal-v2",
+        "copy_version": COPY_VERSION,
         "profile_handle": "@artfolio.db",
         "assumptions": {
             "pinned_posts": "Live Instagram pinned-post state is not readable offline; rehearsal defaults to 0 pinned posts (pure chronological newest-top-left) and lets you toggle up to 3 local pins in the preview.",
@@ -411,9 +485,11 @@ def build_real_museum_rehearsal(
         "missing_posts": missing_posts,
         "completed_days": max((p["day"] for p in placed_posts), default=0),
         "shortfall_unique_artworks": shortfall_works,
+        "blocked_by_reuse_ledger": blocked_by_reuse_ledger,
         "carousels_rendered": sum(1 for p in placed_posts if p["post_format"] == "carousel"),
         "reels_covers_rendered": sum(1 for p in placed_posts if p["post_format"] == "reel"),
         "reels_full_mp4_rendered": len(mp4_rendered_ids),
+        "reels_only_cover_stage": sum(1 for p in placed_posts if p["post_format"] == "reel" and not p.get("reel_mp4_path")),
         "reels_revisiting_earlier_carousel": sum(1 for p in placed_posts if p["revisits_post_id"]),
         "unique_artworks_used": len(used_artwork_ids),
         "unique_artists_used": len(all_used_artists),
@@ -422,6 +498,9 @@ def build_real_museum_rehearsal(
         "unique_layout_families_used": len(family_counts),
         "layout_family_distribution": dict(family_counts.most_common()),
         "top_3_repeated_designs": usage_counts.most_common(3),
+        "curatorial_angles": dict(Counter(p["curatorial_angle"] for p in placed_posts).most_common()),
+        "preflight": preflight,
+        "insights_link_registry_path": str(root / "insights_media_links.json"),
         "visual_similarity_flags_count": len(vis_flags),
         "visual_similarity_flags": vis_flags[:20],
         "grid_rhythm": rhythm,
@@ -601,16 +680,21 @@ header p{{margin:4px 0 0;font-size:12px;color:#cfc4a8}}
 .ig-avatar{{width:46px;height:46px;border-radius:50%;background:#15211b;color:#e5c377;display:flex;align-items:center;justify-content:center;font:15px Georgia,serif}}
 .ig-stats{{font-size:11.5px;color:#5d584d}}
 .ig-grid{{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:2px;max-height:74vh;overflow-y:auto}}
+.ig-grid.ratio-3x4 .cell{{aspect-ratio:3/4}}
 .cell{{position:relative;aspect-ratio:4/5;background:#e8e2d4;border:2px solid transparent;padding:0;cursor:pointer;overflow:hidden}}
 .cell.selected{{border-color:#b57c2a;box-shadow:0 0 0 1px #b57c2a}}
 .cell img{{width:100%;height:100%;object-fit:cover;display:block}}
-.badge-tr{{position:absolute;top:4px;right:4px;background:rgba(16,16,14,.8);color:#fff;font-size:9px;padding:2px 4px;border-radius:3px}}
+.badge-tr{{position:absolute;top:4px;right:4px;background:rgba(16,16,14,.84);color:#fff;font-size:9px;padding:2px 4px;border-radius:3px}}
+.badge-tr.mp4{{background:#1c6b48}}
 .badge-tl{{position:absolute;top:4px;left:4px;background:#b57c2a;color:#fff;font-size:9px;padding:2px 4px;border-radius:3px}}
+.badge-bl{{position:absolute;bottom:4px;left:4px;background:rgba(16,16,14,.78);color:#f3e7c6;font-size:8.5px;padding:1px 4px;border-radius:3px}}
 .panel{{background:#fff;border:1px solid #dcd5c5;border-radius:14px;padding:16px;box-shadow:0 6px 24px rgba(20,18,14,.05)}}
 .inspector{{position:sticky;top:14px}}
 .hero{{width:100%;max-height:380px;object-fit:contain;background:#f0ebe0;border-radius:8px;display:block;margin:8px 0}}
 .meta{{font-size:12px;color:#5a554a;margin:0 0 8px}}
 .note{{background:#faf5e6;border:1px solid #dfd0a8;border-radius:8px;padding:8px 10px;font-size:12px;margin:8px 0}}
+.brief-box{{background:#f2f6f3;border:1px solid #c6d7cc;border-radius:8px;padding:8px 10px;font-size:12px;margin:8px 0}}
+.fb-row{{display:flex;flex-wrap:wrap;gap:5px;margin:8px 0}}
 .art-card{{background:#faf8f3;border:1px solid #e6dfd0;border-radius:8px;padding:9px 11px;font-size:12.5px;margin:8px 0}}
 .art-card a{{color:#1b4d39}}
 .ab-box{{margin-top:16px;border-top:1px solid #e6dfd0;padding-top:12px}}
@@ -620,35 +704,42 @@ header p{{margin:4px 0 0;font-size:12px;color:#cfc4a8}}
 .slides-strip{{display:flex;gap:6px;overflow-x:auto;padding-bottom:4px;margin-bottom:8px}}
 .slides-strip img{{height:66px;width:auto;border-radius:5px;border:2px solid transparent;cursor:pointer;opacity:.75}}
 .slides-strip img.active{{border-color:#15211b;opacity:1}}
-textarea{{width:100%;min-height:84px;padding:8px;border:1px solid #c9c1ae;border-radius:7px;background:#faf8f3;font:12.5px system-ui;margin-top:6px}}
+textarea{{width:100%;min-height:76px;padding:8px;border:1px solid #c9c1ae;border-radius:7px;background:#faf8f3;font:12.5px system-ui;margin-top:5px}}
+label.field-lbl{{display:block;font-size:11px;font-weight:700;color:#4a463d;margin-top:8px;text-transform:uppercase;letter-spacing:.04em}}
 </style>
 </head>
 <body>
 <header>
   <div>
-    <h1>@artfolio.db · 30 Günlük Gerçek Müze Profil Provası</h1>
-    <p>4 Kaydırmalı + 2 Reels / gün · En yeni gönderi sol üstte · Yalnızca doğrulanmış kamu malı müze eserleri</p>
+    <h1>@artfolio.db · 30 Günlük Gerçek Müze Profil Provası (v2)</h1>
+    <p>4 Kaydırmalı + 2 Reels / gün · Küratör Brifi + Doğal Ses + 3:4 / 4:5 / 9:16 + Preflight Denetimi</p>
   </div>
   <div>
     <span class="pill">{s['rendered_posts']} gönderi ({s['completed_days']} gün)</span>
-    <span class="pill">{s['unique_artworks_used']} benzersiz eser · {s['unique_artists_used']} sanatçı</span>
+    <span class="pill">{s['unique_artworks_used']} eser · {s['unique_artists_used']} sanatçı</span>
     <span class="pill">{s['unique_designs_used']} tasarım · {s['unique_layout_families_used']} aile</span>
+    <span class="pill">Preflight: {s.get('preflight', {}).get('error_count', 0)} hata / {s.get('preflight', {}).get('warning_count', 0)} uyarı</span>
   </div>
 </header>
 
 <div class="toolbar">
   <div class="btn-group">
-    <strong>Profil Günü:</strong>
-    <button type="button" class="btn" data-day="1">1. Gün Sonu</button>
-    <button type="button" class="btn" data-day="7">7. Gün Sonu</button>
-    <button type="button" class="btn" data-day="14">14. Gün Sonu</button>
-    <button type="button" class="btn" data-day="{max(1, max_day - 1)}">{max(1, max_day - 1)}. Gün Sonu</button>
-    <button type="button" class="btn active" data-day="{max_day}">{max_day}. Gün Sonu (Tüm Ay)</button>
-    <label style="font-size:12px;margin-left:6px">Gün <input id="day-slider" type="range" min="1" max="{max_day}" value="{max_day}"> <strong id="day-val">{max_day}</strong></label>
+    <strong>Yayın Anı:</strong>
+    <button type="button" class="btn" data-slot="1">1. Gönderi</button>
+    <button type="button" class="btn" data-slot="3">3. Gönderi</button>
+    <button type="button" class="btn" data-slot="5">5. Gönderi</button>
+    <button type="button" class="btn" data-slot="6">1. Gün (6)</button>
+    <button type="button" class="btn" data-slot="42">7. Gün (42)</button>
+    <button type="button" class="btn" data-slot="84">14. Gün (84)</button>
+    <button type="button" class="btn" data-slot="{max(1, s['rendered_posts'] - 6)}">29. Gün</button>
+    <button type="button" class="btn active" data-slot="{s['rendered_posts']}">30. Gün ({s['rendered_posts']})</button>
+    <label style="font-size:12px;margin-left:4px">Slot <input id="slot-slider" type="range" min="1" max="{max(1, s['rendered_posts'])}" value="{max(1, s['rendered_posts'])}"> <strong id="slot-val">{s['rendered_posts']}</strong></label>
   </div>
   <div class="btn-group">
+    <button type="button" class="btn active" id="btn-ratio-3x4">3:4 Profil Hücresi</button>
+    <button type="button" class="btn" id="btn-ratio-4x5">4:5 Tam Gönderi</button>
     <button type="button" class="btn active" id="btn-phone">Telefon (390px)</button>
-    <button type="button" class="btn" id="btn-wide">Geniş Görünüm</button>
+    <button type="button" class="btn" id="btn-wide">Geniş</button>
   </div>
 </div>
 
@@ -661,15 +752,16 @@ textarea{{width:100%;min-height:84px;padding:8px;border:1px solid #c9c1ae;border
         <div class="ig-stats" id="ig-stats"></div>
       </div>
     </div>
-    <div class="ig-grid" id="ig-grid"></div>
+    <div class="ig-grid ratio-3x4" id="ig-grid"></div>
     <div class="meta" style="margin:8px 4px 0;font-size:11px">
-      Varsayım: Canlı sabitlenmiş gönderi ve gizli Reel ayarına çevrimdışı erişilemediği için varsayılan görünüm saf kronolojiktir (en yeni sol üstte); hücre içinden yerelde en fazla 3 sabitleme denenebilir.
+      3:4 Instagram profil kırpımı aktiftir; 1., 3. veya 5. gönderi butonlarıyla tek/çift sütun kaymalarını kontrol edebilirsiniz.
     </div>
   </section>
 
   <aside class="panel inspector">
     <h2 id="ins-title" style="margin:0 0 4px;font:20px Georgia,serif">Bir gönderi seçin</h2>
     <p class="meta" id="ins-meta"></p>
+    <div class="brief-box" id="ins-brief"></div>
     <div class="note" id="ins-note" style="display:none"></div>
     <img class="hero" id="ins-hero" alt="Önizleme">
     <div class="swipe-bar" id="swipe-bar">
@@ -679,13 +771,26 @@ textarea{{width:100%;min-height:84px;padding:8px;border:1px solid #c9c1ae;border
     </div>
     <div class="slides-strip" id="slides-strip"></div>
     <video id="ins-video" controls style="display:none;width:100%;max-height:300px;border-radius:8px;background:#000;margin:8px 0"></video>
-    <div class="btn-group" style="margin-bottom:8px">
-      <button type="button" class="btn" id="btn-pin-local">Yerelde Sabitle / Kaldır (max 3)</button>
-      <button type="button" class="btn" id="btn-show-9x16" style="display:none">9:16 Reels Kapağını Gör</button>
-      <button type="button" class="btn" id="btn-show-4x5" style="display:none">4:5 Grid Kapağını Gör</button>
+    <div class="btn-group" style="margin-bottom:6px">
+      <button type="button" class="btn" id="btn-pin-local">Yerelde Sabitle (max 3)</button>
+      <button type="button" class="btn" id="btn-show-9x16" style="display:none">9:16 Reels Kapağı</button>
+      <button type="button" class="btn" id="btn-show-4x5" style="display:none">4:5 Grid Kapağı</button>
     </div>
+    <div class="fb-row">
+      <button type="button" class="btn" data-fb="approved">✓ Onayla</button>
+      <button type="button" class="btn" data-fb="text_too_generic">Metin fazla genel</button>
+      <button type="button" class="btn" data-fb="crop_bad">Kırpım kötü</button>
+      <button type="button" class="btn" data-fb="pair_works_well">İkili iyi çalışıyor</button>
+      <button type="button" class="btn" id="btn-export-fb">Tercihleri JSON İndir</button>
+    </div>
+    <div class="meta" id="fb-status"></div>
     <div id="ins-artworks"></div>
+    <label class="field-lbl">Caption (İngilizce — Doğal Ses)</label>
     <textarea id="ins-caption" readonly></textarea>
+    <label class="field-lbl">İlk Yorum (Müze Kaynağı & Hak Künyesi)</label>
+    <textarea id="ins-first-comment" readonly style="min-height:58px"></textarea>
+    <label class="field-lbl">Alternatif Metin (Alt-Text — Görsel Betimleme)</label>
+    <textarea id="ins-alt-text" readonly style="min-height:48px"></textarea>
 
     <div class="ab-box">
       <strong>Aynı 9 Gerçek Eser · Eski Seçici vs Yeni Seçici (3×3 Karşılaştırma)</strong>
@@ -697,38 +802,46 @@ textarea{{width:100%;min-height:84px;padding:8px;border:1px solid #c9c1ae;border
 <script type="application/json" id="rehearsal-data">{payload}</script>
 <script>
 const data = JSON.parse(document.getElementById('rehearsal-data').textContent);
-let activeDay = {max_day};
+let activeSlot = data.posts.length;
 let selectedId = data.posts.length ? data.posts[data.posts.length - 1].id : null;
 let selectedSlideIdx = 0;
 let localPins = [];
+let feedbackLog = JSON.parse(localStorage.getItem('artfolio_rehearsal_fb_v2') || '[]');
 
 const gridEl = document.getElementById('ig-grid');
 const statsEl = document.getElementById('ig-stats');
-const daySlider = document.getElementById('day-slider');
-const dayVal = document.getElementById('day-val');
+const slotSlider = document.getElementById('slot-slider');
+const slotVal = document.getElementById('slot-val');
 const swipeBar = document.getElementById('swipe-bar');
 const slideCounter = document.getElementById('slide-counter');
 const slidesStrip = document.getElementById('slides-strip');
 const insVideo = document.getElementById('ins-video');
 
 function visiblePosts() {{
-  const upToDay = data.posts.filter(p => p.day <= activeDay);
-  const pinned = localPins.map(id => upToDay.find(p => p.id === id)).filter(Boolean);
-  const rest = upToDay.filter(p => !localPins.includes(p.id)).reverse(); // newest top-left
+  const upTo = data.posts.slice(0, activeSlot);
+  const pinned = localPins.map(id => upTo.find(p => p.id === id)).filter(Boolean);
+  const rest = upTo.filter(p => !localPins.includes(p.id)).reverse();
   return [...pinned, ...rest];
 }}
 
 function renderGrid() {{
   const list = visiblePosts();
-  statsEl.textContent = list.length + ' gönderi · Gün ' + activeDay + ' sonu · ' + localPins.length + ' sabit';
+  const lastDay = list.length ? Math.max(...list.map(p => p.day)) : 0;
+  statsEl.textContent = list.length + ' gönderi · Gün ' + lastDay + ' · ' + localPins.length + ' sabit';
   gridEl.innerHTML = '';
   for (const p of list) {{
     const btn = document.createElement('button');
     btn.type = 'button';
     btn.className = 'cell' + (p.id === selectedId ? ' selected' : '');
     const pinTag = localPins.includes(p.id) ? '<span class="badge-tl">SABİT</span>' : '';
-    const fmtTag = p.post_format === 'reel' ? '<span class="badge-tr">REEL</span>' : '<span class="badge-tr">1/' + (p.slide_count || 1) + '</span>';
-    btn.innerHTML = '<img src="' + p.image_path + '" alt="">' + pinTag + fmtTag;
+    let fmtTag = '';
+    if (p.post_format === 'reel') {{
+      fmtTag = p.reel_mp4_path ? '<span class="badge-tr mp4">REEL MP4</span>' : '<span class="badge-tr">REEL KAPAK</span>';
+    }} else {{
+      fmtTag = '<span class="badge-tr">1/' + (p.slide_count || 1) + '</span>';
+    }}
+    const slotTag = '<span class="badge-bl">#' + p.slot_number + '</span>';
+    btn.innerHTML = '<img src="' + p.image_path + '" alt="">' + pinTag + fmtTag + slotTag;
     btn.addEventListener('click', () => {{ selectedId = p.id; selectedSlideIdx = 0; renderGrid(); renderInspector(); }});
     gridEl.appendChild(btn);
   }}
@@ -747,10 +860,16 @@ function renderInspector() {{
   if (!p) return;
   selectedId = p.id;
   document.getElementById('ins-title').textContent = p.editorial_title;
+  const reelState = p.post_format === 'reel' ? (' · Durum: ' + (p.reel_mp4_path ? 'MP4 Üretildi' : 'Sadece Kapak Hazır')) : '';
   document.getElementById('ins-meta').textContent =
-    'Gün ' + p.day + ' · ' + p.scheduled_label + ' · ' + p.post_format.toUpperCase() +
-    ' · Tasarım: ' + p.design_id + ' [' + p.family + '] · Sebep: ' + (p.decision_reasons || []).join(', ');
+    'Slot #' + p.slot_number + ' (Gün ' + p.day + ') · ' + p.scheduled_label + ' · ' + p.post_format.toUpperCase() +
+    ' · Tasarım: ' + p.design_id + ' [' + p.family + ']' + reelState;
+  document.getElementById('ins-brief').innerHTML =
+    '<strong>Küratör Açısı:</strong> ' + (p.curatorial_angle || '—') + ' — ' + (p.curatorial_basis || '') +
+    (p.reel_subtitle_en ? ('<br><strong>Reel 3sn Altyazı:</strong> "' + p.reel_subtitle_en + '"') : '');
   document.getElementById('ins-caption').value = p.caption_en || '';
+  document.getElementById('ins-first-comment').value = p.first_comment_en || '';
+  document.getElementById('ins-alt-text').value = p.alt_text_en || '';
 
   const slides = (p.slides && p.slides.length) ? p.slides : [p.image_path];
   if (selectedSlideIdx >= slides.length) selectedSlideIdx = 0;
@@ -778,9 +897,8 @@ function renderInspector() {{
   const notes = [];
   if (p.anniversary_note) notes.push('📅 ' + p.anniversary_note);
   if (p.revisit_note) notes.push('🔁 ' + p.revisit_note);
-  if (p.visual_similarity_flags && p.visual_similarity_flags.length) {{
-    notes.push('⚠️ Görsel benzerlik uyarısı (otomatik elenmedi): ' + p.visual_similarity_flags.map(f => f.left_id + ' ↔ ' + f.right_id + ' (d=' + f.dhash_distance + ')').join('; '));
-  }}
+  const pfDefs = (data.summary.preflight && data.summary.preflight.defects || []).filter(d => d.post_id === p.id);
+  if (pfDefs.length) notes.push('⚠️ Preflight: ' + pfDefs.map(d => d.code + ' (' + d.fix_hint + ')').join('; '));
   const noteEl = document.getElementById('ins-note');
   noteEl.style.display = notes.length ? 'block' : 'none';
   noteEl.textContent = notes.join(' | ');
@@ -788,6 +906,9 @@ function renderInspector() {{
   const isReel = p.post_format === 'reel' && Boolean(p.reel_cover_9x16_path);
   document.getElementById('btn-show-9x16').style.display = isReel ? 'inline-block' : 'none';
   document.getElementById('btn-show-4x5').style.display = isReel ? 'inline-block' : 'none';
+
+  const prevFb = feedbackLog.filter(f => f.post_id === p.id).map(f => f.tag);
+  document.getElementById('fb-status').textContent = prevFb.length ? ('Kayıtlı tercihlerin: ' + prevFb.join(', ')) : 'Henüz tercih kaydedilmedi.';
 
   document.getElementById('ins-artworks').innerHTML = p.artworks.map(a =>
     '<div class="art-card">' +
@@ -798,23 +919,33 @@ function renderInspector() {{
   ).join('');
 }}
 
-document.querySelectorAll('[data-day]').forEach(btn => {{
+document.querySelectorAll('[data-slot]').forEach(btn => {{
   btn.addEventListener('click', () => {{
-    activeDay = Number(btn.dataset.day);
-    daySlider.value = String(activeDay);
-    dayVal.textContent = String(activeDay);
-    document.querySelectorAll('[data-day]').forEach(b => b.classList.toggle('active', b === btn));
+    activeSlot = Math.min(data.posts.length, Math.max(1, Number(btn.dataset.slot)));
+    slotSlider.value = String(activeSlot);
+    slotVal.textContent = String(activeSlot);
+    document.querySelectorAll('[data-slot]').forEach(b => b.classList.toggle('active', b === btn));
     const vis = visiblePosts();
     if (vis.length) {{ selectedId = vis[0].id; selectedSlideIdx = 0; }}
     renderGrid(); renderInspector();
   }});
 }});
-daySlider.addEventListener('input', () => {{
-  activeDay = Number(daySlider.value);
-  dayVal.textContent = String(activeDay);
+slotSlider.addEventListener('input', () => {{
+  activeSlot = Number(slotSlider.value);
+  slotVal.textContent = String(activeSlot);
   const vis = visiblePosts();
   if (vis.length) {{ selectedId = vis[0].id; selectedSlideIdx = 0; }}
   renderGrid(); renderInspector();
+}});
+document.getElementById('btn-ratio-3x4').addEventListener('click', () => {{
+  gridEl.classList.add('ratio-3x4');
+  document.getElementById('btn-ratio-3x4').classList.add('active');
+  document.getElementById('btn-ratio-4x5').classList.remove('active');
+}});
+document.getElementById('btn-ratio-4x5').addEventListener('click', () => {{
+  gridEl.classList.remove('ratio-3x4');
+  document.getElementById('btn-ratio-4x5').classList.add('active');
+  document.getElementById('btn-ratio-3x4').classList.remove('active');
 }});
 document.getElementById('btn-phone').addEventListener('click', () => {{
   document.getElementById('layout').classList.remove('wide');
@@ -838,6 +969,27 @@ document.getElementById('btn-show-9x16').addEventListener('click', () => {{
 document.getElementById('btn-show-4x5').addEventListener('click', () => {{
   const p = data.posts.find(x => x.id === selectedId);
   if (p) document.getElementById('ins-hero').src = p.image_path;
+}});
+document.querySelectorAll('[data-fb]').forEach(btn => {{
+  btn.addEventListener('click', () => {{
+    const p = data.posts.find(x => x.id === selectedId);
+    if (!p) return;
+    feedbackLog.push({{
+      timestamp_utc: new Date().toISOString(),
+      post_id: p.id,
+      tag: btn.dataset.fb,
+      artwork_ids: p.artworks.map(a => a.canonical_id),
+      design_id: p.design_id,
+      design_family: p.family,
+      copy_version: p.copy_version || 'artfolio-voice-v2',
+    }});
+    localStorage.setItem('artfolio_rehearsal_fb_v2', JSON.stringify(feedbackLog));
+    renderInspector();
+  }});
+}});
+document.getElementById('btn-export-fb').addEventListener('click', () => {{
+  const blob = new Blob([JSON.stringify({{ schema_version: 'artfolio-editorial-feedback-v1', feedback: feedbackLog }}, null, 2)], {{ type: 'application/json' }});
+  const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = 'artfolio_editorial_feedback.json'; a.click();
 }});
 document.getElementById('btn-prev-slide').addEventListener('click', () => {{
   const p = data.posts.find(x => x.id === selectedId);

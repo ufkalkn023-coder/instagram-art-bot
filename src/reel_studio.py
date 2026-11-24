@@ -145,7 +145,7 @@ def _build_storyboard_frames(
             d1.rectangle((64, y0, REEL_W - 160, y0 + band_h), fill=col)
             fg = PURE_WHITE if ink(col) != "#1a1915" else INK
             d1.text((96, y0 + 58), hexcol(col), font=F("mono_b", 32), fill=fg)
-        draw_brand_tag(d1, 64, 250, GOLD, "5 REAL PIGMENTS FROM ONE MASTERWORK")
+        draw_brand_tag(d1, 64, 250, GOLD, "5 SAMPLED TONES FROM THE CANVAS")
         draw_fit_text(d1, editorial_title, (64, 1340), "didot", 58, REEL_W - 220, PURE_WHITE, max_lines=2)
     elif preset == "slow_pan_horizontal":
         f1 = cover_crop(pil, REEL_W, REEL_H, focus=(max(0.18, focus[0] - 0.22), focus[1]), zoom=1.45)
@@ -241,7 +241,7 @@ def verify_reel_mp4(video_path: str | Path) -> dict:
 def default_kinetic_hook(artwork: AstraArtworkInput, preset: ReelMotionPreset) -> str:
     """Concise, mute-friendly 1-sentence observation shown during the first 3 seconds of a Reel."""
     if preset == "palette_reveal":
-        return f"Five real pigments drawn directly from {artwork.artist}'s surface."
+        return f"Five sampled tones drawn from {artwork.artist}'s surface."
     if preset == "slow_pan_horizontal":
         return f"Follow the eye slowly across {artwork.title}."
     if preset == "chiaroscuro_zoom":
