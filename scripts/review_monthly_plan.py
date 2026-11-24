@@ -68,7 +68,7 @@ def run(argv: list[str] | None = None) -> int:
 
     car_cmd = sub.add_parser(
         "build-carousel-delivery",
-        help="Build portable weekly Carousel delivery package (2-tier pairing, single-work fallback, exact slide numbering)",
+        help="Build portable weekly Carousel delivery package (auto-fetch pool top-up, 2-tier pairing, exact slide numbering)",
     )
     car_cmd.add_argument("--pool", type=Path, required=True, help="Verified museum pool_index.json path")
     car_cmd.add_argument("--output", type=Path, required=True, help="Destination directory for portable weekly package")
@@ -76,7 +76,25 @@ def run(argv: list[str] | None = None) -> int:
     car_cmd.add_argument("--days", type=int, default=30, help="Days to generate when building fresh without --from-rehearsal")
     car_cmd.add_argument("--carousels-per-day", type=int, default=4)
     car_cmd.add_argument("--reels-per-day", type=int, default=2)
-    car_cmd.add_argument("--reuse-ledger", type=Path, default=None, help="180-day ArtworkReuseLedger JSON to prevent repeats across consecutive months")
+    car_cmd.add_argument("--month-id", type=str, default=None, help="Stable month/plan ID (e.g. 2026-12); defaults to output folder name")
+    car_cmd.add_argument(
+        "--status",
+        choices=["preview", "reserved", "published"],
+        default="reserved",
+        help="Reuse ledger lifecycle state: preview (non-blocking), reserved (default), or published",
+    )
+    car_cmd.add_argument(
+        "--auto-fetch",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="Automatically top up pool_index.json from working museum adapters when eligible Carousels fall short (default: enabled)",
+    )
+    car_cmd.add_argument(
+        "--reuse-ledger",
+        type=Path,
+        default=None,
+        help="180-day ArtworkReuseLedger JSON (defaults to <pool_dir>/carousel_reuse_ledger.json)",
+    )
 
     args = parser.parse_args(argv)
     try:
@@ -103,16 +121,41 @@ def run(argv: list[str] | None = None) -> int:
         if args.command == "build-carousel-delivery":
             import tempfile
             from src.carousel_delivery import build_weekly_carousel_delivery
+            from src.museum_pool import (
+                ArtworkReuseLedger,
+                calculate_carousel_only_artwork_need,
+                ensure_carousel_pool_supply,
+            )
             from src.profile_rehearsal import build_real_museum_rehearsal
+
+            ledger_path = (args.reuse_ledger or (args.pool.resolve().parent / "carousel_reuse_ledger.json")).resolve()
+            month_id = args.month_id or args.output.resolve().name
+            supply_report = None
 
             if args.from_rehearsal is not None:
                 res = build_weekly_carousel_delivery(
                     args.from_rehearsal,
                     args.pool,
                     args.output,
-                    reuse_ledger_path=args.reuse_ledger,
+                    reuse_ledger_path=ledger_path,
+                    plan_id=month_id,
+                    ledger_status=args.status,
+                    requested_days=args.days,
+                    carousels_per_day=args.carousels_per_day,
                 )
             else:
+                need = calculate_carousel_only_artwork_need(
+                    days=args.days,
+                    carousels_per_day=args.carousels_per_day,
+                    reels_per_day=args.reels_per_day,
+                )
+                if args.auto_fetch:
+                    supply_report = ensure_carousel_pool_supply(
+                        args.pool,
+                        needed_fresh_artworks=need["carousel_gross_artwork_slots"],
+                        reuse_ledger=ArtworkReuseLedger(ledger_path),
+                        current_plan_id=month_id,
+                    )
                 pool_arts = json.loads(args.pool.read_text(encoding="utf-8"))["artworks"]
                 with tempfile.TemporaryDirectory(prefix="artfolio-rehearsal-stage-") as stage:
                     build_real_museum_rehearsal(
@@ -122,20 +165,36 @@ def run(argv: list[str] | None = None) -> int:
                         carousels_per_day=args.carousels_per_day,
                         reels_per_day=args.reels_per_day,
                         render_sample_mp4_count=0,
-                        reuse_ledger_path=args.reuse_ledger,
+                        reuse_ledger_path=ledger_path,
+                        plan_id=month_id,
+                        ledger_status=args.status,
+                        record_ledger=False,
+                        carousel_only_need=True,
                     )
                     res = build_weekly_carousel_delivery(
                         stage,
                         args.pool,
                         args.output,
-                        reuse_ledger_path=args.reuse_ledger,
+                        reuse_ledger_path=ledger_path,
+                        plan_id=month_id,
+                        ledger_status=args.status,
+                        supply_report=supply_report,
+                        requested_days=args.days,
+                        carousels_per_day=args.carousels_per_day,
                     )
             s = res["summary"]
+            sup = s.get("auto_supply_report") or {}
+            reel_c = s.get("reel_preview_consumption") or {}
             print(
                 f"Carousel delivery ready: {res['html_path']} "
-                f"(shareable={s['shareable_carousels']}/{s['total_carousels']}, "
-                f"slides={s['total_carousel_slides']}, slide_dist={s['slide_count_distribution']}, "
-                f"repaired={s['repaired_multi_work_carousels']}, fallback_single={s['auto_fallback_to_single_carousels']}, "
+                f"(month={s.get('plan_id')}, status={s.get('ledger_status')}, "
+                f"shareable={s['shareable_carousels']}/{s['expected_carousels']}, "
+                f"carousel_unique_works={s.get('actual_unique_carousel_artworks_used')}, "
+                f"reel_preview_covers={reel_c.get('reel_covers_total', 0)}, "
+                f"auto_added={sup.get('added_total', 0)} {sup.get('added_by_museum', {})}, "
+                f"rejected={sup.get('rejected_total', 0)}, "
+                f"missing_days={len(s.get('missing_carousel_days', []))}, "
+                f"ledger={s.get('reuse_ledger_path')}, "
                 f"preflight_errors={s['preflight']['error_count']})"
             )
             return 0

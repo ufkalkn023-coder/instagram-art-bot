@@ -31,7 +31,7 @@ from src.monthly_planner import (
     PilotArtworkRecord,
     _render_inner_carousel_slides,
 )
-from src.museum_pool import ArtworkReuseLedger
+from src.museum_pool import ArtworkReuseLedger, calculate_carousel_only_artwork_need
 from src.neon_kit import parse_year, short_museum
 from src.preflight_and_feedback import run_preflight_checks
 
@@ -67,24 +67,40 @@ _SEASONAL_PENDANT_PAIRS: tuple[frozenset[str], ...] = (
 )
 
 
-def _extract_series_key(artwork: dict) -> tuple[str, str]:
-    """Return (series_key, relation_source_field) for explicit museum-documented pair/series/study links."""
+def _extract_series_key(artwork: dict) -> tuple[str, str, str]:
+    """Return (series_key, relation_source_field, relation_evidence) for explicit museum-documented links."""
     if artwork.get("pair_group"):
-        return f"pair:{str(artwork['pair_group']).strip().lower()}", "metadata.pair_group"
+        val = str(artwork["pair_group"]).strip()
+        return f"pair:{val.lower()}", "metadata.pair_group", f"metadata.pair_group={val}"
     if artwork.get("series_id"):
-        return f"series:{str(artwork['series_id']).strip().lower()}", "metadata.series_id"
+        val = str(artwork["series_id"]).strip()
+        return f"series:{val.lower()}", "metadata.series_id", f"metadata.series_id={val}"
     title = (artwork.get("title") or "").strip()
     if re.search(r"\(\s*one of a pair\s*\)", title, re.IGNORECASE):
         artist_norm = (artwork.get("artist_normalized") or artwork.get("artist") or "").strip().lower()
-        inst = (artwork.get("institution") or "").strip().lower()
-        return f"one_of_a_pair:{artist_norm}:{inst}", "title:one_of_a_pair"
+        inst = (artwork.get("institution") or "").strip()
+        return (
+            f"one_of_a_pair:{artist_norm}:{inst.lower()}",
+            "title:one_of_a_pair",
+            f"title:one_of_a_pair='{title}' ({inst})",
+        )
     m_from = re.search(r"from (?:an?|the)\s+([A-Za-z0-9' -]{4,40})", title, re.IGNORECASE)
     if m_from:
-        return f"series:{m_from.group(1).strip().lower()}", "title:series_reference"
+        series_name = m_from.group(1).strip()
+        return (
+            f"series:{series_name.lower()}",
+            "title:series_reference",
+            f"title:series_reference='{series_name}'",
+        )
     m_study = re.search(r"(?:sketch|study)\s+for\s+[\"'“]?([^\"'”.,;]{4,40})", title, re.IGNORECASE)
     if m_study:
-        return f"study:{m_study.group(1).strip().lower()}", "title:preparatory_study"
-    return "", ""
+        target = m_study.group(1).strip()
+        return (
+            f"study:{target.lower()}",
+            "title:preparatory_study",
+            f"title:preparatory_study='{title}'",
+        )
+    return "", "", ""
 
 
 def _artwork_visual_facts(artwork: dict) -> dict:
@@ -104,15 +120,17 @@ def _artwork_visual_facts(artwork: dict) -> dict:
 def evaluate_multi_work_connection(artworks: Sequence[dict]) -> dict:
     """Strictly separate museum-documented pairs/series from editorial pairings.
 
-    1) documented_pair_or_series:
-       - Explicit metadata.pair_group / metadata.series_id
+    1) documented_pair_or_series (ONLY when explicit museum linking evidence exists):
+       - metadata.pair_group / metadata.series_id
+       - metadata.companion_catalog_ids linking the works' catalog/canonical IDs
+       - metadata.museum_relation_note explicitly naming the companion/pair
        - Museum title '(one of a pair)' shared by same artist & institution
        - Preparatory study ('Sketch/Study for X') matched with finished work 'X'
-       - Same artist + same museum + same creation year + complementary pendant titles (Summer/Winter, Morning/Evening, etc.)
-       Records `relation_source_field`!
+       Records `relation_source_field` AND `relation_evidence`!
     2) editorial_same_artist:
-       - Two works by the same non-anonymous artist that are NOT a documented pair/series.
-       - Records `editorial_bond_en` describing what the viewer concretely sees (year span, tone shift, or framing shift).
+       - Two works by the same non-anonymous artist WITHOUT an explicit museum catalog/series link
+         (including same-year pendant candidates like Summer/Winter used for candidate discovery only).
+       - Records `editorial_bond_en` describing what the viewer concretely sees.
     3) editorial_visual_contrast:
        - Shared concrete motif across different artists + measurable visible contrast (>=80yr era gap, dark vs daylight, or vertical vs horizontal).
        - Records `editorial_bond_en`.
@@ -122,6 +140,8 @@ def evaluate_multi_work_connection(artworks: Sequence[dict]) -> dict:
             "strong": False,
             "tier": "none",
             "relation_source_field": "",
+            "relation_evidence": "",
+            "candidate_discovery_hint": "",
             "editorial_bond_en": "",
             "motif_slug": "single",
             "theme_label": "",
@@ -132,6 +152,7 @@ def evaluate_multi_work_connection(artworks: Sequence[dict]) -> dict:
     series_info = [_extract_series_key(a) for a in cleaned]
     series_keys = [s[0] for s in series_info]
     series_fields = [s[1] for s in series_info]
+    series_evidences = [s[2] for s in series_info]
     facts = [_artwork_visual_facts(a) for a in cleaned]
     years = [f["year"] for f in facts if f["year"] is not None]
     tones = {f["tone_band"] for f in facts}
@@ -141,11 +162,14 @@ def evaluate_multi_work_connection(artworks: Sequence[dict]) -> dict:
     non_empty_series = [k for k in series_keys if k]
     if len(non_empty_series) == len(cleaned) and len(set(non_empty_series)) == 1:
         src_field = series_fields[0]
+        evidence = series_evidences[0]
         label = non_empty_series[0].split(":", 1)[1].replace(":", " · ").title()
         return {
             "strong": True,
             "tier": "documented_pair_or_series",
             "relation_source_field": src_field,
+            "relation_evidence": evidence,
+            "candidate_discovery_hint": "",
             "editorial_bond_en": "",
             "motif_slug": "documented_series",
             "theme_label": f"Documented Pair / Series ({label[:42]})",
@@ -155,50 +179,79 @@ def evaluate_multi_work_connection(artworks: Sequence[dict]) -> dict:
             ),
         }
 
-    # --- 1B: Study-to-finished link ---
+    # --- 1B: Explicit companion_catalog_ids or museum_relation_note cross-reference ---
     if len(cleaned) == 2:
-        t0, t1 = cleaned[0]["title"].lower(), cleaned[1]["title"].lower()
-        for study_s, fin_s in ((t0, t1), (t1, t0)):
+        id_sets = [
+            {str(x).strip() for x in (a.get("canonical_id"), a.get("source_id"), a.get("source_key")) if x}
+            for a in cleaned
+        ]
+        comp_0 = {str(x).strip() for x in (cleaned[0].get("companion_catalog_ids") or []) if x}
+        comp_1 = {str(x).strip() for x in (cleaned[1].get("companion_catalog_ids") or []) if x}
+        if comp_0.intersection(id_sets[1]) or comp_1.intersection(id_sets[0]):
+            matched = sorted(comp_0.intersection(id_sets[1]) or comp_1.intersection(id_sets[0]))
+            return {
+                "strong": True,
+                "tier": "documented_pair_or_series",
+                "relation_source_field": "metadata.companion_catalog_ids",
+                "relation_evidence": f"metadata.companion_catalog_ids={matched}",
+                "candidate_discovery_hint": "",
+                "editorial_bond_en": "",
+                "motif_slug": "documented_series",
+                "theme_label": "Documented Companion Pair",
+                "reason_en": "Museum catalog IDs explicitly cross-reference these two works as documented companions.",
+            }
+
+        note_0 = str(cleaned[0].get("museum_relation_note") or "").strip()
+        note_1 = str(cleaned[1].get("museum_relation_note") or "").strip()
+        t0_low, t1_low = cleaned[0]["title"].lower(), cleaned[1]["title"].lower()
+        if (note_0 and t1_low in note_0.lower()) or (note_1 and t0_low in note_1.lower()):
+            ev_note = note_0 if (note_0 and t1_low in note_0.lower()) else note_1
+            return {
+                "strong": True,
+                "tier": "documented_pair_or_series",
+                "relation_source_field": "metadata.museum_relation_note",
+                "relation_evidence": f"metadata.museum_relation_note='{ev_note[:120]}'",
+                "candidate_discovery_hint": "",
+                "editorial_bond_en": "",
+                "motif_slug": "documented_series",
+                "theme_label": "Documented Companion Pair",
+                "reason_en": "The museum's own catalog description explicitly identifies these two works as companions.",
+            }
+
+        # --- 1C: Study-to-finished link ---
+        for study_s, fin_s in ((t0_low, t1_low), (t1_low, t0_low)):
             m = re.search(r"(?:sketch|study)\s+for\s+[\"'“]?([^\"'”.,;]{4,40})", study_s)
             if m and m.group(1).strip().lower() in fin_s:
                 return {
                     "strong": True,
                     "tier": "documented_pair_or_series",
                     "relation_source_field": "title:preparatory_study_match",
+                    "relation_evidence": f"title:preparatory_study_match='{study_s}' -> '{fin_s}'",
+                    "candidate_discovery_hint": "",
                     "editorial_bond_en": "",
                     "motif_slug": "study_vs_finished",
                     "theme_label": "Preparatory Study & Finished Work",
                     "reason_en": "Putting the preparatory study beside the finished composition lets the viewer spot which lines and figures survived into the final painting.",
                 }
 
-    # --- 1C: Documented seasonal/pendant pair (same artist + same museum + same year + pendant title polarity) ---
+    # --- 2: Editorial Same-Artist Pairing (includes year+artist+title pendant candidates without explicit catalog link!) ---
     non_anon_artists = [a["artist_short"].lower() for a in cleaned if not a["is_anonymous"]]
     same_artist = len(non_anon_artists) == len(cleaned) and len(set(non_anon_artists)) == 1
-    same_museum = len({(a.get("institution") or "").strip().lower() for a in cleaned}) == 1
     same_year = len(years) == len(cleaned) and len(set(years)) == 1
-    if len(cleaned) == 2 and same_artist and same_museum and same_year:
-        t_words = [set(re.findall(r"[a-z]+", a["title"].lower())) for a in cleaned]
-        for pair_words in _SEASONAL_PENDANT_PAIRS:
-            w_list = sorted(pair_words)
-            if (w_list[0] in t_words[0] and w_list[1] in t_words[1]) or (w_list[1] in t_words[0] and w_list[0] in t_words[1]):
-                artist_name = cleaned[0]["artist_short"]
-                return {
-                    "strong": True,
-                    "tier": "documented_pair_or_series",
-                    "relation_source_field": "title+artist+date+museum:companion_pendant",
-                    "editorial_bond_en": "",
-                    "motif_slug": "companion_pendant",
-                    "theme_label": f"Companion Pendants ({artist_name}, {years[0]})",
-                    "reason_en": (
-                        f"Painted in the same year ({years[0]}) by {artist_name} and held in the same collection, "
-                        f"these {w_list[0]}/{w_list[1]} pendants contrast opposing seasons directly."
-                    ),
-                }
-
-    # --- 2: Editorial Same-Artist Pairing (NOT a museum-documented pair — records concrete visible bond!) ---
     if same_artist:
         artist_name = cleaned[0]["artist_short"]
+        discovery_hint = ""
         bonds: list[str] = []
+        if len(cleaned) == 2 and same_year:
+            t_words = [set(re.findall(r"[a-z]+", a["title"].lower())) for a in cleaned]
+            for pair_words in _SEASONAL_PENDANT_PAIRS:
+                w_list = sorted(pair_words)
+                if (w_list[0] in t_words[0] and w_list[1] in t_words[1]) or (w_list[1] in t_words[0] and w_list[0] in t_words[1]):
+                    discovery_hint = "year_artist_title_pendant_candidate"
+                    bonds.append(
+                        f"places {artist_name}'s {years[0]} {w_list[0]} and {w_list[1]} canvases side by side (shared year/artist/title motif, curated editorially without an explicit catalog pair ID)"
+                    )
+                    break
         if len(years) >= 2 and max(years) != min(years):
             bonds.append(f"traces {artist_name}'s shift across {max(years) - min(years)} years ({min(years)}–{max(years)})")
         if "dark" in tones and "light" in tones:
@@ -212,6 +265,8 @@ def evaluate_multi_work_connection(artworks: Sequence[dict]) -> dict:
             "strong": True,
             "tier": "editorial_same_artist",
             "relation_source_field": "",
+            "relation_evidence": "",
+            "candidate_discovery_hint": discovery_hint,
             "editorial_bond_en": f"Editorial pairing of two separate {artist_name} works: {bond_text}.",
             "motif_slug": "same_artist_dialogue",
             "theme_label": f"Editorial Study · {artist_name}",
@@ -237,6 +292,8 @@ def evaluate_multi_work_connection(artworks: Sequence[dict]) -> dict:
                 "strong": True,
                 "tier": "editorial_visual_contrast",
                 "relation_source_field": "",
+                "relation_evidence": "",
+                "candidate_discovery_hint": "",
                 "editorial_bond_en": bond,
                 "motif_slug": slugs[0],
                 "theme_label": f"{theme} · {span} Years Apart",
@@ -248,6 +305,8 @@ def evaluate_multi_work_connection(artworks: Sequence[dict]) -> dict:
                 "strong": True,
                 "tier": "editorial_visual_contrast",
                 "relation_source_field": "",
+                "relation_evidence": "",
+                "candidate_discovery_hint": "",
                 "editorial_bond_en": bond,
                 "motif_slug": slugs[0],
                 "theme_label": f"{theme} · Dark vs. Daylight",
@@ -259,6 +318,8 @@ def evaluate_multi_work_connection(artworks: Sequence[dict]) -> dict:
                 "strong": True,
                 "tier": "editorial_visual_contrast",
                 "relation_source_field": "",
+                "relation_evidence": "",
+                "candidate_discovery_hint": "",
                 "editorial_bond_en": bond,
                 "motif_slug": slugs[0],
                 "theme_label": f"{theme} · Vertical vs. Wide Framing",
@@ -269,6 +330,8 @@ def evaluate_multi_work_connection(artworks: Sequence[dict]) -> dict:
         "strong": False,
         "tier": "none",
         "relation_source_field": "",
+        "relation_evidence": "",
+        "candidate_discovery_hint": "",
         "editorial_bond_en": "",
         "motif_slug": slugs[0],
         "theme_label": "",
@@ -485,13 +548,13 @@ def _find_strong_partner_group(
     Returns (group, connection_dict) or None if no strong partner exists (triggering single-work fallback).
     """
     lead_id = lead["canonical_id"]
-    lead_series, _ = _extract_series_key(lead)
+    lead_series, _, _ = _extract_series_key(lead)
     lead_artist = lead["artist_short"].lower() if not lead["is_anonymous"] else ""
     lead_motif, _ = classify_artwork_motif(lead)
 
     # Candidate ordering: prefer documented relations first, then same artist, then same motif, then low usage
     def _rank(c: dict) -> tuple:
-        c_series, _ = _extract_series_key(c)
+        c_series, _, _ = _extract_series_key(c)
         same_series = 0 if (lead_series and c_series == lead_series) else 1
         same_art = 0 if (lead_artist and not c["is_anonymous"] and c["artist_short"].lower() == lead_artist) else 1
         c_motif, _ = classify_artwork_motif(c)
@@ -536,11 +599,16 @@ def build_weekly_carousel_delivery(
     *,
     reuse_ledger_path: str | Path | None = None,
     cooldown_days: int = 180,
+    plan_id: str | None = None,
+    ledger_status: str = "reserved",
+    supply_report: dict | None = None,
+    requested_days: int = 30,
+    carousels_per_day: int = 4,
 ) -> dict:
     """Normal permanent Carousel delivery builder:
     - Applies strict documented vs editorial curatorial pairing (+ automatic single-work fallback).
     - Computes finalized slide plan FIRST so JPG page numbers (02/03, 03/03), filenames, per-slide Alt-Text, caption & HTML always match.
-    - Respects ArtworkReuseLedger when selecting companion works so Month 2 never accidentally pulls Month 1's works.
+    - Respects month-scoped ArtworkReuseLedger so re-opening the same month never self-blocks while Month 2 skips Month 1's works.
     """
     src_root = Path(v2_rehearsal_dir).resolve()
     out_root = Path(output_dir).resolve()
@@ -548,13 +616,18 @@ def build_weekly_carousel_delivery(
         shutil.rmtree(out_root)
     out_root.mkdir(parents=True, exist_ok=True)
 
+    effective_plan_id = plan_id or out_root.name
     v2_manifest = json.loads((src_root / "rehearsal_manifest.json").read_text(encoding="utf-8"))
     pool_raw = json.loads(Path(pool_index_path).read_text(encoding="utf-8"))["artworks"]
     pool_cleaned = [clean_museum_artwork(a) for a in pool_raw if Path(a.get("image_path", "")).is_file()]
     pool_by_id = {a["canonical_id"]: a for a in pool_cleaned}
     ledger = ArtworkReuseLedger(reuse_ledger_path) if reuse_ledger_path else None
     partner_pool = (
-        [a for a in pool_cleaned if not ledger.is_blocked(a["canonical_id"], cooldown_days=cooldown_days)]
+        [
+            a
+            for a in pool_cleaned
+            if not ledger.is_blocked(a["canonical_id"], cooldown_days=cooldown_days, current_plan_id=effective_plan_id)
+        ]
         if ledger is not None
         else pool_cleaned
     )
@@ -626,6 +699,8 @@ def build_weekly_carousel_delivery(
         pairing_theme = ""
         pairing_reason_en = ""
         relation_source_field = ""
+        relation_evidence = ""
+        candidate_discovery_hint = ""
         editorial_bond_en = ""
         pairing_decision = "single_artwork"
         re_render_cover = False
@@ -695,6 +770,8 @@ def build_weekly_carousel_delivery(
                 pairing_theme = conn["theme_label"]
                 pairing_reason_en = conn["reason_en"]
                 relation_source_field = conn.get("relation_source_field", "")
+                relation_evidence = conn.get("relation_evidence", "")
+                candidate_discovery_hint = conn.get("candidate_discovery_hint", "")
                 editorial_bond_en = conn.get("editorial_bond_en", "")
                 if len(arts) == 3:
                     headline = f"{arts[0]['artist_surname']}, {arts[1]['artist_surname']} & {arts[2]['artist_surname']}"
@@ -775,13 +852,13 @@ def build_weekly_carousel_delivery(
                 scheduled_at=post["scheduled_at"],
                 artworks=tuple(
                     PilotArtworkRecord(
-                        source_key=a["source_key"],
+                        source_key=str(a["source_key"])[:64],
                         image_path=a["image_path"],
-                        artist=a["artist"],
-                        title=a["title_clean"],
-                        date=a.get("date", ""),
-                        institution=a.get("institution", ""),
-                        museum_url=a.get("museum_url", ""),
+                        artist=str(a["artist"])[:160],
+                        title=str(a["title_clean"])[:240],
+                        date=str(a.get("date", ""))[:80],
+                        institution=str(a.get("institution", ""))[:160],
+                        museum_url=str(a.get("museum_url", ""))[:512],
                     )
                     for a in arts
                 ),
@@ -825,6 +902,8 @@ def build_weekly_carousel_delivery(
             "pairing_theme": pairing_theme,
             "pairing_reason_en": pairing_reason_en,
             "relation_source_field": relation_source_field,
+            "relation_evidence": relation_evidence,
+            "candidate_discovery_hint": candidate_discovery_hint,
             "editorial_bond_en": editorial_bond_en,
             "caption_en": caption_en,
             "first_comment_en": first_comment_en,
@@ -871,10 +950,31 @@ def build_weekly_carousel_delivery(
     shutil.rmtree(tmp_render_root, ignore_errors=True)
 
     carousels_only = [p for p in all_profile_posts if p["post_format"] == "carousel"]
-    if ledger is not None:
-        exported_cids = sorted({a["canonical_id"] for p in carousels_only for a in p["artworks"]})
-        if exported_cids:
-            ledger.mark_used(exported_cids)
+    reels_only = [p for p in all_profile_posts if p["post_format"] == "reel"]
+    exported_cids = sorted({a["canonical_id"] for p in carousels_only for a in p["artworks"]})
+    if ledger is not None and exported_cids:
+        ledger.mark_used(
+            exported_cids,
+            plan_id=effective_plan_id,
+            status=ledger_status,
+            replace_plan=True,
+        )
+
+    reel_cids = {a["canonical_id"] for p in reels_only for a in p["artworks"]}
+    carousel_cid_set = set(exported_cids)
+    carousel_need = calculate_carousel_only_artwork_need(
+        days=requested_days,
+        carousels_per_day=carousels_per_day,
+        reels_per_day=max(0, round(len(reels_only) / max(1, requested_days))),
+        fallback_single_count=fallback_to_single_count,
+    )
+    day_counts_c = Counter(p["day"] for p in carousels_only)
+    missing_carousel_days = [
+        {"day": d, "completed_carousels": day_counts_c.get(d, 0), "missing_carousels": max(0, carousels_per_day - day_counts_c.get(d, 0))}
+        for d in range(1, requested_days + 1)
+        if day_counts_c.get(d, 0) < carousels_per_day
+    ]
+    expected_carousels = requested_days * carousels_per_day
     preflight = run_preflight_checks(carousels_only, out_root)
     for d in preflight["defects"]:
         if d["severity"] == "error":
@@ -884,8 +984,24 @@ def build_weekly_carousel_delivery(
         "schema_version": "artfolio-carousel-delivery-v2",
         "profile_handle": "@artfolio.db",
         "portable": True,
+        "plan_id": effective_plan_id,
+        "ledger_status": ledger_status,
+        "reuse_ledger_path": str(ledger.path) if ledger is not None else "",
+        "expected_carousels": expected_carousels,
         "total_carousels": len(carousels_only),
         "shareable_carousels": len(carousels_only) - len({x["post_id"] for x in material_issues}),
+        "missing_carousels_count": max(0, expected_carousels - len(carousels_only)),
+        "missing_carousel_days": missing_carousel_days,
+        "actual_unique_carousel_artworks_used": len(exported_cids),
+        "carousel_artwork_need": carousel_need,
+        "reel_preview_consumption": {
+            "reel_covers_total": len(reels_only),
+            "reel_unique_artworks_in_preview": len(reel_cids),
+            "reel_only_artworks_not_in_carousels": len(reel_cids - carousel_cid_set),
+            "reel_reusing_carousel_artworks": len(reel_cids.intersection(carousel_cid_set)),
+            "excluded_from_carousel_shortfall": True,
+        },
+        "auto_supply_report": supply_report or {"auto_fetch_triggered": False},
         "total_carousel_slides": sum(p["slide_count"] for p in carousels_only),
         "slide_count_distribution": dict(sorted(slide_count_dist.items())),
         "week_breakdown": dict(sorted(week_counts.items())),
@@ -895,7 +1011,7 @@ def build_weekly_carousel_delivery(
         "regenerated_inner_slide_posts": regenerated_inner_posts,
         "repaired_multi_work_carousels": repaired_multi_work_count,
         "auto_fallback_to_single_carousels": fallback_to_single_count,
-        "reel_neighbor_covers_included": sum(1 for p in all_profile_posts if p["post_format"] == "reel"),
+        "reel_neighbor_covers_included": len(reels_only),
         "preflight": {
             "passed": preflight["passed"],
             "error_count": preflight["error_count"],

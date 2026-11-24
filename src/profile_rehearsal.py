@@ -36,6 +36,7 @@ from src.monthly_planner import (
 )
 from src.museum_pool import (
     ArtworkReuseLedger,
+    calculate_carousel_only_artwork_need,
     calculate_schedule_artwork_need,
     flag_visual_near_duplicates,
     normalize_artist_name,
@@ -115,11 +116,15 @@ def build_real_museum_rehearsal(
     render_sample_mp4_count: int = 2,
     reuse_ledger_path: str | Path | None = None,
     cooldown_days: int = 180,
+    plan_id: str | None = None,
+    ledger_status: str = "reserved",
+    record_ledger: bool = True,
+    carousel_only_need: bool = False,
 ) -> dict:
     """Build a standalone, phone-width local 30-day Instagram profile rehearsal from REAL verified museum artworks.
 
     Never pads with demo/synthetic artworks. If reuse_ledger_path is provided, blocks artworks used in
-    prior months within cooldown_days and records newly scheduled artworks to prevent cross-month repeats.
+    other plans within cooldown_days (while never self-blocking the same plan_id).
     """
     root = Path(output_dir).resolve()
     renders_dir = root / "renders"
@@ -133,13 +138,20 @@ def build_real_museum_rehearsal(
         reels_per_day=reels_per_day,
         reel_revisit_ratio=0.20,
     )
+    carousel_need = calculate_carousel_only_artwork_need(
+        days=days,
+        carousels_per_day=carousels_per_day,
+        reels_per_day=reels_per_day,
+        reel_revisit_ratio=0.20,
+    )
+    effective_plan_id = plan_id or root.name
     raw_pool = _order_diverse_real_pool(pool_artworks)
     ledger = ArtworkReuseLedger(reuse_ledger_path) if reuse_ledger_path else None
     blocked_by_reuse_ledger = 0
     if ledger is not None:
         pool = []
         for aw in raw_pool:
-            if ledger.is_blocked(aw["canonical_id"], cooldown_days=cooldown_days):
+            if ledger.is_blocked(aw["canonical_id"], cooldown_days=cooldown_days, current_plan_id=effective_plan_id):
                 blocked_by_reuse_ledger += 1
             else:
                 pool.append(aw)
@@ -153,17 +165,21 @@ def build_real_museum_rehearsal(
         flag_by_id.setdefault(fl["right_id"], []).append(fl)
 
     # Determine how many full days can be honestly filled with zero fake padding
-    per_day_posts = carousels_per_day + reels_per_day
-    works_per_day_avg = need["total_unique_artworks_needed"] / max(1, days)
-    if len(pool) >= need["total_unique_artworks_needed"]:
+    target_need_for_days = (
+        carousel_need["carousel_gross_artwork_slots"]
+        if carousel_only_need
+        else need["total_unique_artworks_needed"]
+    )
+    works_per_day_avg = target_need_for_days / max(1, days)
+    if len(pool) >= target_need_for_days:
         build_days = days
         shortfall_works = 0
     elif len(pool) == 0:
         build_days = 0
-        shortfall_works = need["total_unique_artworks_needed"]
+        shortfall_works = target_need_for_days
     else:
         build_days = max(1, int(len(pool) // max(1.0, works_per_day_avg)))
-        shortfall_works = max(0, need["total_unique_artworks_needed"] - len(pool))
+        shortfall_works = max(0, target_need_for_days - len(pool))
 
     start_dt = start_at or datetime(2026, 11, 24, 9, 30, tzinfo=ISTANBUL_TZ)
     slots = (
@@ -179,6 +195,8 @@ def build_real_museum_rehearsal(
 
     pool_cursor = 0
     used_artwork_ids: set[str] = set()
+    carousel_used_ids: set[str] = set()
+    reel_fresh_ids: set[str] = set()
     earlier_carousel_candidates: list[tuple[str, dict]] = []  # (post_id, artwork) for intentional Reel revisits
     placed_posts: list[dict] = []
     usage_counts: Counter[str] = Counter()
@@ -194,15 +212,26 @@ def build_real_museum_rehearsal(
     r_idx = 0
     missing_posts: list[dict] = []
     mp4_rendered_ids: list[str] = []
+    # Reserve enough works for Carousels first when carousel_only_need=True
+    remaining_carousel_slots = carousel_need["carousel_gross_artwork_slots"] if carousel_only_need else 0
 
-    def _take_fresh(n: int) -> list[dict] | None:
-        nonlocal pool_cursor
+    def _take_fresh(n: int, *, for_format: str = "carousel") -> list[dict] | None:
+        nonlocal pool_cursor, remaining_carousel_slots
+        if for_format == "reel" and carousel_only_need:
+            if (len(pool) - pool_cursor) <= remaining_carousel_slots:
+                return None
         if pool_cursor + n > len(pool):
             return None
         chunk = pool[pool_cursor : pool_cursor + n]
         pool_cursor += n
         for item in chunk:
             used_artwork_ids.add(item["canonical_id"])
+            if for_format == "carousel":
+                carousel_used_ids.add(item["canonical_id"])
+            else:
+                reel_fresh_ids.add(item["canonical_id"])
+        if for_format == "carousel" and carousel_only_need:
+            remaining_carousel_slots = max(0, remaining_carousel_slots - n)
         return chunk
 
     for slot_num, (fmt, ts) in enumerate(slots, 1):
@@ -271,8 +300,11 @@ def build_real_museum_rehearsal(
                 revisits_post_id, revisited_art = earlier_carousel_candidates[r_idx // 5]
                 arts = [revisited_art]
             else:
-                arts = _take_fresh(1)
-                if arts is None:
+                arts = _take_fresh(1, for_format="reel")
+                if arts is None and carousel_only_need and earlier_carousel_candidates:
+                    revisits_post_id, revisited_art = earlier_carousel_candidates[r_idx % len(earlier_carousel_candidates)]
+                    arts = [revisited_art]
+                elif arts is None:
                     missing_posts.append({"id": pid, "day": day_num, "post_format": fmt, "reason": "insufficient_verified_artworks"})
                     continue
 
@@ -337,13 +369,13 @@ def build_real_museum_rehearsal(
                 scheduled_at=ts,
                 artworks=tuple(
                     PilotArtworkRecord(
-                        source_key=a["source_key"],
+                        source_key=str(a["source_key"])[:64],
                         image_path=a["image_path"],
-                        artist=a["artist"],
-                        title=a["title_clean"],
-                        date=a.get("date", ""),
-                        institution=a.get("institution", ""),
-                        museum_url=a.get("museum_url", ""),
+                        artist=str(a["artist"])[:160],
+                        title=str(a["title_clean"])[:240],
+                        date=str(a.get("date", ""))[:80],
+                        institution=str(a.get("institution", ""))[:160],
+                        museum_url=str(a.get("museum_url", ""))[:512],
                     )
                     for a in cleaned_arts
                 ),
@@ -455,8 +487,13 @@ def build_real_museum_rehearsal(
     insights_registry.save()
 
     # Record newly scheduled artworks into reuse ledger (if provided) so Month 2 skips them
-    if ledger is not None and used_artwork_ids:
-        ledger.mark_used(sorted(used_artwork_ids))
+    if ledger is not None and record_ledger and used_artwork_ids:
+        ledger.mark_used(
+            sorted(used_artwork_ids),
+            plan_id=effective_plan_id,
+            status=ledger_status,
+            replace_plan=True,
+        )
 
     # Compute comprehensive audit summary
     all_used_artists = {
@@ -477,7 +514,14 @@ def build_real_museum_rehearsal(
             "pinned_posts": "Live Instagram pinned-post state is not readable offline; rehearsal defaults to 0 pinned posts (pure chronological newest-top-left) and lets you toggle up to 3 local pins in the preview.",
             "hidden_reels": "All Reels are assumed visible on the main profile grid using their 4:5 center crop cover (no Reels hidden from profile grid).",
         },
-        "artwork_need_calculation": need,
+        "artwork_need_calculation": carousel_need if carousel_only_need else need,
+        "carousel_only_artwork_need": carousel_need,
+        "reel_preview_consumption": {
+            "reels_covers_rendered": sum(1 for p in placed_posts if p["post_format"] == "reel"),
+            "reels_fresh_artworks_used": len(reel_fresh_ids),
+            "reels_revisiting_carousel_artworks": sum(1 for p in placed_posts if p["revisits_post_id"]),
+            "excluded_from_carousel_shortfall": True,
+        },
         "catalog_eligibility": audit_design_catalog_eligibility(),
         "planned_posts": len(slots),
         "rendered_posts": len(placed_posts),

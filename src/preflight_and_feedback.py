@@ -48,7 +48,7 @@ def run_preflight_checks(posts: Sequence[dict], workspace_dir: str | Path) -> di
         # 2. Broken artist names & missing museum source URL
         for a in post.get("artworks", []):
             art_name = (a.get("artist") or "").strip()
-            if _BROKEN_ARTIST_RE.search(art_name) or "object)" in caption.lower() or "artist)" in caption.lower():
+            if _BROKEN_ARTIST_RE.search(art_name) or "object)" in caption.lower() or "by artist)" in caption.lower():
                 defects.append(
                     {
                         "post_id": pid,
