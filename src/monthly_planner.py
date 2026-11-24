@@ -266,12 +266,47 @@ def _render_inner_carousel_slides(
     is_quiz = post.design_id in {"neon-151", "neon-157"}
     show_scale, dims_cm = should_show_monumental_scale_slide(post.dimensions_cm_text)
 
-    slide_specs: list[str] = ["curiosity_or_quiz", "full_plate"]
-    if len(sources) >= 2:
-        slide_specs.append("second_work")
+    # Curated pools from our 280-design catalog so inner slides showcase diverse layouts (not 80% detail crops!)
+    _INNER_POOLS = {
+        "template_gallery": ("astra-002", "astra-004", "astra-006", "neon-012", "neon-015", "neon-021", "astra-008"),
+        "template_archive": ("astra-041", "astra-042", "astra-044", "neon-071", "neon-074", "neon-078", "astra-046"),
+        "template_colors": ("astra-061", "astra-063", "astra-066", "neon-101", "neon-103", "neon-106", "astra-068"),
+        "template_story": ("astra-081", "astra-083", "astra-085", "neon-141", "neon-144", "neon-148", "astra-088"),
+        "template_cinema": ("astra-051", "astra-053", "astra-056", "neon-051", "neon-054", "neon-057"),
+        "template_experimental": ("astra-091", "astra-093", "neon-122", "neon-124", "neon-173", "neon-177"),
+    }
+    seed_int = int(hashlib.sha256(f"{post.id}:{post.design_id}".encode("utf-8")).hexdigest()[:8], 16)
+
+    def _pick_inner_design(pool_key: str, salt: int = 0) -> str:
+        pool = [d for d in _INNER_POOLS[pool_key] if d != post.design_id]
+        return pool[(seed_int + salt) % len(pool)]
+
+    if is_quiz:
+        slide_specs: list[str] = ["quiz_reveal", "full_plate"]
+    elif len(sources) >= 3:
+        # Three-Room Exhibition Arc (0 detail crops)
+        slide_specs = ["room_1_gallery", "room_2_archive", "room_3_colors"]
+    elif len(sources) == 2:
+        # Duet Dialogue Arc (0 detail crops)
+        slide_specs = ["duet_work_1", "duet_work_2"]
+    else:
+        # 5 distinct 1-artwork editorial arcs -> Detail zoom is ONLY 1 in 5 (20%)!
+        arc = seed_int % 5
+        if arc == 0:
+            slide_specs = ["template_gallery", "template_archive"]
+        elif arc == 1:
+            slide_specs = ["template_colors", "full_plate"]
+        elif arc == 2:
+            slide_specs = ["detail_callout", "full_plate"]
+        elif arc == 3:
+            slide_specs = ["template_story", "template_cinema"]
+        else:
+            slide_specs = ["full_plate", "template_experimental"]
+
     if show_scale and dims_cm is not None:
         slide_specs.append("monumental_scale")
-    slide_specs.append("save_card")
+    if len(sources) < 3:
+        slide_specs.append("save_card")
 
     total_slides = 1 + len(slide_specs)
     inner_paths: list[str] = []
@@ -280,31 +315,54 @@ def _render_inner_carousel_slides(
         page_sig = f"{offset:02d} / {total_slides:02d}"
         rel = f"renders/{post.id}-slide-{offset:02d}.jpg"
 
-        if kind == "curiosity_or_quiz":
-            if is_quiz:
-                # #16 Quiz Answer Reveal Slide
-                im = Image.new("RGB", (W, H), OBSIDIAN)
-                paste_centered(im, pil, (80, 180, W - 80, 860), shadow=True)
-                d = ImageDraw.Draw(im)
-                draw_brand_tag(d, 72, 54, GOLD, f"{page_sig}  ·  ANSWER REVEAL")
-                draw_fit_text(d, f"Painted in {art.date or 'Archive'}", (72, 916), "didot", 62, W - 144, GOLD, max_lines=1)
-                draw_fit_text(d, f"{art.artist} — {art.title}", (72, 1020), "serif", 40, W - 144, SOFT_IVORY, max_lines=2)
-                draw_fit_text(d, short_museum(art.institution), (72, 1210), "mono", 20, W - 144, MUTED_LIGHT, max_lines=1)
-            else:
-                # #13 Curiosity Reward: marked detail callout on full work + macro zoom
-                im = Image.new("RGB", (W, H), OBSIDIAN)
-                im.paste(cover_crop(pil, W - 128, 600, focus=smart_focus, zoom=2.25), (64, 140))
-                mini_box = paste_centered(im, pil, (64, 774, 420, 1080))
-                d = ImageDraw.Draw(im)
-                draw_brand_tag(d, 64, 54, GOLD, f"{page_sig}  ·  CLOSER LOOK")
-                d.rectangle((64, 140, W - 64, 740), outline=GOLD, width=3)
-                mx0, my0, mx1, my1 = mini_box
-                fx_px = int(mx0 + smart_focus[0] * (mx1 - mx0))
-                fy_px = int(my0 + smart_focus[1] * (my1 - my0))
-                d.rectangle((fx_px - 28, fy_px - 28, fx_px + 28, fy_px + 28), outline=GOLD, width=3)
-                draw_fit_text(d, "Detail in focus", (456, 800), "didot", 48, W - 520, SOFT_IVORY, max_lines=2)
-                draw_fit_text(d, f"{art.title}\n{art.artist} ({art.date or 'Archive'})", (456, 916), "sans", 24, W - 520, MUTED_LIGHT, max_lines=4)
-                draw_fit_text(d, byline_for(art), (64, 1220), "mono", 19, W - 128, MUTED_LIGHT, max_lines=1)
+        if kind in _INNER_POOLS:
+            did = _pick_inner_design(kind, offset)
+            render_astra_design(did, [art], art.title, workspace_dir / rel)
+            inner_paths.append(rel)
+
+        elif kind in {"room_1_gallery", "room_2_archive", "room_3_colors"}:
+            room_idx = {"room_1_gallery": 0, "room_2_archive": 1, "room_3_colors": 2}[kind]
+            pool_key = {"room_1_gallery": "template_gallery", "room_2_archive": "template_archive", "room_3_colors": "template_colors"}[kind]
+            room_src = sources[room_idx]
+            did = _pick_inner_design(pool_key, room_idx + 1)
+            render_astra_design(did, [room_src], f"Room 0{room_idx + 1}: {room_src.title}", workspace_dir / rel)
+            inner_paths.append(rel)
+
+        elif kind in {"duet_work_1", "duet_work_2"}:
+            w_idx = 0 if kind == "duet_work_1" else 1
+            pool_key = "template_gallery" if w_idx == 0 else "template_archive"
+            w_src = sources[w_idx]
+            did = _pick_inner_design(pool_key, w_idx + 2)
+            render_astra_design(did, [w_src], w_src.title, workspace_dir / rel)
+            inner_paths.append(rel)
+
+        elif kind == "quiz_reveal":
+            # #16 Quiz Answer Reveal Slide
+            im = Image.new("RGB", (W, H), OBSIDIAN)
+            paste_centered(im, pil, (80, 180, W - 80, 860), shadow=True)
+            d = ImageDraw.Draw(im)
+            draw_brand_tag(d, 72, 54, GOLD, f"{page_sig}  ·  ANSWER REVEAL")
+            draw_fit_text(d, f"Painted in {art.date or 'Archive'}", (72, 916), "didot", 62, W - 144, GOLD, max_lines=1)
+            draw_fit_text(d, f"{art.artist} — {art.title}", (72, 1020), "serif", 40, W - 144, SOFT_IVORY, max_lines=2)
+            draw_fit_text(d, short_museum(art.institution), (72, 1210), "mono", 20, W - 144, MUTED_LIGHT, max_lines=1)
+            im.save(workspace_dir / rel, format="JPEG", quality=92, optimize=True, subsampling=0)
+            inner_paths.append(rel)
+
+        elif kind == "detail_callout":
+            # #13 Curiosity Reward: marked detail callout (only ~20% of carousels)
+            im = Image.new("RGB", (W, H), OBSIDIAN)
+            im.paste(cover_crop(pil, W - 128, 600, focus=smart_focus, zoom=2.25), (64, 140))
+            mini_box = paste_centered(im, pil, (64, 774, 420, 1080))
+            d = ImageDraw.Draw(im)
+            draw_brand_tag(d, 64, 54, GOLD, f"{page_sig}  ·  CLOSER LOOK")
+            d.rectangle((64, 140, W - 64, 740), outline=GOLD, width=3)
+            mx0, my0, mx1, my1 = mini_box
+            fx_px = int(mx0 + smart_focus[0] * (mx1 - mx0))
+            fy_px = int(my0 + smart_focus[1] * (my1 - my0))
+            d.rectangle((fx_px - 28, fy_px - 28, fx_px + 28, fy_px + 28), outline=GOLD, width=3)
+            draw_fit_text(d, "Detail in focus", (456, 800), "didot", 48, W - 520, SOFT_IVORY, max_lines=2)
+            draw_fit_text(d, f"{art.title}\n{art.artist} ({art.date or 'Archive'})", (456, 916), "sans", 24, W - 520, MUTED_LIGHT, max_lines=4)
+            draw_fit_text(d, byline_for(art), (64, 1220), "mono", 19, W - 128, MUTED_LIGHT, max_lines=1)
             im.save(workspace_dir / rel, format="JPEG", quality=92, optimize=True, subsampling=0)
             inner_paths.append(rel)
 
