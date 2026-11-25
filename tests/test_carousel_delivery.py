@@ -346,7 +346,11 @@ def test_general_outer_wings_and_half_siblings_relations_and_headlines(tmp_path:
             "date": "c. 1490 - c. 1495",
             "medium": "oil on panel",
             "institution": "Rijksmuseum, Amsterdam",
-            "description": "On the night of 19 November 1421 much of Holland was flooded. The outer panels depict the disaster.",
+            "description": (
+                "On the night of 19 November 1421 – the feast day of Saint Elizabeth – much of Holland was flooded. "
+                "The Dordrecht region was badly hit: 23 villages were submerged and 2,000 people died. "
+                "The survivors later had an altarpiece made. The outer panels depict the disaster."
+            ),
             "image_path": str(p1),
         },
         {
@@ -359,7 +363,11 @@ def test_general_outer_wings_and_half_siblings_relations_and_headlines(tmp_path:
             "date": "c. 1490 - c. 1495",
             "medium": "oil on panel",
             "institution": "Rijksmuseum, Amsterdam",
-            "description": "On the night of 19 November 1421 much of Holland was flooded. The outer panels depict the disaster.",
+            "description": (
+                "On the night of 19 November 1421 – the feast day of Saint Elizabeth – much of Holland was flooded. "
+                "The Dordrecht region was badly hit: 23 villages were submerged and 2,000 people died. "
+                "The survivors later had an altarpiece made. The outer panels depict the disaster."
+            ),
             "image_path": str(p2),
         },
     ]

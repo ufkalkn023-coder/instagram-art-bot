@@ -226,16 +226,16 @@ def evaluate_multi_work_connection(artworks: Sequence[dict]) -> dict:
 
         # --- 1B-bis: Shared museum description explicitly linking outer panels / wings / altarpiece / pair ---
         if note_0 and note_1:
-            norm_n0 = " ".join(note_0.lower().split())[:120]
-            norm_n1 = " ".join(note_1.lower().split())[:120]
-            if norm_n0 == norm_n1 and any(
-                tok in norm_n0 for tok in ("outer panels", "altarpiece", "outer wings", "pair", "pendant", "companion")
+            full_n0 = " ".join(note_0.lower().split())
+            full_n1 = " ".join(note_1.lower().split())
+            if full_n0[:160] == full_n1[:160] and any(
+                tok in full_n0 for tok in ("outer panels", "altarpiece", "outer wings", "pair", "pendant", "companion")
             ):
                 return {
                     "strong": True,
                     "tier": "documented_pair_or_series",
                     "relation_source_field": "metadata.museum_description",
-                    "relation_evidence": f"metadata.museum_description='{note_0[:200]}'",
+                    "relation_evidence": f"metadata.museum_description='{note_0[:360]}'",
                     "candidate_discovery_hint": "",
                     "editorial_bond_en": "",
                     "motif_slug": "documented_series",
@@ -875,7 +875,22 @@ def build_weekly_carousel_delivery(
                 relation_evidence = conn.get("relation_evidence", "")
                 candidate_discovery_hint = conn.get("candidate_discovery_hint", "")
                 editorial_bond_en = conn.get("editorial_bond_en", "")
-                headline = compose_multi_work_headline(arts, conn)
+                new_headline = compose_multi_work_headline(arts, conn)
+                if new_headline != headline or get_design(design_id).required_sources != len(arts):
+                    if get_design(design_id).required_sources != len(arts):
+                        lead_prof_mw = extract_artwork_visual_profile(arts[0]["image_path"], arts[0]["title_clean"])
+                        design_id, dec_mw = select_profile_design(
+                            post_format="carousel",
+                            required_sources=len(arts),
+                            lead_profile=lead_prof_mw,
+                            placed_posts=all_profile_posts,
+                            usage_counts=usage_counts,
+                            family_counts=family_counts,
+                            is_quiz=False,
+                        )
+                        design_family = dec_mw["family"]
+                    headline = new_headline
+                    re_render_cover = True
                 fc_lines = ["Museum Provenance & Source Record:"]
                 for a in arts:
                     d_txt = a.get("date") or "Date unrecorded"
