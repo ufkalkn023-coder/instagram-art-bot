@@ -10,11 +10,19 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from src.carousel_delivery import (
+    _compose_strong_multi_work_caption,
+    _find_strong_partner_group,
     build_per_slide_alt_texts,
     evaluate_multi_work_connection,
     plan_final_carousel_slides,
 )
+from src.curatorial_brief import (
+    _extract_event_date_from_text,
+    compose_multi_work_headline,
+    decide_slide_two_intent,
+)
 from src.models import NormalizedArtwork
+from src.monthly_planner import resolve_month_schedule_window
 from src.museum_pool import (
     ArtworkReuseLedger,
     calculate_carousel_only_artwork_need,
@@ -289,3 +297,160 @@ def test_ensure_carousel_pool_supply_fault_tolerant_and_persists(tmp_path: Path,
     assert report["remaining_shortfall"] == 0
     saved = json.loads(pool_path.read_text(encoding="utf-8"))
     assert len(saved["artworks"]) == 2
+
+
+def test_month_calendar_resolution_february_leap_and_collisions(tmp_path: Path) -> None:
+    dec_start, dec_days = resolve_month_schedule_window("2026-12")
+    assert dec_start.strftime("%Y-%m-%d %H:%M") == "2026-12-01 09:30"
+    assert dec_days == 31
+
+    feb_norm_start, feb_norm_days = resolve_month_schedule_window("2027-02")
+    assert feb_norm_start.strftime("%Y-%m-%d") == "2027-02-01"
+    assert feb_norm_days == 28
+
+    feb_leap_start, feb_leap_days = resolve_month_schedule_window("2028-02")
+    assert feb_leap_start.strftime("%Y-%m-%d") == "2028-02-01"
+    assert feb_leap_days == 29
+
+    short_start, short_days = resolve_month_schedule_window("2026-12", explicit_days=5)
+    assert short_start.strftime("%Y-%m-%d") == "2026-12-01"
+    assert short_days == 5
+
+    ledger = ArtworkReuseLedger(tmp_path / "ledger.json")
+    ledger.mark_used(
+        ["a1"],
+        plan_id="2026-11",
+        status="reserved",
+        schedule_start="2026-11-24",
+        schedule_end="2026-12-23",
+    )
+    cols = ledger.find_schedule_collisions("2026-12-01", "2026-12-31", exclude_plan_id="2026-12")
+    assert len(cols) == 1
+    assert cols[0]["existing_plan_id"] == "2026-11"
+    assert cols[0]["overlap_start"] == "2026-12-01"
+    assert cols[0]["overlap_end"] == "2026-12-23"
+
+
+def test_general_outer_wings_and_half_siblings_relations_and_headlines(tmp_path: Path) -> None:
+    p1 = _img(tmp_path / "p1.jpg", (1200, 1400), (60, 50, 40))
+    p2 = _img(tmp_path / "p2.jpg", (1200, 1400), (70, 55, 45))
+
+    wings = [
+        {
+            "canonical_id": "rijks_a",
+            "artist": "Master of the Saint Elizabeth Panels",
+            "artist_short": "Master of the Saint Elizabeth Panels",
+            "artist_surname": "Panels",
+            "title": "The Saint Elizabeth’s Day Flood",
+            "title_clean": "The Saint Elizabeth’s Day Flood",
+            "date": "c. 1490 - c. 1495",
+            "medium": "oil on panel",
+            "institution": "Rijksmuseum, Amsterdam",
+            "description": "On the night of 19 November 1421 much of Holland was flooded. The outer panels depict the disaster.",
+            "image_path": str(p1),
+        },
+        {
+            "canonical_id": "rijks_b",
+            "artist": "Master of the Saint Elizabeth Panels",
+            "artist_short": "Master of the Saint Elizabeth Panels",
+            "artist_surname": "Panels",
+            "title": "The Saint Elizabeth’s Day Flood",
+            "title_clean": "The Saint Elizabeth’s Day Flood",
+            "date": "c. 1490 - c. 1495",
+            "medium": "oil on panel",
+            "institution": "Rijksmuseum, Amsterdam",
+            "description": "On the night of 19 November 1421 much of Holland was flooded. The outer panels depict the disaster.",
+            "image_path": str(p2),
+        },
+    ]
+    conn_w = evaluate_multi_work_connection(wings)
+    assert conn_w["tier"] == "documented_pair_or_series"
+    assert conn_w["relation_source_field"] == "metadata.museum_description"
+    assert "outer panels" in conn_w["relation_evidence"].lower()
+    headline_w = compose_multi_work_headline(wings, conn_w)
+    assert "Panels / Panels" not in headline_w
+    assert "Outer Wings" in headline_w
+    cap_w = _compose_strong_multi_work_caption(wings, conn_w, 1, 4)
+    assert "panel" in cap_w.lower()
+    assert "canvases" not in cap_w.lower()
+    assert _extract_event_date_from_text("", wings[0]["description"], wings[0]["date"]) == "19 November 1421"
+
+    siblings = [
+        {
+            "canonical_id": "rijks_s1",
+            "artist": "Willem Jansz. Ploy, attributed",
+            "artist_short": "Willem Jansz. Ploy",
+            "artist_surname": "Ploy",
+            "title": "Portrait of Johannes van Rees (1662-1690/91), Half Brother of Elisabeth van Oosten, as a Child",
+            "title_clean": "Portrait of Johannes van Rees",
+            "date": "1663",
+            "medium": "oil on canvas",
+            "institution": "Rijksmuseum, Amsterdam",
+            "image_path": str(p1),
+        },
+        {
+            "canonical_id": "rijks_s2",
+            "artist": "Willem Jansz. Ploy, attributed",
+            "artist_short": "Willem Jansz. Ploy",
+            "artist_surname": "Ploy",
+            "title": "Portrait of Elisabeth van Oosten (1660-1714), as a Child",
+            "title_clean": "Portrait of Elisabeth van Oosten",
+            "date": "1663",
+            "medium": "oil on canvas",
+            "institution": "Rijksmuseum, Amsterdam",
+            "image_path": str(p2),
+        },
+    ]
+    conn_s = evaluate_multi_work_connection(siblings)
+    assert conn_s["tier"] == "documented_pair_or_series"
+    assert conn_s["relation_source_field"] == "title_or_description:sitter_relation"
+    assert compose_multi_work_headline(siblings, conn_s) == "Half-Siblings, Painted in 1663"
+
+
+def test_zero_within_month_partner_borrowing_and_slide2_truth(tmp_path: Path) -> None:
+    from collections import Counter
+
+    p1 = _img(tmp_path / "a1.jpg", (1800, 1400), (30, 40, 50))
+    p2 = _img(tmp_path / "a2.jpg", (1800, 1400), (210, 200, 185))
+    lead = {
+        "canonical_id": "c_lead",
+        "artist": "Master A",
+        "artist_short": "Master A",
+        "artist_surname": "Master A",
+        "is_anonymous": False,
+        "title": "Winter Forest",
+        "title_clean": "Winter Forest",
+        "date": "1650",
+        "institution": "Museum X",
+        "image_path": str(p1),
+    }
+    reserved_partner = {
+        "canonical_id": "c_reserved",
+        "artist": "Master B",
+        "artist_short": "Master B",
+        "artist_surname": "Master B",
+        "is_anonymous": False,
+        "title": "Winter River",
+        "title_clean": "Winter River",
+        "date": "1880",
+        "institution": "Museum Y",
+        "image_path": str(p2),
+    }
+    # Excluded IDs prevent borrowing an artwork already used in another Carousel this month
+    assert _find_strong_partner_group(lead, 2, [lead, reserved_partner], Counter(), excluded_ids={"c_reserved"}) is None
+
+    # Close-up cover (experimental/detail) -> Slide 2 opens full_plate; color card omitted when use_color_card=False
+    s2_closeup = decide_slide_two_intent([lead], focus=(0.45, 0.52), width=1800, height=1400, cover_shows_full=False, use_color_card=False)
+    assert s2_closeup["spec"] == "full_plate"
+    plan = plan_final_carousel_slides(
+        post_id="post-x",
+        design_id="astra-092",
+        design_family="experimental",
+        arts=[lead],
+        slide_two_intent=s2_closeup,
+        use_color_card=False,
+    )
+    assert [x["spec"] for x in plan] == ["cover", "full_plate", "credit_plate"]
+    alts = build_per_slide_alt_texts({"design_id": "astra-092", "tone_band": "dark", "artworks": [lead]}, plan)
+    assert "Uncropped" in alts[1]["alt_text_en"]
+    assert "Museum Record" in alts[2]["alt_text_en"]

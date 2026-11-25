@@ -73,7 +73,7 @@ def run(argv: list[str] | None = None) -> int:
     car_cmd.add_argument("--pool", type=Path, required=True, help="Verified museum pool_index.json path")
     car_cmd.add_argument("--output", type=Path, required=True, help="Destination directory for portable weekly package")
     car_cmd.add_argument("--from-rehearsal", type=Path, default=None, help="Optional existing v2 rehearsal dir to reuse unaffected covers")
-    car_cmd.add_argument("--days", type=int, default=30, help="Days to generate when building fresh without --from-rehearsal")
+    car_cmd.add_argument("--days", type=int, default=None, help="Override days (defaults to calendar days of --month-id, e.g. 31 for 2026-12)")
     car_cmd.add_argument("--carousels-per-day", type=int, default=4)
     car_cmd.add_argument("--reels-per-day", type=int, default=2)
     car_cmd.add_argument("--month-id", type=str, default=None, help="Stable month/plan ID (e.g. 2026-12); defaults to output folder name")
@@ -121,6 +121,7 @@ def run(argv: list[str] | None = None) -> int:
         if args.command == "build-carousel-delivery":
             import tempfile
             from src.carousel_delivery import build_weekly_carousel_delivery
+            from src.monthly_planner import resolve_month_schedule_window
             from src.museum_pool import (
                 ArtworkReuseLedger,
                 calculate_carousel_only_artwork_need,
@@ -130,6 +131,7 @@ def run(argv: list[str] | None = None) -> int:
 
             ledger_path = (args.reuse_ledger or (args.pool.resolve().parent / "carousel_reuse_ledger.json")).resolve()
             month_id = args.month_id or args.output.resolve().name
+            start_dt, resolved_days = resolve_month_schedule_window(month_id, explicit_days=args.days)
             supply_report = None
 
             if args.from_rehearsal is not None:
@@ -140,12 +142,12 @@ def run(argv: list[str] | None = None) -> int:
                     reuse_ledger_path=ledger_path,
                     plan_id=month_id,
                     ledger_status=args.status,
-                    requested_days=args.days,
+                    requested_days=resolved_days,
                     carousels_per_day=args.carousels_per_day,
                 )
             else:
                 need = calculate_carousel_only_artwork_need(
-                    days=args.days,
+                    days=resolved_days,
                     carousels_per_day=args.carousels_per_day,
                     reels_per_day=args.reels_per_day,
                 )
@@ -161,9 +163,10 @@ def run(argv: list[str] | None = None) -> int:
                     build_real_museum_rehearsal(
                         pool_arts,
                         stage,
-                        days=args.days,
+                        days=resolved_days,
                         carousels_per_day=args.carousels_per_day,
                         reels_per_day=args.reels_per_day,
+                        start_at=start_dt,
                         render_sample_mp4_count=0,
                         reuse_ledger_path=ledger_path,
                         plan_id=month_id,
@@ -179,7 +182,7 @@ def run(argv: list[str] | None = None) -> int:
                         plan_id=month_id,
                         ledger_status=args.status,
                         supply_report=supply_report,
-                        requested_days=args.days,
+                        requested_days=resolved_days,
                         carousels_per_day=args.carousels_per_day,
                     )
             s = res["summary"]

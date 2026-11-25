@@ -22,6 +22,22 @@ LANDSCAPE_FRIENDLY_FAMILIES = frozenset({"gallery", "archive", "colors", "story"
 PORTRAIT_FRIENDLY_FAMILIES = frozenset({"cinema", "typography", "poster", "gallery", "experimental", "story"})
 LONG_TITLE_SAFE_FAMILIES = frozenset({"gallery", "archive", "colors", "story", "detail", "duet"})
 
+# Templates that overwhelm 3:4 profile cells with giant hex codes, tiny thumbnails, or sliced titles
+AVOID_PROFILE_COVER_IDS = frozenset({
+    "astra-061",
+    "astra-064",
+    "astra-066",
+    "astra-070",
+    "astra-076",
+    "neon-032",
+    "neon-062",
+    "neon-064",
+    "neon-065",
+})
+
+# Warm/breathing cover families that keep the artwork clearly visible in 3:4 profile grids
+PROFILE_BALANCED_FAMILIES = frozenset({"archive", "gallery", "story", "detail"})
+
 
 def audit_design_catalog_eligibility() -> dict:
     """Analyze all 280 usable designs by source count, family, and format suitability."""
@@ -138,6 +154,14 @@ def _score_candidate(
     if design.id == "neon-060" and orient == "portrait":
         score -= 9.0
 
+    # Protect 3:4 profile cells from giant hex walls, tiny artwork boxes, or sliced display text
+    if post_format == "carousel" and design.id in AVOID_PROFILE_COVER_IDS:
+        score -= 14.0
+        reasons.append("avoid_profile_clutter")
+    elif post_format == "carousel" and design.family in PROFILE_BALANCED_FAMILIES:
+        score += 2.2
+        reasons.append("profile_3x4_visibility")
+
     # Format alignment
     if post_format == "reel":
         if design.family in {"cinema", "detail", "gallery", "colors"}:
@@ -150,6 +174,7 @@ def _score_candidate(
     row_heavy_typo = sum(1 for p in row_peers if p.get("family") in HEAVY_TYPO_FAMILIES)
     row_dark_cinema = sum(1 for p in row_peers if p.get("family") in DARK_CINEMA_FAMILIES)
     row_families = {p.get("family") for p in row_peers}
+    row_orients = {p.get("orientation") for p in row_peers if p.get("orientation")}
 
     if design.family in HEAVY_TYPO_FAMILIES and row_heavy_typo >= 1:
         score -= 7.5  # Avoid stacking big typography side-by-side in the same row
@@ -160,6 +185,9 @@ def _score_candidate(
     if design.family in BREATHING_FAMILIES and (row_heavy_typo >= 1 or row_dark_cinema >= 1):
         score += 3.5  # Intentional breathing-room contrast beside a heavy neighbor
         reasons.append("row_breathing_contrast")
+    if row_orients and orient not in row_orients and design.family in PROFILE_BALANCED_FAMILIES:
+        score += 1.4  # Smooth figure -> open landscape -> dense scene eye flow across 3-col row
+        reasons.append("row_density_flow")
 
     # Vertical neighbor (directly above in the 3-column grid: slot i-3)
     if above_peer is not None:

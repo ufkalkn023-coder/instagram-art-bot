@@ -21,6 +21,8 @@ from src.curatorial_brief import (
     build_curatorial_brief,
     clean_editorial_title,
     clean_museum_artwork,
+    compose_multi_work_headline,
+    decide_slide_two_intent,
 )
 from src.design_selector import (
     audit_design_catalog_eligibility,
@@ -33,6 +35,7 @@ from src.monthly_planner import (
     PilotArtworkRecord,
     _render_inner_carousel_slides,
     build_daily_cadence_schedule,
+    resolve_month_schedule_window,
 )
 from src.museum_pool import (
     ArtworkReuseLedger,
@@ -109,7 +112,7 @@ def build_real_museum_rehearsal(
     pool_artworks: Sequence[dict],
     output_dir: str | Path,
     *,
-    days: int = 30,
+    days: int | None = None,
     carousels_per_day: int = 4,
     reels_per_day: int = 2,
     start_at: datetime | None = None,
@@ -121,10 +124,10 @@ def build_real_museum_rehearsal(
     record_ledger: bool = True,
     carousel_only_need: bool = False,
 ) -> dict:
-    """Build a standalone, phone-width local 30-day Instagram profile rehearsal from REAL verified museum artworks.
+    """Build a standalone, phone-width local Instagram profile rehearsal from REAL verified museum artworks.
 
-    Never pads with demo/synthetic artworks. If reuse_ledger_path is provided, blocks artworks used in
-    other plans within cooldown_days (while never self-blocking the same plan_id).
+    Never pads with demo/synthetic artworks. Derives start date & day count from plan_id (--month-id)
+    when days/start_at are omitted, and blocks artworks used in other plans within cooldown_days.
     """
     root = Path(output_dir).resolve()
     renders_dir = root / "renders"
@@ -132,14 +135,16 @@ def build_real_museum_rehearsal(
     renders_dir.mkdir(parents=True, exist_ok=True)
     videos_dir.mkdir(parents=True, exist_ok=True)
 
+    start_dt, resolved_days = resolve_month_schedule_window(plan_id, explicit_days=days, start_at=start_at)
+
     need = calculate_schedule_artwork_need(
-        days=days,
+        days=resolved_days,
         carousels_per_day=carousels_per_day,
         reels_per_day=reels_per_day,
         reel_revisit_ratio=0.20,
     )
     carousel_need = calculate_carousel_only_artwork_need(
-        days=days,
+        days=resolved_days,
         carousels_per_day=carousels_per_day,
         reels_per_day=reels_per_day,
         reel_revisit_ratio=0.20,
@@ -170,9 +175,9 @@ def build_real_museum_rehearsal(
         if carousel_only_need
         else need["total_unique_artworks_needed"]
     )
-    works_per_day_avg = target_need_for_days / max(1, days)
+    works_per_day_avg = target_need_for_days / max(1, resolved_days)
     if len(pool) >= target_need_for_days:
-        build_days = days
+        build_days = resolved_days
         shortfall_works = 0
     elif len(pool) == 0:
         build_days = 0
@@ -181,7 +186,6 @@ def build_real_museum_rehearsal(
         build_days = max(1, int(len(pool) // max(1.0, works_per_day_avg)))
         shortfall_works = max(0, target_need_for_days - len(pool))
 
-    start_dt = start_at or datetime(2026, 11, 24, 9, 30, tzinfo=ISTANBUL_TZ)
     slots = (
         build_daily_cadence_schedule(
             start_dt,
@@ -282,10 +286,8 @@ def build_real_museum_rehearsal(
                 family_counts=family_counts,
                 is_quiz=is_quiz,
             )
-            if req_n == 3:
-                headline = f"{cleaned_arts[0]['artist_surname']}, {cleaned_arts[1]['artist_surname']} & {cleaned_arts[2]['artist_surname']}"
-            elif req_n == 2:
-                headline = f"{cleaned_arts[0]['artist_surname']} / {cleaned_arts[1]['artist_surname']}"
+            if req_n >= 2:
+                headline = compose_multi_work_headline(cleaned_arts)
             elif is_quiz:
                 headline = f"Guess the year: {cleaned_arts[0]['artist_surname']}"
             else:
@@ -359,7 +361,31 @@ def build_real_museum_rehearsal(
         reel_9x16_rel = ""
         reel_mp4_rel = ""
         reel_delivery_status = "not_applicable"
+        slide_specs_final: list[str] = ["cover"]
         if fmt == "carousel":
+            from src.carousel_delivery import CLOSEUP_COVER_FAMILIES, plan_final_carousel_slides
+
+            cover_shows_full = decision["family"] not in CLOSEUP_COVER_FAMILIES
+            s2_intent = decide_slide_two_intent(
+                cleaned_arts,
+                focus=brief["motion_start"],
+                width=lead_prof["width"],
+                height=lead_prof["height"],
+                cover_shows_full=cover_shows_full,
+                use_color_card=brief.get("use_color_card", False),
+            )
+            final_plan = plan_final_carousel_slides(
+                post_id=pid,
+                design_id=design_id,
+                design_family=decision["family"],
+                arts=cleaned_arts,
+                is_quiz=is_quiz,
+                dimensions_cm_text=cleaned_arts[0].get("dimensions_cm", ""),
+                slide_two_intent=s2_intent,
+                use_color_card=brief.get("use_color_card", False),
+            )
+            explicit_inners = [item["spec"] for item in final_plan[1:]]
+            slide_specs_final = [item["spec"] for item in final_plan]
             stub_post = MonthlyPlanPost(
                 id=pid,
                 post_format="carousel",
@@ -379,10 +405,15 @@ def build_real_museum_rehearsal(
                     )
                     for a in cleaned_arts
                 ),
-                slide_count=4,
+                slide_count=len(final_plan),
                 dimensions_cm_text=cleaned_arts[0].get("dimensions_cm", ""),
             )
-            inner_rels = _render_inner_carousel_slides(root, stub_post, sources)
+            inner_rels = _render_inner_carousel_slides(
+                root,
+                stub_post,
+                sources,
+                explicit_slide_specs=explicit_inners,
+            )
             slides_rel.extend(inner_rels)
         else:
             reel_9x16_rel = f"renders/{pid}-{design_id}-9x16.jpg"
@@ -446,6 +477,7 @@ def build_real_museum_rehearsal(
                 "image_path": cover_rel,
                 "slides": slides_rel,
                 "slide_count": len(slides_rel),
+                "slide_specs": slide_specs_final,
                 "reel_cover_9x16_path": reel_9x16_rel,
                 "reel_mp4_path": reel_mp4_rel,
                 "orientation": lead_prof["orientation"],

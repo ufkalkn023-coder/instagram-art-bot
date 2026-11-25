@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import calendar
 import hashlib
 import hmac
 import json
@@ -194,6 +195,35 @@ def _daily_format_sequence(carousels_per_day: int, reels_per_day: int) -> list[L
             seq.append("carousel")
             c_used += 1
     return seq
+
+
+def resolve_month_schedule_window(
+    month_id: str | None = None,
+    *,
+    explicit_days: int | None = None,
+    start_at: datetime | None = None,
+) -> tuple[datetime, int]:
+    """Derive Europe/Istanbul start date and day count from --month-id (YYYY-MM).
+
+    - '2026-12' -> 2026-12-01 09:30 +03:00, 31 days (1-31 Dec)
+    - '2027-02' -> 28 days; '2028-02' -> 29 days (leap year)
+    - explicit_days (e.g. short rehearsal --days 5) overrides day count while keeping month start.
+    """
+    if start_at is not None:
+        base = start_at if start_at.tzinfo is not None else start_at.replace(tzinfo=ISTANBUL_TZ)
+        return base.astimezone(ISTANBUL_TZ), int(explicit_days if explicit_days is not None else 30)
+
+    if month_id:
+        m = re.fullmatch(r"\s*(\d{4})-(\d{2})\s*", str(month_id))
+        if m:
+            year, month = int(m.group(1)), int(m.group(2))
+            if 1 <= month <= 12:
+                month_days = calendar.monthrange(year, month)[1]
+                start_dt = datetime(year, month, 1, 9, 30, tzinfo=ISTANBUL_TZ)
+                return start_dt, int(explicit_days if explicit_days is not None else month_days)
+
+    default_start = datetime(2026, 11, 24, 9, 30, tzinfo=ISTANBUL_TZ)
+    return default_start, int(explicit_days if explicit_days is not None else 30)
 
 
 def build_daily_cadence_schedule(
@@ -411,6 +441,40 @@ def _render_inner_carousel_slides(
             d.text((art_x, floor_y + 14), f"{w_cm:.0f} × {h_cm:.0f} cm", font=F("mono_b", 20), fill=INK)
             draw_fit_text(d, f"Standing before {art.title}", (64, 1020), "serif", 44, W - 128, INK, max_lines=2)
             draw_fit_text(d, byline_for(art), (64, 1210), "mono", 19, W - 128, MUTED_INK, max_lines=1)
+            im.save(workspace_dir / rel, format="JPEG", quality=92, optimize=True, subsampling=0)
+            inner_paths.append(rel)
+
+        elif kind == "duet_detail_compare" and len(sources) >= 2:
+            src2 = sources[1]
+            pil2, _ = trim_museum_scan_borders(load_source_image(src2.validated_path()))
+            f1 = smart_focus
+            f2 = src2.focal_point() if src2.focus is not None else detect_smart_focus(pil2)
+            im = Image.new("RGB", (W, H), OBSIDIAN)
+            panel_w = (W - 156) // 2
+            panel_h = 740
+            im.paste(cover_crop(pil, panel_w, panel_h, focus=f1, zoom=1.85), (64, 150))
+            im.paste(cover_crop(pil2, panel_w, panel_h, focus=f2, zoom=1.85), (64 + panel_w + 28, 150))
+            d = ImageDraw.Draw(im)
+            draw_brand_tag(d, 64, 54, GOLD, f"{page_sig}  ·  SIDE-BY-SIDE COMPARISON")
+            d.rectangle((64, 150, 64 + panel_w, 150 + panel_h), outline=GOLD, width=2)
+            d.rectangle((64 + panel_w + 28, 150, 64 + 2 * panel_w + 28, 150 + panel_h), outline=GOLD, width=2)
+            draw_fit_text(d, f"1. {art.title}", (64, 926), "serif", 32, panel_w, SOFT_IVORY, max_lines=2)
+            draw_fit_text(d, f"2. {src2.title}", (64 + panel_w + 28, 926), "serif", 32, panel_w, SOFT_IVORY, max_lines=2)
+            draw_fit_text(d, f"{art.artist} ({art.date or 'Archive'})", (64, 1054), "mono", 18, panel_w, MUTED_LIGHT, max_lines=2)
+            draw_fit_text(d, f"{src2.artist} ({src2.date or 'Archive'})", (64 + panel_w + 28, 1054), "mono", 18, panel_w, MUTED_LIGHT, max_lines=2)
+            draw_fit_text(d, post.editorial_title, (64, 1210), "sans", 24, W - 128, GOLD, max_lines=1)
+            im.save(workspace_dir / rel, format="JPEG", quality=92, optimize=True, subsampling=0)
+            inner_paths.append(rel)
+
+        elif kind == "credit_plate":
+            src_last = sources[-1]
+            pil_last, _ = trim_museum_scan_borders(load_source_image(src_last.validated_path()))
+            im = Image.new("RGB", (W, H), PAPER)
+            paste_centered(im, pil_last, (72, 140, W - 72, 960), shadow=True)
+            d = ImageDraw.Draw(im)
+            draw_brand_tag(d, 72, 54, INK, f"{page_sig}  ·  MUSEUM RECORD")
+            draw_fit_text(d, src_last.title, (72, 1012), "serif", 44, W - 144, INK, max_lines=2)
+            draw_fit_text(d, f"{src_last.artist}  ·  {src_last.date or 'Archive'}  ·  {short_museum(src_last.institution)}", (72, 1188), "mono", 20, W - 144, MUTED_INK, max_lines=2)
             im.save(workspace_dir / rel, format="JPEG", quality=92, optimize=True, subsampling=0)
             inner_paths.append(rel)
 

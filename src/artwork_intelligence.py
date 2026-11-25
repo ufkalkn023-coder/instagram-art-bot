@@ -12,22 +12,40 @@ MONUMENTAL_THRESHOLD_CM = 180.0
 
 
 def detect_smart_focus(image: Image.Image) -> tuple[float, float]:
-    """Estimate the most visually salient focal point (fx, fy) in [0.15, 0.85]
-    using local contrast/edge energy + upper-middle portrait composition prior.
+    """Estimate the most visually salient focal point (fx, fy) in [0.15, 0.85].
+
+    For wide horizontal landscapes (aspect >= 1.2), emphasizes foreground/midground
+    contrast & silhouette accents (e.g. small figures on a road) rather than empty sky.
     """
+    w, h = image.size
+    aspect = w / max(1, h)
     small = image.convert("RGB").resize((96, 96), Image.Resampling.BILINEAR)
     gray = np.asarray(small.convert("L"), dtype=np.float32) / 255.0
     gx = np.abs(np.diff(gray, axis=1, prepend=gray[:, :1]))
     gy = np.abs(np.diff(gray, axis=0, prepend=gray[:1, :]))
     edge_energy = gx + gy
 
-    # Subtle luminance & warm-tone saliency (faces, highlights, candles)
     rgb = np.asarray(small, dtype=np.float32) / 255.0
     warm = np.clip(rgb[:, :, 0] - rgb[:, :, 2], 0.0, 1.0)
-    saliency = edge_energy * 0.65 + warm * 0.20 + gray * 0.15
-
-    # Gentle portrait/museum prior favoring center-x and upper-mid y (0.42)
     yy, xx = np.mgrid[0:96, 0:96].astype(np.float32) / 95.0
+
+    if aspect >= 1.2:
+        # Wide landscape: look for compact high-contrast figures/accents in foreground-midground [0.40..0.82]
+        band_prior = np.exp(-(((xx - 0.5) ** 2) / 0.22 + ((yy - 0.62) ** 2) / 0.08))
+        saliency = edge_energy * 0.72 + warm * 0.18 + (1.0 - gray) * 0.10
+        weighted = (saliency ** 1.35) * (0.25 + 0.75 * band_prior)
+        # Pick the strongest local 9x9 window center to lock onto a small figure instead of averaging to dead center
+        best_score = -1.0
+        best_xy = (0.5, 0.60)
+        for ry in range(36, 82, 3):
+            for rx in range(16, 80, 3):
+                win = float(weighted[max(0, ry - 5) : min(96, ry + 6), max(0, rx - 5) : min(96, rx + 6)].mean())
+                if win > best_score:
+                    best_score = win
+                    best_xy = (rx / 95.0, ry / 95.0)
+        return (round(max(0.18, min(0.82, best_xy[0])), 3), round(max(0.22, min(0.82, best_xy[1])), 3))
+
+    saliency = edge_energy * 0.65 + warm * 0.20 + gray * 0.15
     prior = np.exp(-(((xx - 0.5) ** 2) / 0.14 + ((yy - 0.43) ** 2) / 0.16))
     weighted = saliency * (0.45 + 0.55 * prior)
 
@@ -37,6 +55,22 @@ def detect_smart_focus(image: Image.Image) -> tuple[float, float]:
     fx = float((weighted * xx).sum() / total)
     fy = float((weighted * yy).sum() / total)
     return (round(max(0.18, min(0.82, fx)), 3), round(max(0.18, min(0.80, fy)), 3))
+
+
+def can_support_detail_crop(
+    width: int,
+    height: int,
+    *,
+    zoom: float = 2.1,
+    min_crop_edge: int = 440,
+) -> tuple[bool, str]:
+    """Check whether source image resolution supports a sharp close-up without blurry upscaling."""
+    if min(width, height) <= 0:
+        return False, "invalid_image_dimensions"
+    est_crop_short = min(width, height) / max(1.0, zoom)
+    if est_crop_short < min_crop_edge:
+        return False, f"source_resolution_too_low_for_detail_crop:{width}x{height}"
+    return True, ""
 
 
 def trim_museum_scan_borders(image: Image.Image, *, max_trim_ratio: float = 0.08) -> tuple[Image.Image, dict]:

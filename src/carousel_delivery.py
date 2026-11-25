@@ -20,8 +20,13 @@ from src.astra_catalog import get_design
 from src.astra_renderer import AstraArtworkInput, render_astra_design
 from src.curatorial_brief import (
     COPY_VERSION,
+    _extract_event_date_from_text,
+    _support_noun,
     build_curatorial_brief,
     clean_museum_artwork,
+    compose_multi_work_headline,
+    decide_slide_two_intent,
+    extract_sitter_relation,
 )
 from src.design_selector import extract_artwork_visual_profile, select_profile_design
 from src.editorial_copy_rules import build_targeted_hashtags
@@ -46,7 +51,8 @@ MOTIF_RULES: tuple[tuple[str, str, tuple[str, ...]], ...] = (
 )
 
 # Cover families that already show the entire artwork uncropped -> concise 3-slide arc (no redundant full-plate repeat)
-FULL_FRAME_COVER_FAMILIES = frozenset({"gallery", "archive", "colors"})
+FULL_FRAME_COVER_FAMILIES = frozenset({"gallery", "archive", "colors", "story"})
+CLOSEUP_COVER_FAMILIES = frozenset({"detail", "cinema", "experimental"})
 VERIFIED_RIGHTS = frozenset({"CONFIRMED_PUBLIC_DOMAIN", "CONFIRMED_OPEN_ACCESS", "CC0", "Public Domain"})
 
 
@@ -201,8 +207,8 @@ def evaluate_multi_work_connection(artworks: Sequence[dict]) -> dict:
                 "reason_en": "Museum catalog IDs explicitly cross-reference these two works as documented companions.",
             }
 
-        note_0 = str(cleaned[0].get("museum_relation_note") or "").strip()
-        note_1 = str(cleaned[1].get("museum_relation_note") or "").strip()
+        note_0 = str(cleaned[0].get("museum_relation_note") or cleaned[0].get("description") or "").strip()
+        note_1 = str(cleaned[1].get("museum_relation_note") or cleaned[1].get("description") or "").strip()
         t0_low, t1_low = cleaned[0]["title"].lower(), cleaned[1]["title"].lower()
         if (note_0 and t1_low in note_0.lower()) or (note_1 and t0_low in note_1.lower()):
             ev_note = note_0 if (note_0 and t1_low in note_0.lower()) else note_1
@@ -210,12 +216,48 @@ def evaluate_multi_work_connection(artworks: Sequence[dict]) -> dict:
                 "strong": True,
                 "tier": "documented_pair_or_series",
                 "relation_source_field": "metadata.museum_relation_note",
-                "relation_evidence": f"metadata.museum_relation_note='{ev_note[:120]}'",
+                "relation_evidence": f"metadata.museum_relation_note='{ev_note[:160]}'",
                 "candidate_discovery_hint": "",
                 "editorial_bond_en": "",
                 "motif_slug": "documented_series",
                 "theme_label": "Documented Companion Pair",
                 "reason_en": "The museum's own catalog description explicitly identifies these two works as companions.",
+            }
+
+        # --- 1B-bis: Shared museum description explicitly linking outer panels / wings / altarpiece / pair ---
+        if note_0 and note_1:
+            norm_n0 = " ".join(note_0.lower().split())[:120]
+            norm_n1 = " ".join(note_1.lower().split())[:120]
+            if norm_n0 == norm_n1 and any(
+                tok in norm_n0 for tok in ("outer panels", "altarpiece", "outer wings", "pair", "pendant", "companion")
+            ):
+                return {
+                    "strong": True,
+                    "tier": "documented_pair_or_series",
+                    "relation_source_field": "metadata.museum_description",
+                    "relation_evidence": f"metadata.museum_description='{note_0[:200]}'",
+                    "candidate_discovery_hint": "",
+                    "editorial_bond_en": "",
+                    "motif_slug": "documented_series",
+                    "theme_label": "Documented Altarpiece / Companion Panels",
+                    "reason_en": "Both museum catalog records share the exact curator note linking these outer panels as one work.",
+                }
+
+        # --- 1B-ter: Explicit sitter/family relation in museum title or description ---
+        rel_01 = extract_sitter_relation(f"{cleaned[0].get('title', '')} {note_0}", cleaned[1].get("title", ""))
+        rel_10 = extract_sitter_relation(f"{cleaned[1].get('title', '')} {note_1}", cleaned[0].get("title", ""))
+        sitter_rel = rel_01 or rel_10
+        if sitter_rel:
+            return {
+                "strong": True,
+                "tier": "documented_pair_or_series",
+                "relation_source_field": "title_or_description:sitter_relation",
+                "relation_evidence": f"sitter_relation='{sitter_rel}'",
+                "candidate_discovery_hint": "",
+                "editorial_bond_en": "",
+                "motif_slug": "documented_series",
+                "theme_label": "Documented Family / Companion Portraits",
+                "reason_en": f"Museum records explicitly connect the two sitters ({sitter_rel}).",
             }
 
         # --- 1C: Study-to-finished link ---
@@ -347,59 +389,70 @@ def plan_final_carousel_slides(
     arts: Sequence[dict],
     is_quiz: bool = False,
     dimensions_cm_text: str = "",
+    slide_two_intent: dict | None = None,
+    use_color_card: bool = False,
 ) -> list[dict]:
     """Single source of truth for a Carousel's finalized slide sequence (cover + inner slides).
 
-    Every JPG page stamp (e.g. 02/03, 03/03), exported filename, per-slide Alt-Text, caption reference,
-    and HTML preview is derived strictly from this finalized list.
+    Slide 2 function is decided BEFORE template/slide rendering, and every JPG page stamp
+    (e.g. 02/03, 03/03), exported filename, per-slide Alt-Text, caption reference, and HTML preview
+    is derived strictly from this finalized list.
     """
     from src.artwork_intelligence import should_show_monumental_scale_slide
 
     show_scale, _ = should_show_monumental_scale_slide(dimensions_cm_text)
-    seed_int = int(hashlib.sha256(f"{post_id}:{design_id}".encode("utf-8")).hexdigest()[:8], 16)
+    closing_spec = "save_card" if use_color_card else "credit_plate"
+    closing_role = "archival_save_card" if use_color_card else "credit_plate"
+    closing_label = "Arşiv & Renk Kartı" if use_color_card else "Tam Eser & Müze Künyesi"
 
-    plan: list[dict] = [{"spec": "cover", "role": "cover", "label": "Kapak (Profil Görseli)", "artwork": arts[0]}]
+    plan: list[dict] = [
+        {
+            "spec": "cover",
+            "role": "cover",
+            "label": "Kapak (Profil Görseli)",
+            "artwork": arts[0],
+            "is_cropped": design_family in CLOSEUP_COVER_FAMILIES,
+        }
+    ]
 
     if is_quiz and len(arts) == 1:
-        plan.append({"spec": "quiz_reveal", "role": "quiz_reveal", "label": "Cevap Kartı", "artwork": arts[0]})
-        plan.append({"spec": "full_plate", "role": "full_artwork", "label": "Tam Kırpılmamış Eser", "artwork": arts[0]})
-        plan.append({"spec": "save_card", "role": "archival_save_card", "label": "Arşiv & Renk Kartı", "artwork": arts[0]})
+        plan.append({"spec": "quiz_reveal", "role": "quiz_reveal", "label": "Cevap Kartı", "artwork": arts[0], "is_cropped": False})
+        plan.append({"spec": "full_plate", "role": "full_artwork", "label": "Tam Kırpılmamış Eser", "artwork": arts[0], "is_cropped": False})
+        plan.append({"spec": closing_spec, "role": closing_role, "label": closing_label, "artwork": arts[0], "is_cropped": False})
     elif len(arts) >= 3:
-        plan.append({"spec": "room_1_gallery", "role": "room_work", "label": f"Oda 01 · {arts[0]['artist_surname']}", "artwork": arts[0]})
-        plan.append({"spec": "room_2_archive", "role": "room_work", "label": f"Oda 02 · {arts[1]['artist_surname']}", "artwork": arts[1]})
-        plan.append({"spec": "room_3_colors", "role": "room_work", "label": f"Oda 03 · {arts[2]['artist_surname']}", "artwork": arts[2]})
+        plan.append({"spec": "room_1_gallery", "role": "room_work", "label": f"Oda 01 · {arts[0]['artist_surname']}", "artwork": arts[0], "is_cropped": False})
+        plan.append({"spec": "room_2_archive", "role": "room_work", "label": f"Oda 02 · {arts[1]['artist_surname']}", "artwork": arts[1], "is_cropped": False})
+        plan.append({"spec": "room_3_colors", "role": "room_work", "label": f"Oda 03 · {arts[2]['artist_surname']}", "artwork": arts[2], "is_cropped": False})
     elif len(arts) == 2:
-        plan.append({"spec": "duet_work_1", "role": "full_artwork", "label": f"Eser 1 · {arts[0]['artist_surname']}", "artwork": arts[0]})
-        plan.append({"spec": "duet_work_2", "role": "full_artwork", "label": f"Eser 2 · {arts[1]['artist_surname']}", "artwork": arts[1]})
-        plan.append({"spec": "save_card", "role": "archival_save_card", "label": "Arşiv & Renk Kartı", "artwork": arts[1]})
+        if slide_two_intent and slide_two_intent.get("spec") == "duet_detail_compare":
+            plan.append(
+                {
+                    "spec": "duet_detail_compare",
+                    "role": "detail_compare",
+                    "label": "Karşılaştırmalı Detay",
+                    "artwork": arts[0],
+                    "is_cropped": True,
+                }
+            )
+        plan.append({"spec": "duet_work_1", "role": "full_artwork", "label": f"Eser 1 · {arts[0]['artist_surname']}", "artwork": arts[0], "is_cropped": False})
+        plan.append({"spec": "duet_work_2", "role": "full_artwork", "label": f"Eser 2 · {arts[1]['artist_surname']}", "artwork": arts[1], "is_cropped": False})
+        if use_color_card or not (slide_two_intent and slide_two_intent.get("spec") == "duet_detail_compare"):
+            plan.append({"spec": closing_spec, "role": closing_role, "label": closing_label, "artwork": arts[1], "is_cropped": False})
     else:
-        # Single-work Carousel: dynamic 3 vs 4 slides based on whether Cover already shows the full artwork!
-        if design_family in FULL_FRAME_COVER_FAMILIES:
-            # Concise 3-slide arc (Cover -> Focused Detail or Editorial Study -> Archival Card)
-            mid_choice = ("detail_callout", "template_story", "template_archive", "template_colors")[seed_int % 4]
-            if mid_choice == "detail_callout":
-                plan.append({"spec": "detail_callout", "role": "detail_callout", "label": "Yakın Detay İncelemesi", "artwork": arts[0]})
-            else:
-                plan.append({"spec": mid_choice, "role": "editorial_study", "label": "Küratör İncelemesi", "artwork": arts[0]})
-        else:
-            # 4-slide arc (Cover -> Detail/Editorial -> Full Uncropped Plate -> Archival Card)
-            arc = seed_int % 4
-            if arc == 0:
-                plan.append({"spec": "detail_callout", "role": "detail_callout", "label": "Yakın Detay İncelemesi", "artwork": arts[0]})
-                plan.append({"spec": "full_plate", "role": "full_artwork", "label": "Tam Kırpılmamış Eser", "artwork": arts[0]})
-            elif arc == 1:
-                plan.append({"spec": "template_colors", "role": "editorial_study", "label": "Renk & Ton Analizi", "artwork": arts[0]})
-                plan.append({"spec": "full_plate", "role": "full_artwork", "label": "Tam Kırpılmamış Eser", "artwork": arts[0]})
-            elif arc == 2:
-                plan.append({"spec": "template_gallery", "role": "full_artwork", "label": "Tam Kırpılmamış Eser", "artwork": arts[0]})
-                plan.append({"spec": "template_archive", "role": "editorial_study", "label": "Müze Arşiv Plakası", "artwork": arts[0]})
-            else:
-                plan.append({"spec": "full_plate", "role": "full_artwork", "label": "Tam Kırpılmamış Eser", "artwork": arts[0]})
-                plan.append({"spec": "template_story", "role": "editorial_study", "label": "Bağlam & Işık Notu", "artwork": arts[0]})
+        # Single-work Carousel: Slide 2 comes from slide_two_intent FIRST!
+        s2_spec = (slide_two_intent or {}).get("spec") or "detail_callout"
+        s2_role = (slide_two_intent or {}).get("role") or ("detail_callout" if s2_spec == "detail_callout" else "full_artwork")
+        s2_label = (slide_two_intent or {}).get("label") or ("Yakın Detay İncelemesi" if s2_spec == "detail_callout" else "Tam Kırpılmamış Eser")
+        s2_cropped = bool((slide_two_intent or {}).get("is_cropped", s2_spec == "detail_callout"))
+        plan.append({"spec": s2_spec, "role": s2_role, "label": s2_label, "artwork": arts[0], "is_cropped": s2_cropped})
+
+        # Add full_plate on Slide 3 ONLY if Slide 2 was a cropped detail AND Cover didn't already show the full artwork cleanly
+        if s2_cropped and design_family not in FULL_FRAME_COVER_FAMILIES:
+            plan.append({"spec": "full_plate", "role": "full_artwork", "label": "Tam Kırpılmamış Eser", "artwork": arts[0], "is_cropped": False})
 
         if show_scale:
-            plan.append({"spec": "monumental_scale", "role": "monumental_scale", "label": "Anıtsal Ölçek (170 cm)", "artwork": arts[0]})
-        plan.append({"spec": "save_card", "role": "archival_save_card", "label": "Arşiv & Renk Kartı", "artwork": arts[0]})
+            plan.append({"spec": "monumental_scale", "role": "monumental_scale", "label": "Anıtsal Ölçek (180+ cm)", "artwork": arts[0], "is_cropped": False})
+        plan.append({"spec": closing_spec, "role": closing_role, "label": closing_label, "artwork": arts[0], "is_cropped": False})
 
     total = len(plan)
     for idx, item in enumerate(plan, 1):
@@ -409,13 +462,22 @@ def plan_final_carousel_slides(
     return plan
 
 
-def _compose_strong_multi_work_caption(artworks: Sequence[dict], conn: dict, slot_index: int, total_slides: int) -> str:
-    """Write a natural English caption directly citing the concrete curatorial contrast & exact slide count."""
+def _compose_strong_multi_work_caption(
+    artworks: Sequence[dict],
+    conn: dict,
+    slot_index: int,
+    total_slides: int,
+    *,
+    has_detail_compare: bool = False,
+) -> str:
+    """Write a natural English caption citing the concrete connection, accurate support noun, & exact slides."""
     cleaned = [clean_museum_artwork(a) for a in artworks]
     theme = conn["theme_label"]
     takeaway = conn["reason_en"]
     n = len(cleaned)
     seed = int(hashlib.sha256(f"{cleaned[0]['canonical_id']}:{theme}:{slot_index}".encode("utf-8")).hexdigest()[:8], 16)
+    support_sg = _support_noun(cleaned[0].get("medium", ""), plural=False)
+    support_pl = _support_noun(cleaned[0].get("medium", ""), plural=True)
 
     if n == 2:
         a0, a1 = cleaned[0], cleaned[1]
@@ -426,13 +488,19 @@ def _compose_strong_multi_work_caption(artworks: Sequence[dict], conn: dict, slo
             f'Why place {a0["artist_surname"]} ({d0}) next to {a1["artist_surname"]} ({d1})? {takeaway}',
         )
         opening = openings[seed % len(openings)]
-        body = (
-            f"Slides 2 and 3 isolate each canvas uncropped ({short_museum(a0['institution'])} and {short_museum(a1['institution'])}), "
-            f"before Slide {total_slides} closes with the sampled archival palette."
-        )
+        if has_detail_compare:
+            body = (
+                f"Slide 2 places both focal regions side by side before Slides 3 and 4 isolate each uncropped {support_sg} "
+                f"({short_museum(a0['institution'])} and {short_museum(a1['institution'])})."
+            )
+        else:
+            body = (
+                f"Slides 2 and 3 isolate each {support_sg} uncropped ({short_museum(a0['institution'])} and {short_museum(a1['institution'])}), "
+                f"before Slide {total_slides} closes with the museum record."
+            )
         closings = (
-            f"Between {a0['artist_surname']} and {a1['artist_surname']}, which framing holds your eye longer?",
-            "Seeing both full canvases in sequence makes the contrast unmistakable.",
+            f"Between {a0['title_clean']} and {a1['title_clean']}, which side holds your eye longer?",
+            f"Seeing both full {support_pl} in sequence makes the dialogue unmistakable.",
         )
         closing = closings[seed % len(closings)]
     else:
@@ -472,6 +540,11 @@ def build_per_slide_alt_texts(post: dict, slide_plan: Sequence[dict]) -> list[di
                     f"Slide {idx} of {total} (Cover): {post['design_id']} editorial cover featuring '{aw['title_clean']}' by {aw['artist_short']} "
                     f"({aw_date}, {aw_museum}) in {tone_word}."
                 )
+        elif role == "detail_compare" and len(arts) >= 2:
+            txt = (
+                f"Slide {idx} of {total} (Side-by-Side Detail Comparison): Cropped focal regions of '{arts[0]['title_clean']}' and "
+                f"'{arts[1]['title_clean']}' placed side by side to highlight pose, brushwork, and motif contrast."
+            )
         elif role == "detail_callout":
             txt = (
                 f"Slide {idx} of {total} (Detail Study): Close-up detail crop of {post.get('focus_region', 'the focal area')} in '{aw['title_clean']}' "
@@ -500,6 +573,11 @@ def build_per_slide_alt_texts(post: dict, slide_plan: Sequence[dict]) -> list[di
             txt = (
                 f"Slide {idx} of {total} (Monumental Scale): Proportional museum wall view of '{aw['title_clean']}' beside a 170 cm visitor silhouette."
             )
+        elif role == "credit_plate":
+            txt = (
+                f"Slide {idx} of {total} (Museum Record): Full uncropped view of '{aw['title_clean']}' by {aw['artist_short']} ({aw_date}, {aw_museum}) "
+                f"with archival provenance caption."
+            )
         else:
             txt = (
                 f"Slide {idx} of {total} (Archival Reference Card): Complete view of '{aw['title_clean']}' by {aw['artist_short']} ({aw_date}, {aw_museum}) "
@@ -514,13 +592,14 @@ def build_per_slide_alt_texts(post: dict, slide_plan: Sequence[dict]) -> list[di
                 "page_sig": item["page_sig"],
                 "role": role,
                 "role_label": item["label"],
+                "is_cropped": bool(item.get("is_cropped", False)),
                 "alt_text_en": txt,
             }
         )
     return out
 
 
-def _week_folder_name(day_num: int) -> str:
+def _week_folder_name(day_num: int, total_days: int = 30) -> str:
     if day_num <= 7:
         return "Week-01"
     if day_num <= 14:
@@ -529,7 +608,9 @@ def _week_folder_name(day_num: int) -> str:
         return "Week-03"
     if day_num <= 28:
         return "Week-04"
-    return "Week-05-Days-29-30"
+    if total_days <= 29:
+        return "Week-05-Day-29"
+    return f"Week-05-Days-29-{max(29, total_days)}"
 
 
 def _slugify(text: str, limit: int = 28) -> str:
@@ -542,9 +623,12 @@ def _find_strong_partner_group(
     desired_total: int,
     pool_cleaned: Sequence[dict],
     used_counts: Counter[str],
+    *,
+    excluded_ids: set[str] | frozenset[str] = frozenset(),
 ) -> tuple[list[dict], dict] | None:
     """Search the verified pool for a Tier-1 (documented) or Tier-2 (concrete visible contrast) partner group.
 
+    Never borrows artworks already reserved in excluded_ids (zero within-month repeats).
     Returns (group, connection_dict) or None if no strong partner exists (triggering single-work fallback).
     """
     lead_id = lead["canonical_id"]
@@ -561,7 +645,10 @@ def _find_strong_partner_group(
         same_m = 0 if (lead_motif != "general_collection" and c_motif == lead_motif) else 1
         return (same_series, same_art, same_m, used_counts[c["canonical_id"]], c["canonical_id"])
 
-    others = sorted((c for c in pool_cleaned if c["canonical_id"] != lead_id), key=_rank)
+    others = sorted(
+        (c for c in pool_cleaned if c["canonical_id"] != lead_id and c["canonical_id"] not in excluded_ids),
+        key=_rank,
+    )
 
     # Try Tier 1 + Tier 2 pairs/trios greedily from top ranked candidates
     chosen = [lead]
@@ -633,8 +720,12 @@ def build_weekly_carousel_delivery(
     )
 
     used_in_carousels: Counter[str] = Counter()
+    month_reserved_ids: set[str] = set()
     for p in v2_manifest["posts"]:
         if p["post_format"] == "carousel":
+            if p["artworks"]:
+                # Pre-register every Carousel's lead artwork BEFORE partner repair so no repair borrows another Carousel's lead!
+                month_reserved_ids.add(p["artworks"][0]["canonical_id"])
             for a in p["artworks"]:
                 used_in_carousels[a["canonical_id"]] += 1
 
@@ -668,7 +759,8 @@ def build_weekly_carousel_delivery(
                     "id": post["id"],
                     "slot_number": post["slot_number"],
                     "day": post["day"],
-                    "week": _week_folder_name(post["day"]),
+                    "week": _week_folder_name(post["day"], total_days=requested_days),
+                    "scheduled_at": post.get("scheduled_at", ""),
                     "scheduled_label": post["scheduled_label"],
                     "post_format": "reel",
                     "design_id": post["design_id"],
@@ -684,7 +776,7 @@ def build_weekly_carousel_delivery(
             continue
 
         day_num = post["day"]
-        week_name = _week_folder_name(day_num)
+        week_name = _week_folder_name(day_num, total_days=requested_days)
         day_carousel_seq[day_num] += 1
         seq_in_day = day_carousel_seq[day_num]
         arts = [clean_museum_artwork(pool_by_id.get(a["canonical_id"], a)) for a in post["artworks"]]
@@ -724,13 +816,22 @@ def build_weekly_carousel_delivery(
             re_render_cover = True
             force_re_render_inner = True
 
-        # --- REQUIREMENT #2: Strict 2-tier general curatorial pairing + automatic single-work fallback ---
+        # --- REQUIREMENT #2: Strict 2-tier general curatorial pairing + zero within-month repeats + single-work fallback ---
         if len(arts) >= 2:
             conn = evaluate_multi_work_connection(arts)
-            if conn["strong"]:
+            secondary_collision = any(a["canonical_id"] in month_reserved_ids for a in arts[1:])
+            if conn["strong"] and not secondary_collision:
                 pairing_decision = f"kept_{conn['tier']}"
+                for c in arts[1:]:
+                    month_reserved_ids.add(c["canonical_id"])
             else:
-                found = _find_strong_partner_group(arts[0], len(arts), partner_pool, used_in_carousels)
+                found = _find_strong_partner_group(
+                    arts[0],
+                    len(arts),
+                    partner_pool,
+                    used_in_carousels,
+                    excluded_ids=month_reserved_ids,
+                )
                 if found is not None:
                     arts, conn = found
                     repaired_multi_work_count += 1
@@ -739,12 +840,13 @@ def build_weekly_carousel_delivery(
                     force_re_render_inner = True
                     for c in arts[1:]:
                         used_in_carousels[c["canonical_id"]] += 1
+                        month_reserved_ids.add(c["canonical_id"])
                 else:
                     # Automatic fallback: keep lead artwork and convert to focused single-artwork multi-slide Carousel!
                     arts = [arts[0]]
                     fallback_to_single_count += 1
                     pairing_decision = "fallback_single_carousel"
-                    pairing_reason_en = "No documented museum pair or concrete visual contrast found; converted automatically to a focused single-artwork multi-slide Carousel."
+                    pairing_reason_en = "No unused strong museum partner found; converted automatically to a focused single-artwork multi-slide Carousel."
                     lead_prof = extract_artwork_visual_profile(arts[0]["image_path"], arts[0]["title_clean"])
                     design_id, dec = select_profile_design(
                         post_format="carousel",
@@ -773,14 +875,14 @@ def build_weekly_carousel_delivery(
                 relation_evidence = conn.get("relation_evidence", "")
                 candidate_discovery_hint = conn.get("candidate_discovery_hint", "")
                 editorial_bond_en = conn.get("editorial_bond_en", "")
-                if len(arts) == 3:
-                    headline = f"{arts[0]['artist_surname']}, {arts[1]['artist_surname']} & {arts[2]['artist_surname']}"
-                else:
-                    headline = f"{arts[0]['artist_surname']} / {arts[1]['artist_surname']}"
+                headline = compose_multi_work_headline(arts, conn)
                 fc_lines = ["Museum Provenance & Source Record:"]
                 for a in arts:
                     d_txt = a.get("date") or "Date unrecorded"
-                    fc_lines.append(f"• {a['artist']} — {a['title']} ({d_txt})")
+                    med = f" · {a['medium']}" if a.get("medium") else ""
+                    ev_date = _extract_event_date_from_text(a.get("title", ""), a.get("description", ""), d_txt)
+                    date_detail = f"Created: {d_txt} · Event depicted: {ev_date}" if ev_date else d_txt
+                    fc_lines.append(f"• {a['artist']} — {a['title']} ({date_detail}){med}")
                     fc_lines.append(f"  {a.get('institution', 'Public Collection')} · {a.get('rights_basis', 'Public Domain')} · {a.get('museum_url', '')}")
                 first_comment_en = "\n".join(fc_lines)
 
@@ -789,7 +891,18 @@ def build_weekly_carousel_delivery(
         if mat_err:
             material_issues.append({"post_id": post["id"], "week": week_name, "day": day_num, "reason": mat_err})
 
-        # --- REQUIREMENT #3: Decide finalized slide list FIRST (Single Source of Truth!) ---
+        # --- REQUIREMENT #1 & #2: Decide Slide 2 intent FIRST, then finalized slide list (Single Source of Truth!) ---
+        lead_prof_final = extract_artwork_visual_profile(arts[0]["image_path"], arts[0]["title_clean"])
+        brief_final = build_curatorial_brief(arts, post_format="carousel", slot_index=post["slot_number"], is_quiz=is_quiz)
+        focus_pt = tuple(post.get("motion_start") or brief_final["motion_start"])
+        s2_intent = decide_slide_two_intent(
+            arts,
+            focus=focus_pt,
+            width=lead_prof_final["width"],
+            height=lead_prof_final["height"],
+            cover_shows_full=(design_family not in CLOSEUP_COVER_FAMILIES),
+            use_color_card=brief_final.get("use_color_card", False),
+        )
         final_slide_plan = plan_final_carousel_slides(
             post_id=post["id"],
             design_id=design_id,
@@ -797,12 +910,23 @@ def build_weekly_carousel_delivery(
             arts=arts,
             is_quiz=is_quiz,
             dimensions_cm_text=arts[0].get("dimensions_cm", ""),
+            slide_two_intent=s2_intent,
+            use_color_card=brief_final.get("use_color_card", False),
         )
         final_inner_specs = [item["spec"] for item in final_slide_plan[1:]]
         final_total_slides = len(final_slide_plan)
 
         if len(arts) >= 2:
-            caption_en = _compose_strong_multi_work_caption(arts, conn, post["slot_number"], final_total_slides)
+            caption_en = _compose_strong_multi_work_caption(
+                arts,
+                conn,
+                post["slot_number"],
+                final_total_slides,
+                has_detail_compare=("duet_detail_compare" in final_inner_specs),
+            )
+        elif re_render_cover:
+            caption_en = brief_final["caption_en"]
+            first_comment_en = brief_final["first_comment_en"]
 
         folder_slug = f"D{day_num:02d}-C{seq_in_day}_{post['id']}_{_slugify(arts[0]['title_clean'])}"
         post_dir = out_root / "weeks" / week_name / folder_slug
@@ -831,11 +955,13 @@ def build_weekly_carousel_delivery(
             render_astra_design(design_id, sources, headline, slide_1_dest)
             regenerated_cover_count += 1
 
-        # Inner slides (2..N): Reuse ONLY if count AND specs match exactly; if 4->3 changed, ALWAYS re-render so JPG numbers are exact!
+        # Inner slides (2..N): Reuse ONLY if count AND specs match exactly; if specs changed, ALWAYS re-render!
         existing_slides = [src_root / rel for rel in post.get("slides", [])[1:]]
+        existing_inner_specs = list(post.get("slide_specs", [])[1:])
         can_reuse_inner = (
             not force_re_render_inner
             and len(existing_slides) == len(final_inner_specs)
+            and existing_inner_specs == final_inner_specs
             and all(p.is_file() for p in existing_slides)
         )
 
@@ -890,6 +1016,7 @@ def build_weekly_carousel_delivery(
             "day": day_num,
             "week": week_name,
             "folder_rel": post_dir.relative_to(out_root).as_posix(),
+            "scheduled_at": post.get("scheduled_at", ""),
             "scheduled_label": post["scheduled_label"],
             "post_format": "carousel",
             "design_id": design_id,
@@ -952,13 +1079,50 @@ def build_weekly_carousel_delivery(
     carousels_only = [p for p in all_profile_posts if p["post_format"] == "carousel"]
     reels_only = [p for p in all_profile_posts if p["post_format"] == "reel"]
     exported_cids = sorted({a["canonical_id"] for p in carousels_only for a in p["artworks"]})
+    # Compute schedule window strictly from scheduled_at (sorted) and filter by post_format
+    all_sched_sorted = sorted((p for p in all_profile_posts if p.get("scheduled_at")), key=lambda x: x["scheduled_at"])
+    carousels_sched_sorted = sorted((p for p in carousels_only if p.get("scheduled_at")), key=lambda x: x["scheduled_at"])
+    sched_start = all_sched_sorted[0]["scheduled_at"][:10] if all_sched_sorted else ""
+    sched_end = all_sched_sorted[-1]["scheduled_at"][:10] if all_sched_sorted else ""
+    first_carousel_info = (
+        {
+            "id": carousels_sched_sorted[0]["id"],
+            "scheduled_at": carousels_sched_sorted[0]["scheduled_at"],
+            "scheduled_label": carousels_sched_sorted[0]["scheduled_label"],
+        }
+        if carousels_sched_sorted
+        else None
+    )
+    last_carousel_info = (
+        {
+            "id": carousels_sched_sorted[-1]["id"],
+            "scheduled_at": carousels_sched_sorted[-1]["scheduled_at"],
+            "scheduled_label": carousels_sched_sorted[-1]["scheduled_label"],
+        }
+        if carousels_sched_sorted
+        else None
+    )
+    calendar_slot_collisions = (
+        ledger.find_schedule_collisions(sched_start, sched_end, exclude_plan_id=effective_plan_id)
+        if ledger is not None and sched_start and sched_end
+        else []
+    )
     if ledger is not None and exported_cids:
         ledger.mark_used(
             exported_cids,
             plan_id=effective_plan_id,
             status=ledger_status,
             replace_plan=True,
+            schedule_start=sched_start,
+            schedule_end=sched_end,
         )
+
+    # Verify zero unintended within-month repeats across different Carousels
+    cid_post_map: dict[str, list[str]] = {}
+    for p in carousels_only:
+        for a in p["artworks"]:
+            cid_post_map.setdefault(a["canonical_id"], []).append(p["id"])
+    within_month_dups = {cid: pids for cid, pids in cid_post_map.items() if len(pids) > 1}
 
     reel_cids = {a["canonical_id"] for p in reels_only for a in p["artworks"]}
     carousel_cid_set = set(exported_cids)
@@ -987,6 +1151,16 @@ def build_weekly_carousel_delivery(
         "plan_id": effective_plan_id,
         "ledger_status": ledger_status,
         "reuse_ledger_path": str(ledger.path) if ledger is not None else "",
+        "schedule_window": {
+            "start_date": sched_start,
+            "end_date": sched_end,
+            "days": requested_days,
+            "first_carousel": first_carousel_info,
+            "last_carousel": last_carousel_info,
+        },
+        "calendar_slot_collisions": calendar_slot_collisions,
+        "within_month_duplicate_carousel_artworks": len(within_month_dups),
+        "within_month_duplicate_details": within_month_dups,
         "expected_carousels": expected_carousels,
         "total_carousels": len(carousels_only),
         "shareable_carousels": len(carousels_only) - len({x["post_id"] for x in material_issues}),
@@ -1205,7 +1379,7 @@ function renderInspector() {{
   selectedId = p.id;
   document.getElementById('ins-title').textContent = p.editorial_title;
   document.getElementById('ins-meta').textContent =
-    p.week + ' · Gün ' + p.day + ' · ' + p.scheduled_label + ' · ' + p.post_format.toUpperCase() +
+    p.week + ' · Gün ' + p.day + ' · Planlanan yayın tarihi: ' + (p.scheduled_at ? p.scheduled_at.slice(0, 16).replace('T', ' ') : p.scheduled_label) + ' · ' + p.post_format.toUpperCase() +
     ' · ' + p.design_id + ' [' + p.family + ']' + (p.pairing_decision ? (' · Karar: ' + p.pairing_decision) : '');
 
   const briefEl = document.getElementById('ins-brief');

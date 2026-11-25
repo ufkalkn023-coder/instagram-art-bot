@@ -334,20 +334,25 @@ def ensure_carousel_pool_supply(
             "source": aw.source,
             "artist": artist_name,
             "artist_normalized": norm_art,
-            "title": (aw.title or "Untitled").strip(),
-            "date": (aw.creation_date_display or aw.creation_date or "").strip(),
-            "institution": (aw.museum_name or aw.source).strip(),
+            "title": " ".join((aw.title or "Untitled").split()).strip(),
+            "date": " ".join((aw.creation_date_display or aw.creation_date or "").split()).strip(),
+            "institution": " ".join((aw.museum_name or aw.source).split()).strip(),
             "museum_url": (aw.artwork_url or aw.museum_url or "").strip(),
             "rights_status": aw.rights_status,
             "rights_basis": getattr(aw, "rights_statement", None) or getattr(aw, "license_name", None) or aw.rights_status,
             "image_url": aw.image_url,
             "image_path": str(img_dir / f"{safe_stem}.jpg"),
-            "dimensions_cm": "",
+            "medium": (getattr(aw, "medium", None) or "").strip(),
+            "description": (getattr(aw, "description", None) or "").strip(),
+            "dimensions_cm": (getattr(aw, "dimensions", None) or "").strip(),
             "_is_companion": is_companion,
         }
-        desc = (getattr(aw, "description", None) or "").strip()
-        if desc and any(tok in desc.lower() for tok in ("pair", "pendant", "companion", "series", "sketch for", "study for")):
-            rec["museum_relation_note"] = desc[:240]
+        desc = rec["description"]
+        if desc and any(
+            tok in desc.lower()
+            for tok in ("pair", "pendant", "companion", "series", "sketch for", "study for", "outer panels", "altarpiece", "wings", "half-brother", "half-sister")
+        ):
+            rec["museum_relation_note"] = desc[:320]
         return rec
 
     pending_candidates: list[dict] = []
@@ -586,9 +591,16 @@ def fetch_verified_museum_pool(
                         "rights_basis": getattr(aw, "rights_statement", None) or getattr(aw, "license_name", None) or aw.rights_status,
                         "image_url": aw.image_url,
                         "image_path": str(img_dir / f"{safe_stem}.jpg"),
-                        "dimensions_cm": "",
+                        "medium": (getattr(aw, "medium", None) or "").strip(),
+                        "description": (getattr(aw, "description", None) or "").strip(),
+                        "dimensions_cm": (getattr(aw, "dimensions", None) or "").strip(),
                     }
                 )
+                if pending_candidates[-1]["description"] and any(
+                    tok in pending_candidates[-1]["description"].lower()
+                    for tok in ("pair", "pendant", "companion", "series", "sketch for", "study for", "outer panels", "altarpiece", "wings", "half-brother", "half-sister")
+                ):
+                    pending_candidates[-1]["museum_relation_note"] = pending_candidates[-1]["description"][:320]
 
     newly_fetched = 0
 
@@ -640,11 +652,13 @@ class ArtworkReuseLedger:
     - 'reserved': planned/exported month, blocks OTHER plan_ids within cooldown_days
     - 'published': live/confirmed post, blocks OTHER plan_ids within cooldown_days
     Re-opening or fixing the SAME plan_id never self-blocks its own artworks.
+    Also tracks active plan calendar windows so overlapping schedule slots can be reported.
     """
 
     def __init__(self, ledger_path: str | Path):
         self.path = Path(ledger_path).resolve()
         self._records: dict[str, dict] = {}
+        self._plans: dict[str, dict] = {}
         if self.path.is_file():
             raw = json.loads(self.path.read_text(encoding="utf-8"))
             if isinstance(raw, dict) and isinstance(raw.get("used_artworks"), dict):
@@ -659,12 +673,13 @@ class ArtworkReuseLedger:
                             "status": status,
                         }
                     else:
-                        # Backward compatibility with v1 flat string timestamps
                         self._records[str(k)] = {
                             "used_at": str(v),
                             "plan_id": "legacy",
                             "status": "published",
                         }
+            if isinstance(raw, dict) and isinstance(raw.get("plans"), dict):
+                self._plans = {str(k): dict(v) for k, v in raw["plans"].items() if isinstance(v, dict)}
 
     def is_blocked(
         self,
@@ -695,6 +710,8 @@ class ArtworkReuseLedger:
         plan_id: str = "default",
         status: str = "reserved",
         replace_plan: bool = False,
+        schedule_start: str | None = None,
+        schedule_end: str | None = None,
     ) -> None:
         norm_status = str(status or "reserved").lower()
         if norm_status not in VALID_LEDGER_STATUSES:
@@ -713,7 +730,54 @@ class ArtworkReuseLedger:
                     "plan_id": str(plan_id or "default"),
                     "status": norm_status,
                 }
+        if plan_id:
+            prev_plan = self._plans.get(str(plan_id), {})
+            self._plans[str(plan_id)] = {
+                "status": norm_status,
+                "updated_at": stamp,
+                "schedule_start": schedule_start or prev_plan.get("schedule_start", ""),
+                "schedule_end": schedule_end or prev_plan.get("schedule_end", ""),
+            }
         self.save()
+
+    def find_schedule_collisions(
+        self,
+        start_date: str,
+        end_date: str,
+        *,
+        exclude_plan_id: str | None = None,
+    ) -> list[dict]:
+        """Return active reservations/published plans whose calendar window overlaps [start_date, end_date]."""
+        if not start_date or not end_date:
+            return []
+        s_new = datetime.fromisoformat(start_date[:10]).date()
+        e_new = datetime.fromisoformat(end_date[:10]).date()
+        collisions: list[dict] = []
+        for pid, meta in sorted(self._plans.items()):
+            if exclude_plan_id and pid == exclude_plan_id:
+                continue
+            if meta.get("status") not in {"reserved", "published"}:
+                continue
+            ps = (meta.get("schedule_start") or "")[:10]
+            pe = (meta.get("schedule_end") or "")[:10]
+            if not ps or not pe:
+                continue
+            s_old = datetime.fromisoformat(ps).date()
+            e_old = datetime.fromisoformat(pe).date()
+            overlap_start = max(s_new, s_old)
+            overlap_end = min(e_new, e_old)
+            if overlap_start <= overlap_end:
+                collisions.append(
+                    {
+                        "existing_plan_id": pid,
+                        "existing_status": meta.get("status"),
+                        "existing_window": f"{s_old.isoformat()}..{e_old.isoformat()}",
+                        "overlap_start": overlap_start.isoformat(),
+                        "overlap_end": overlap_end.isoformat(),
+                        "overlap_days": (overlap_end - overlap_start).days + 1,
+                    }
+                )
+        return collisions
 
     def status_summary(self) -> dict:
         by_status = Counter(v.get("status", "reserved") for v in self._records.values())
@@ -722,6 +786,7 @@ class ArtworkReuseLedger:
             "total_entries": len(self._records),
             "by_status": dict(by_status),
             "by_plan": dict(by_plan),
+            "plans": self._plans,
         }
 
     def save(self) -> None:
@@ -729,6 +794,7 @@ class ArtworkReuseLedger:
         payload = {
             "schema_version": "artfolio-reuse-ledger-v2",
             "cooldown_days": REUSE_COOLDOWN_DAYS,
+            "plans": self._plans,
             "used_artworks": self._records,
         }
         tmp = self.path.with_suffix(".tmp.json")
@@ -737,6 +803,77 @@ class ArtworkReuseLedger:
             tmp.replace(self.path)
         finally:
             tmp.unlink(missing_ok=True)
+
+
+def enrich_pool_metadata(
+    pool_index_path: str | Path,
+    *,
+    canonical_ids: Sequence[str] | None = None,
+    max_workers: int = 4,
+) -> dict:
+    """Refresh missing medium/description/relation notes and English Rijksmuseum titles in pool_index.json."""
+    from src.museums.rijksmuseum import RijksmuseumAdapter
+
+    index_path = Path(pool_index_path).resolve()
+    payload = json.loads(index_path.read_text(encoding="utf-8"))
+    artworks = payload.get("artworks", [])
+    target_set = set(canonical_ids) if canonical_ids else None
+    to_refresh = [
+        item
+        for item in artworks
+        if (target_set is None or item.get("canonical_id") in target_set)
+        and item.get("source") == "rijksmuseum"
+        and (not item.get("medium") or not item.get("description"))
+    ]
+    if not to_refresh:
+        return {"enriched": 0, "checked": 0}
+
+    adapter = RijksmuseumAdapter()
+
+    def _fetch_one(item: dict) -> tuple[str, object | None]:
+        cid = item["canonical_id"]
+        obj_num = cid[len("rijksmuseum_"):] if cid.startswith("rijksmuseum_") else cid
+        try:
+            res = adapter.fetch_candidates(limit=2, verification_id=obj_num)
+            for aw in res:
+                if aw.canonical_id == cid or aw.source_id == obj_num:
+                    return cid, aw
+        except Exception:
+            pass
+        return cid, None
+
+    updates: dict[str, object] = {}
+    with ThreadPoolExecutor(max_workers=max(1, max_workers)) as pool:
+        for cid, aw in pool.map(_fetch_one, to_refresh):
+            if aw is not None:
+                updates[cid] = aw
+
+    enriched_count = 0
+    for item in artworks:
+        aw = updates.get(item.get("canonical_id"))
+        if aw is None:
+            continue
+        if aw.title and aw.title != item.get("title"):
+            item.setdefault("title_original", item.get("title", ""))
+            item["title"] = aw.title.strip()
+        if aw.medium and not item.get("medium"):
+            item["medium"] = aw.medium.strip()
+        if aw.description:
+            item["description"] = aw.description.strip()
+            if any(
+                tok in item["description"].lower()
+                for tok in ("pair", "pendant", "companion", "series", "sketch for", "study for", "outer panels", "altarpiece", "wings", "half-brother", "half-sister")
+            ):
+                item["museum_relation_note"] = item["description"][:320]
+        if getattr(aw, "dimensions", None) and not item.get("dimensions_cm"):
+            item["dimensions_cm"] = str(aw.dimensions).strip()
+        enriched_count += 1
+
+    payload["updated_at_utc"] = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+    tmp = index_path.with_suffix(".tmp.json")
+    tmp.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    tmp.replace(index_path)
+    return {"checked": len(to_refresh), "enriched": enriched_count}
 
 
 def infer_century(date_str: str) -> int:
