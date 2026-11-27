@@ -1,0 +1,1571 @@
+{
+  "schema_version": "artfolio-design-catalog-v1",
+  "collection": "astra",
+  "families": [
+    {
+      "slug": "gallery",
+      "name": "Galeri duvarı",
+      "description": "Eserin çevresindeki boşluk, duvar rengi ve çerçeve serinin ritmini kuruyor."
+    },
+    {
+      "slug": "detail",
+      "name": "Yakın bakış",
+      "description": "Bir ayrıntı, bütün resme geri dönmek için görsel bir ipucuna dönüşüyor."
+    },
+    {
+      "slug": "duet",
+      "name": "Görsel düetler",
+      "description": "İki eser aynı kapakta birbirini biçim, ışık ya da konu üzerinden tamamlıyor."
+    },
+    {
+      "slug": "poster",
+      "name": "Grafik afiş",
+      "description": "Büyük formlar ve güçlü tipografi küçük profil önizlemesinde de okunuyor."
+    },
+    {
+      "slug": "archive",
+      "name": "Analog arşiv",
+      "description": "Baskı, kart, defter ve fotoğraf kağıdı gibi fiziksel arşiv formlarından kurulan kapaklar."
+    },
+    {
+      "slug": "cinema",
+      "name": "Sinematik kapaklar",
+      "description": "Işık, karanlık ve kadraj üzerinden kurulan Reels kapakları."
+    },
+    {
+      "slug": "colors",
+      "name": "Palet serileri",
+      "description": "Renklerin tamamı kapakta kullanılan eserlerin görüntülerinden seçiliyor."
+    },
+    {
+      "slug": "typography",
+      "name": "Tipografi deneyleri",
+      "description": "Kısa başlık, harf boşluğu veya kelime biçimi doğrudan kompozisyonun parçası."
+    },
+    {
+      "slug": "story",
+      "name": "Hikâye kapakları",
+      "description": "Her kapak, esere bakmayı başlatan tek bir kısa İngilizce soruya ya da cümleye dayanıyor."
+    },
+    {
+      "slug": "experimental",
+      "name": "Deneysel formlar",
+      "description": "Eser, alışılmadık bir pencere, yüzey veya okuma düzeni üzerinden görünüyor."
+    }
+  ],
+  "designs": [
+    {
+      "id": "astra-001",
+      "collection": "astra",
+      "number": 1,
+      "name": "Quiet Gallery",
+      "family": "gallery",
+      "family_name": "Galeri duvarı",
+      "description": "Koyu yeşil duvarda geniş yatay eser, kenara çekilmiş küçük müze künyesi.",
+      "sample_image": "001-quiet-gallery.jpg",
+      "source_keys": [
+        "lilies"
+      ],
+      "required_sources": 1,
+      "sample_head": "A room for water"
+    },
+    {
+      "id": "astra-002",
+      "collection": "astra",
+      "number": 2,
+      "name": "Single Nail",
+      "family": "gallery",
+      "family_name": "Galeri duvarı",
+      "description": "Açık duvarda çivi çizgisi, asılı portre ve zemine yaslanan eser adı.",
+      "sample_image": "002-single-nail.jpg",
+      "source_keys": [
+        "red"
+      ],
+      "required_sources": 1,
+      "sample_head": ""
+    },
+    {
+      "id": "astra-003",
+      "collection": "astra",
+      "number": 3,
+      "name": "Ivory Margin",
+      "family": "gallery",
+      "family_name": "Galeri duvarı",
+      "description": "Bol fildişi boşluk, sola oturan portre ve klasik kitap tipografisi.",
+      "sample_image": "003-ivory-margin.jpg",
+      "source_keys": [
+        "renoir"
+      ],
+      "required_sources": 1,
+      "sample_head": ""
+    },
+    {
+      "id": "astra-004",
+      "collection": "astra",
+      "number": 4,
+      "name": "Blue Salon",
+      "family": "gallery",
+      "family_name": "Galeri duvarı",
+      "description": "Kobalt salon, beyaz paspartu ve duvarın alt ucunda ince künye.",
+      "sample_image": "004-blue-salon.jpg",
+      "source_keys": [
+        "wave"
+      ],
+      "required_sources": 1,
+      "sample_head": ""
+    },
+    {
+      "id": "astra-005",
+      "collection": "astra",
+      "number": 5,
+      "name": "Low Hang",
+      "family": "gallery",
+      "family_name": "Galeri duvarı",
+      "description": "Eser alt yarıya asılıyor; yukarıda büyük, havadar serif dizgi.",
+      "sample_image": "005-low-hang.jpg",
+      "source_keys": [
+        "sargent"
+      ],
+      "required_sources": 1,
+      "sample_head": "A room for one"
+    },
+    {
+      "id": "astra-006",
+      "collection": "astra",
+      "number": 6,
+      "name": "Threshold",
+      "family": "gallery",
+      "family_name": "Galeri duvarı",
+      "description": "Resim kapı açıklığına oturuyor; renkli eşik iki mekanı ayırıyor.",
+      "sample_image": "006-threshold.jpg",
+      "source_keys": [
+        "tissot"
+      ],
+      "required_sources": 1,
+      "sample_head": ""
+    },
+    {
+      "id": "astra-007",
+      "collection": "astra",
+      "number": 7,
+      "name": "Blind Frame",
+      "family": "gallery",
+      "family_name": "Galeri duvarı",
+      "description": "Eserin altına kaymış boş çerçeve, duvarda ikinci bir form yaratıyor.",
+      "sample_image": "007-blind-frame.jpg",
+      "source_keys": [
+        "cezanne"
+      ],
+      "required_sources": 1,
+      "sample_head": ""
+    },
+    {
+      "id": "astra-008",
+      "collection": "astra",
+      "number": 8,
+      "name": "Print Room",
+      "family": "gallery",
+      "family_name": "Galeri duvarı",
+      "description": "Geniş mat üzerine küçük Japon baskısı ve tek satırlık baskı künyesi.",
+      "sample_image": "008-print-room.jpg",
+      "source_keys": [
+        "hiro"
+      ],
+      "required_sources": 1,
+      "sample_head": ""
+    },
+    {
+      "id": "astra-009",
+      "collection": "astra",
+      "number": 9,
+      "name": "Side Light",
+      "family": "gallery",
+      "family_name": "Galeri duvarı",
+      "description": "Eser sağda, solda ışık alan duvara düşen tipografi.",
+      "sample_image": "009-side-light.jpg",
+      "source_keys": [
+        "carav"
+      ],
+      "required_sources": 1,
+      "sample_head": "Light enters here"
+    },
+    {
+      "id": "astra-010",
+      "collection": "astra",
+      "number": 10,
+      "name": "The Bench",
+      "family": "gallery",
+      "family_name": "Galeri duvarı",
+      "description": "Duvarla aynı perspektifte yalın bir bank, esere uzaktan bakma duygusu veriyor.",
+      "sample_image": "010-the-bench.jpg",
+      "source_keys": [
+        "berthe"
+      ],
+      "required_sources": 1,
+      "sample_head": ""
+    },
+    {
+      "id": "astra-011",
+      "collection": "astra",
+      "number": 11,
+      "name": "Detail Atlas",
+      "family": "detail",
+      "family_name": "Yakın bakış",
+      "description": "Büyük bir kesit, küçük tam eser ve kesitin yerini gösteren işaret.",
+      "sample_image": "011-detail-atlas.jpg",
+      "source_keys": [
+        "degas"
+      ],
+      "required_sources": 1,
+      "sample_head": "Stay with the gesture"
+    },
+    {
+      "id": "astra-012",
+      "collection": "astra",
+      "number": 12,
+      "name": "The Loupe",
+      "family": "detail",
+      "family_name": "Yakın bakış",
+      "description": "Tam resmin üzerinde büyüteç benzeri dairesel bir ayrıntı penceresi.",
+      "sample_image": "012-the-loupe.jpg",
+      "source_keys": [
+        "renoir"
+      ],
+      "required_sources": 1,
+      "sample_head": ""
+    },
+    {
+      "id": "astra-013",
+      "collection": "astra",
+      "number": 13,
+      "name": "Edge Study",
+      "family": "detail",
+      "family_name": "Yakın bakış",
+      "description": "Kenar boyunca üç ince şerit, aynı eserde boya yüzeyini izliyor.",
+      "sample_image": "013-edge-study.jpg",
+      "source_keys": [
+        "gogh"
+      ],
+      "required_sources": 1,
+      "sample_head": "Follow the brush"
+    },
+    {
+      "id": "astra-014",
+      "collection": "astra",
+      "number": 14,
+      "name": "Coordinates",
+      "family": "detail",
+      "family_name": "Yakın bakış",
+      "description": "Dalgaya eklenen satır ve sütun çizgileri, resmin bir bölümünü işaretliyor.",
+      "sample_image": "014-coordinates.jpg",
+      "source_keys": [
+        "wave"
+      ],
+      "required_sources": 1,
+      "sample_head": ""
+    },
+    {
+      "id": "astra-015",
+      "collection": "astra",
+      "number": 15,
+      "name": "Cutaway",
+      "family": "detail",
+      "family_name": "Yakın bakış",
+      "description": "Alevli ufuk yatay bir kesitle açılıyor; tam eser altta görünür.",
+      "sample_image": "015-cutaway.jpg",
+      "source_keys": [
+        "turner"
+      ],
+      "required_sources": 1,
+      "sample_head": ""
+    },
+    {
+      "id": "astra-016",
+      "collection": "astra",
+      "number": 16,
+      "name": "Surface Notes",
+      "family": "detail",
+      "family_name": "Yakın bakış",
+      "description": "Aynı natürmortun üç yakın planı, yüzey ve fırça darbelerini öne çıkarıyor.",
+      "sample_image": "016-surface-notes.jpg",
+      "source_keys": [
+        "cezstill"
+      ],
+      "required_sources": 1,
+      "sample_head": ""
+    },
+    {
+      "id": "astra-017",
+      "collection": "astra",
+      "number": 17,
+      "name": "Soft Focus",
+      "family": "detail",
+      "family_name": "Yakın bakış",
+      "description": "Odak dışı bir alanın üstünde net bir çiçek ayrıntısı beliriyor.",
+      "sample_image": "017-soft-focus.jpg",
+      "source_keys": [
+        "redon"
+      ],
+      "required_sources": 1,
+      "sample_head": "Soft focus"
+    },
+    {
+      "id": "astra-018",
+      "collection": "astra",
+      "number": 18,
+      "name": "The Corner",
+      "family": "detail",
+      "family_name": "Yakın bakış",
+      "description": "Küçük bir köşe ayrıntısı iki dikey alana açılıyor; kaynak eser altta.",
+      "sample_image": "018-the-corner.jpg",
+      "source_keys": [
+        "rousseau"
+      ],
+      "required_sources": 1,
+      "sample_head": ""
+    },
+    {
+      "id": "astra-019",
+      "collection": "astra",
+      "number": 19,
+      "name": "Mark the Light",
+      "family": "detail",
+      "family_name": "Yakın bakış",
+      "description": "İnce sarı çizgi, koyu resimde ışığın takip edilebileceği bir rota çiziyor.",
+      "sample_image": "019-mark-the-light.jpg",
+      "source_keys": [
+        "latour"
+      ],
+      "required_sources": 1,
+      "sample_head": "Where light lands"
+    },
+    {
+      "id": "astra-020",
+      "collection": "astra",
+      "number": 20,
+      "name": "Picture Key",
+      "family": "detail",
+      "family_name": "Yakın bakış",
+      "description": "İki küçük pencereye bağlanan çizgiler, detayları tam kompozisyonda konumluyor.",
+      "sample_image": "020-picture-key.jpg",
+      "source_keys": [
+        "peacock"
+      ],
+      "required_sources": 1,
+      "sample_head": ""
+    },
+    {
+      "id": "astra-021",
+      "collection": "astra",
+      "number": 21,
+      "name": "Shared Horizon",
+      "family": "duet",
+      "family_name": "Görsel düetler",
+      "description": "İki farklı gökyüzü ortak bir ufuk ekseninde buluşuyor.",
+      "sample_image": "021-shared-horizon.jpg",
+      "source_keys": [
+        "turner",
+        "church"
+      ],
+      "required_sources": 2,
+      "sample_head": "Two skies, one edge"
+    },
+    {
+      "id": "astra-022",
+      "collection": "astra",
+      "number": 22,
+      "name": "Across the Room",
+      "family": "duet",
+      "family_name": "Görsel düetler",
+      "description": "İki portre karşılıklı duvarlara asılmış gibi duruyor.",
+      "sample_image": "022-across-the-room.jpg",
+      "source_keys": [
+        "berthe",
+        "renoir"
+      ],
+      "required_sources": 2,
+      "sample_head": "Across the room"
+    },
+    {
+      "id": "astra-023",
+      "collection": "astra",
+      "number": 23,
+      "name": "Facing Pages",
+      "family": "duet",
+      "family_name": "Görsel düetler",
+      "description": "Açık bir sanat kitabının karşılıklı sayfalarında iki baskı.",
+      "sample_image": "023-facing-pages.jpg",
+      "source_keys": [
+        "wave",
+        "rain"
+      ],
+      "required_sources": 2,
+      "sample_head": ""
+    },
+    {
+      "id": "astra-024",
+      "collection": "astra",
+      "number": 24,
+      "name": "Red Thread",
+      "family": "duet",
+      "family_name": "Görsel düetler",
+      "description": "Kırmızı ton, portreyle natürmort arasındaki lineer bağlantıya dönüşüyor.",
+      "sample_image": "024-red-thread.jpg",
+      "source_keys": [
+        "red",
+        "redon"
+      ],
+      "required_sources": 2,
+      "sample_head": "A thread of red"
+    },
+    {
+      "id": "astra-025",
+      "collection": "astra",
+      "number": 25,
+      "name": "Mountain Echo",
+      "family": "duet",
+      "family_name": "Görsel düetler",
+      "description": "Biri yatay, diğeri dikey iki dağ resmi karşılıklı yerleşiyor.",
+      "sample_image": "025-mountain-echo.jpg",
+      "source_keys": [
+        "cezanne",
+        "fuji"
+      ],
+      "required_sources": 2,
+      "sample_head": "A mountain twice"
+    },
+    {
+      "id": "astra-026",
+      "collection": "astra",
+      "number": 26,
+      "name": "The Bridge",
+      "family": "duet",
+      "family_name": "Görsel düetler",
+      "description": "İki sahne arasında sert bir tipografik şerit, hareket bağını kuruyor.",
+      "sample_image": "026-the-bridge.jpg",
+      "source_keys": [
+        "sloan",
+        "degas"
+      ],
+      "required_sources": 2,
+      "sample_head": "Scenes in motion"
+    },
+    {
+      "id": "astra-027",
+      "collection": "astra",
+      "number": 27,
+      "name": "Twin Windows",
+      "family": "duet",
+      "family_name": "Görsel düetler",
+      "description": "İki kemerli pencere, denizi farklı mesafelerden gösteriyor.",
+      "sample_image": "027-twin-windows.jpg",
+      "source_keys": [
+        "homer",
+        "boudin"
+      ],
+      "required_sources": 2,
+      "sample_head": "Two ways to sea"
+    },
+    {
+      "id": "astra-028",
+      "collection": "astra",
+      "number": 28,
+      "name": "Forest / Water",
+      "family": "duet",
+      "family_name": "Görsel düetler",
+      "description": "Örtüşen iki baskı, fırça işçiliğiyle yüzey ilişkisini görünür kılıyor.",
+      "sample_image": "028-forest-water.jpg",
+      "source_keys": [
+        "gogh",
+        "lilies"
+      ],
+      "required_sources": 2,
+      "sample_head": "Forest / Water"
+    },
+    {
+      "id": "astra-029",
+      "collection": "astra",
+      "number": 29,
+      "name": "Hands Across Time",
+      "family": "duet",
+      "family_name": "Görsel düetler",
+      "description": "İki yakın plan bir araya geliyor; tam eserler küçük kartlarda yan yana.",
+      "sample_image": "029-hands-across-time.jpg",
+      "source_keys": [
+        "eakins",
+        "latour"
+      ],
+      "required_sources": 2,
+      "sample_head": "The work of hands"
+    },
+    {
+      "id": "astra-030",
+      "collection": "astra",
+      "number": 30,
+      "name": "Before the Storm",
+      "family": "duet",
+      "family_name": "Görsel düetler",
+      "description": "Üstte durgun, altta huzursuz hava; ortada ince bir kesinti.",
+      "sample_image": "030-before-the-storm.jpg",
+      "source_keys": [
+        "hassam",
+        "turner"
+      ],
+      "required_sources": 2,
+      "sample_head": "Before the storm"
+    },
+    {
+      "id": "astra-031",
+      "collection": "astra",
+      "number": 31,
+      "name": "Blue Impact",
+      "family": "poster",
+      "family_name": "Grafik afiş",
+      "description": "Baskı dairesel dev bir pencereden taşıyor; ekru ve kobalt yüksek kontrast kuruyor.",
+      "sample_image": "031-blue-impact.jpg",
+      "source_keys": [
+        "wave"
+      ],
+      "required_sources": 1,
+      "sample_head": "WAVE"
+    },
+    {
+      "id": "astra-032",
+      "collection": "astra",
+      "number": 32,
+      "name": "Signal Red",
+      "family": "poster",
+      "family_name": "Grafik afiş",
+      "description": "Kırmızı diyagonal, sert tipografi ve resmin kesiştiği bir sergi afişi.",
+      "sample_image": "032-signal-red.jpg",
+      "source_keys": [
+        "red"
+      ],
+      "required_sources": 1,
+      "sample_head": "RED"
+    },
+    {
+      "id": "astra-033",
+      "collection": "astra",
+      "number": 33,
+      "name": "The Yellow Room",
+      "family": "poster",
+      "family_name": "Grafik afiş",
+      "description": "Tam görüntüyü kesen sarı şerit, büyük siyah harflerle mekana dönüşüyor.",
+      "sample_image": "033-the-yellow-room.jpg",
+      "source_keys": [
+        "gogh"
+      ],
+      "required_sources": 1,
+      "sample_head": "IN THE SUN"
+    },
+    {
+      "id": "astra-034",
+      "collection": "astra",
+      "number": 34,
+      "name": "Tidelands",
+      "family": "poster",
+      "family_name": "Grafik afiş",
+      "description": "Koyu lacivert blokların arasına sıkışmış bir deniz sahnesi.",
+      "sample_image": "034-tidelands.jpg",
+      "source_keys": [
+        "homer"
+      ],
+      "required_sources": 1,
+      "sample_head": "TIDE / LANDS"
+    },
+    {
+      "id": "astra-035",
+      "collection": "astra",
+      "number": 35,
+      "name": "Saffron Type",
+      "family": "poster",
+      "family_name": "Grafik afiş",
+      "description": "Dikey kırpılmış baskı, safran fonda kenara yaslanan büyük yazı.",
+      "sample_image": "035-saffron-type.jpg",
+      "source_keys": [
+        "hiro"
+      ],
+      "required_sources": 1,
+      "sample_head": "BLOOM"
+    },
+    {
+      "id": "astra-036",
+      "collection": "astra",
+      "number": 36,
+      "name": "Black / Pearl",
+      "family": "poster",
+      "family_name": "Grafik afiş",
+      "description": "Siyah zeminde beyaz oval ve ortasından geçen portre kesiti.",
+      "sample_image": "036-black-pearl.jpg",
+      "source_keys": [
+        "sargent"
+      ],
+      "required_sources": 1,
+      "sample_head": "BLACK / PEARL"
+    },
+    {
+      "id": "astra-037",
+      "collection": "astra",
+      "number": 37,
+      "name": "Violet Field",
+      "family": "poster",
+      "family_name": "Grafik afiş",
+      "description": "Mor zeminde eğik yüzey, çiçekleri tipografinin üstüne taşıyor.",
+      "sample_image": "037-violet-field.jpg",
+      "source_keys": [
+        "redon"
+      ],
+      "required_sources": 1,
+      "sample_head": "AFTER / VIOLET"
+    },
+    {
+      "id": "astra-038",
+      "collection": "astra",
+      "number": 38,
+      "name": "White Noise",
+      "family": "poster",
+      "family_name": "Grafik afiş",
+      "description": "Tam resim, üzerine oturan bir dizi beyaz ritmik çizgiyle bölünüyor.",
+      "sample_image": "038-white-noise.jpg",
+      "source_keys": [
+        "lilies"
+      ],
+      "required_sources": 1,
+      "sample_head": "WATER / LINE"
+    },
+    {
+      "id": "astra-039",
+      "collection": "astra",
+      "number": 39,
+      "name": "Split Green",
+      "family": "poster",
+      "family_name": "Grafik afiş",
+      "description": "İki yeşil blok arasında doğadan alınmış sert bir yakın plan.",
+      "sample_image": "039-split-green.jpg",
+      "source_keys": [
+        "rousseau"
+      ],
+      "required_sources": 1,
+      "sample_head": "WILD"
+    },
+    {
+      "id": "astra-040",
+      "collection": "astra",
+      "number": 40,
+      "name": "The Orange Cut",
+      "family": "poster",
+      "family_name": "Grafik afiş",
+      "description": "Turuncu bir disk, gökyüzünün sıcak kesitiyle afişte çakışıyor.",
+      "sample_image": "040-the-orange-cut.jpg",
+      "source_keys": [
+        "church"
+      ],
+      "required_sources": 1,
+      "sample_head": "DUSK"
+    },
+    {
+      "id": "astra-041",
+      "collection": "astra",
+      "number": 41,
+      "name": "Object Card",
+      "family": "archive",
+      "family_name": "Analog arşiv",
+      "description": "Klasör sekmesi, eser görseli ve okunur arşiv künyesi.",
+      "sample_image": "041-object-card.jpg",
+      "source_keys": [
+        "peacock"
+      ],
+      "required_sources": 1,
+      "sample_head": "From the print room"
+    },
+    {
+      "id": "astra-042",
+      "collection": "astra",
+      "number": 42,
+      "name": "Contact Sheet",
+      "family": "archive",
+      "family_name": "Analog arşiv",
+      "description": "Aynı resimden dört farklı küçük kare, stüdyo kontak baskısı ritminde.",
+      "sample_image": "042-contact-sheet.jpg",
+      "source_keys": [
+        "degas"
+      ],
+      "required_sources": 1,
+      "sample_head": ""
+    },
+    {
+      "id": "astra-043",
+      "collection": "astra",
+      "number": 43,
+      "name": "Field Journal",
+      "family": "archive",
+      "family_name": "Analog arşiv",
+      "description": "Sol kenarı delikli bir alan defteri, resme el yazısı başlıkla eşlik ediyor.",
+      "sample_image": "043-field-journal.jpg",
+      "source_keys": [
+        "boudin"
+      ],
+      "required_sources": 1,
+      "sample_head": "Notes from the shore"
+    },
+    {
+      "id": "astra-044",
+      "collection": "astra",
+      "number": 44,
+      "name": "Postmarked",
+      "family": "archive",
+      "family_name": "Analog arşiv",
+      "description": "Kartpostal önü ve arkasının görsel dilini birleştiren düzen.",
+      "sample_image": "044-postmarked.jpg",
+      "source_keys": [
+        "wave"
+      ],
+      "required_sources": 1,
+      "sample_head": "From the sea"
+    },
+    {
+      "id": "astra-045",
+      "collection": "astra",
+      "number": 45,
+      "name": "Loose Plate",
+      "family": "archive",
+      "family_name": "Analog arşiv",
+      "description": "Ciltli bir kitabın arasından çıkmış gibi duran eğik baskı yaprağı.",
+      "sample_image": "045-loose-plate.jpg",
+      "source_keys": [
+        "cezstill"
+      ],
+      "required_sources": 1,
+      "sample_head": ""
+    },
+    {
+      "id": "astra-046",
+      "collection": "astra",
+      "number": 46,
+      "name": "Exhibition Ticket",
+      "family": "archive",
+      "family_name": "Analog arşiv",
+      "description": "Delikli bilet, büyük görsel ve ayrılabilir sanatçı künyesi.",
+      "sample_image": "046-exhibition-ticket.jpg",
+      "source_keys": [
+        "tissot"
+      ],
+      "required_sources": 1,
+      "sample_head": ""
+    },
+    {
+      "id": "astra-047",
+      "collection": "astra",
+      "number": 47,
+      "name": "Glassine Sleeve",
+      "family": "archive",
+      "family_name": "Analog arşiv",
+      "description": "Şeffaf zarf kıvrımları, resmin çevresinde dokulu bir kenarlık oluşturuyor.",
+      "sample_image": "047-glassine-sleeve.jpg",
+      "source_keys": [
+        "gogh2"
+      ],
+      "required_sources": 1,
+      "sample_head": ""
+    },
+    {
+      "id": "astra-048",
+      "collection": "astra",
+      "number": 48,
+      "name": "Pressed Paper",
+      "family": "archive",
+      "family_name": "Analog arşiv",
+      "description": "Kabartma izlenimi veren kağıtta yumuşak, küçük çiçek baskısı.",
+      "sample_image": "048-pressed-paper.jpg",
+      "source_keys": [
+        "flowers"
+      ],
+      "required_sources": 1,
+      "sample_head": "A kept bloom"
+    },
+    {
+      "id": "astra-049",
+      "collection": "astra",
+      "number": 49,
+      "name": "Index Drawer",
+      "family": "archive",
+      "family_name": "Analog arşiv",
+      "description": "Üst üste üç indeks kartı arasından karanlık portre çıkıyor.",
+      "sample_image": "049-index-drawer.jpg",
+      "source_keys": [
+        "remb"
+      ],
+      "required_sources": 1,
+      "sample_head": ""
+    },
+    {
+      "id": "astra-050",
+      "collection": "astra",
+      "number": 50,
+      "name": "Reverse Side",
+      "family": "archive",
+      "family_name": "Analog arşiv",
+      "description": "Resmin dar bir şeridi ve arka yüz etiketini andıran bilgi alanı.",
+      "sample_image": "050-reverse-side.jpg",
+      "source_keys": [
+        "eakins"
+      ],
+      "required_sources": 1,
+      "sample_head": ""
+    },
+    {
+      "id": "astra-051",
+      "collection": "astra",
+      "number": 51,
+      "name": "Night Screening",
+      "family": "cinema",
+      "family_name": "Sinematik kapaklar",
+      "description": "Siyah kenarlar ve geniş film penceresi, gece manzarasına alan açıyor.",
+      "sample_image": "051-night-screening.jpg",
+      "source_keys": [
+        "whistler"
+      ],
+      "required_sources": 1,
+      "sample_head": "The night has color"
+    },
+    {
+      "id": "astra-052",
+      "collection": "astra",
+      "number": 52,
+      "name": "First Frame",
+      "family": "cinema",
+      "family_name": "Sinematik kapaklar",
+      "description": "Film kenarı delikleri, kumsal görüntüsünü tek bir kareye alıyor.",
+      "sample_image": "052-first-frame.jpg",
+      "source_keys": [
+        "hassam"
+      ],
+      "required_sources": 1,
+      "sample_head": "First frame"
+    },
+    {
+      "id": "astra-053",
+      "collection": "astra",
+      "number": 53,
+      "name": "Slow Burn",
+      "family": "cinema",
+      "family_name": "Sinematik kapaklar",
+      "description": "Alevli ufuk üstten alta sönen karanlık içinde büyüyor.",
+      "sample_image": "053-slow-burn.jpg",
+      "source_keys": [
+        "turner"
+      ],
+      "required_sources": 1,
+      "sample_head": "SLOW / BURN"
+    },
+    {
+      "id": "astra-054",
+      "collection": "astra",
+      "number": 54,
+      "name": "Interlude",
+      "family": "cinema",
+      "family_name": "Sinematik kapaklar",
+      "description": "Ortada uzun yatay kadraj, altta bir sessizlik aralığı gibi boşluk.",
+      "sample_image": "054-interlude.jpg",
+      "source_keys": [
+        "lilies"
+      ],
+      "required_sources": 1,
+      "sample_head": "Hold on the water"
+    },
+    {
+      "id": "astra-055",
+      "collection": "astra",
+      "number": 55,
+      "name": "Curtain Up",
+      "family": "cinema",
+      "family_name": "Sinematik kapaklar",
+      "description": "Yanlardan kapanan koyu kumaş formları resme sahne açıklığı veriyor.",
+      "sample_image": "055-curtain-up.jpg",
+      "source_keys": [
+        "degas"
+      ],
+      "required_sources": 1,
+      "sample_head": "Curtain up"
+    },
+    {
+      "id": "astra-056",
+      "collection": "astra",
+      "number": 56,
+      "name": "Faraway Shot",
+      "family": "cinema",
+      "family_name": "Sinematik kapaklar",
+      "description": "Uzak manzara, ikinci küçük kadrajda yakınlaşarak yankılanıyor.",
+      "sample_image": "056-faraway-shot.jpg",
+      "source_keys": [
+        "church"
+      ],
+      "required_sources": 1,
+      "sample_head": "The distance glows"
+    },
+    {
+      "id": "astra-057",
+      "collection": "astra",
+      "number": 57,
+      "name": "Portrait in the Dark",
+      "family": "cinema",
+      "family_name": "Sinematik kapaklar",
+      "description": "Siyah üzerine yerleşen tek bir dikey ışık kütlesi ve iki kelimelik başlık.",
+      "sample_image": "057-portrait-in-the-dark.jpg",
+      "source_keys": [
+        "latour"
+      ],
+      "required_sources": 1,
+      "sample_head": "One light"
+    },
+    {
+      "id": "astra-058",
+      "collection": "astra",
+      "number": 58,
+      "name": "Traveling Frame",
+      "family": "cinema",
+      "family_name": "Sinematik kapaklar",
+      "description": "Yan yana kısmi kadrajlar vapurun yanından geçme hissi veriyor.",
+      "sample_image": "058-traveling-frame.jpg",
+      "source_keys": [
+        "sloan"
+      ],
+      "required_sources": 1,
+      "sample_head": "Passing by"
+    },
+    {
+      "id": "astra-059",
+      "collection": "astra",
+      "number": 59,
+      "name": "Wide / Close",
+      "family": "cinema",
+      "family_name": "Sinematik kapaklar",
+      "description": "Geniş plan ile çok yakın plan tek bir dikey sinema kapağında.",
+      "sample_image": "059-wide-close.jpg",
+      "source_keys": [
+        "homer"
+      ],
+      "required_sources": 1,
+      "sample_head": "WIDE / CLOSE"
+    },
+    {
+      "id": "astra-060",
+      "collection": "astra",
+      "number": 60,
+      "name": "Last Light",
+      "family": "cinema",
+      "family_name": "Sinematik kapaklar",
+      "description": "Küçük son kare, karanlığa doğru genişleyen boşlukta kayboluyor.",
+      "sample_image": "060-last-light.jpg",
+      "source_keys": [
+        "friedrich"
+      ],
+      "required_sources": 1,
+      "sample_head": "LAST LIGHT"
+    },
+    {
+      "id": "astra-061",
+      "collection": "astra",
+      "number": 61,
+      "name": "Pigment Ledger",
+      "family": "colors",
+      "family_name": "Palet serileri",
+      "description": "Natürmortun beş rengi, geniş bir kayıt cetveli gibi diziliyor.",
+      "sample_image": "061-pigment-ledger.jpg",
+      "source_keys": [
+        "cezstill"
+      ],
+      "required_sources": 1,
+      "sample_head": "The colors of an apple"
+    },
+    {
+      "id": "astra-062",
+      "collection": "astra",
+      "number": 62,
+      "name": "Gradient Wall",
+      "family": "colors",
+      "family_name": "Palet serileri",
+      "description": "Gökyüzünden alınan beş renk, resmin altında geniş bantlara dönüşüyor.",
+      "sample_image": "062-gradient-wall.jpg",
+      "source_keys": [
+        "church"
+      ],
+      "required_sources": 1,
+      "sample_head": "Dusk in five tones"
+    },
+    {
+      "id": "astra-063",
+      "collection": "astra",
+      "number": 63,
+      "name": "Chromatic Columns",
+      "family": "colors",
+      "family_name": "Palet serileri",
+      "description": "Üç büyük renk kolonu, üzerlerine oturan çiçek kesitleriyle karşılaşıyor.",
+      "sample_image": "063-chromatic-columns.jpg",
+      "source_keys": [
+        "redon"
+      ],
+      "required_sources": 1,
+      "sample_head": "Three floral tones"
+    },
+    {
+      "id": "astra-064",
+      "collection": "astra",
+      "number": 64,
+      "name": "Ink and Paper",
+      "family": "colors",
+      "family_name": "Palet serileri",
+      "description": "Krem, kobalt ve lacivert; baskının üç tonu üç ayrı tipografik ağırlıkta.",
+      "sample_image": "064-ink-and-paper.jpg",
+      "source_keys": [
+        "wave"
+      ],
+      "required_sources": 1,
+      "sample_head": ""
+    },
+    {
+      "id": "astra-065",
+      "collection": "astra",
+      "number": 65,
+      "name": "A Color to Keep",
+      "family": "colors",
+      "family_name": "Palet serileri",
+      "description": "Tek bir kırmızı renk alanı, küçük bir pencereyle kaynağını gösteriyor.",
+      "sample_image": "065-a-color-to-keep.jpg",
+      "source_keys": [
+        "red"
+      ],
+      "required_sources": 1,
+      "sample_head": "A red to keep"
+    },
+    {
+      "id": "astra-066",
+      "collection": "astra",
+      "number": 66,
+      "name": "Palette Wheel",
+      "family": "colors",
+      "family_name": "Palet serileri",
+      "description": "Yedi renk diliminden oluşan halka, merkezdeki baskıyı çevreliyor.",
+      "sample_image": "066-palette-wheel.jpg",
+      "source_keys": [
+        "hiro"
+      ],
+      "required_sources": 1,
+      "sample_head": "From ink to bloom"
+    },
+    {
+      "id": "astra-067",
+      "collection": "astra",
+      "number": 67,
+      "name": "Paint Chips",
+      "family": "colors",
+      "family_name": "Palet serileri",
+      "description": "Beş fiziksel boya kartı gibi görünen renk örnekleri ve tam eser.",
+      "sample_image": "067-paint-chips.jpg",
+      "source_keys": [
+        "gogh"
+      ],
+      "required_sources": 1,
+      "sample_head": ""
+    },
+    {
+      "id": "astra-068",
+      "collection": "astra",
+      "number": 68,
+      "name": "Color Ratios",
+      "family": "colors",
+      "family_name": "Palet serileri",
+      "description": "Renkler, eserdeki yaklaşık piksel paylarına göre farklı genişliklerde diziliyor.",
+      "sample_image": "068-color-ratios.jpg",
+      "source_keys": [
+        "lilies"
+      ],
+      "required_sources": 1,
+      "sample_head": "Water, measured"
+    },
+    {
+      "id": "astra-069",
+      "collection": "astra",
+      "number": 69,
+      "name": "Two Temperatures",
+      "family": "colors",
+      "family_name": "Palet serileri",
+      "description": "Sıcak ve soğuk eserler, ortadaki renk kuşağında birbirine yaklaşıyor.",
+      "sample_image": "069-two-temperatures.jpg",
+      "source_keys": [
+        "turner",
+        "whistler"
+      ],
+      "required_sources": 2,
+      "sample_head": "HEAT / HUSH"
+    },
+    {
+      "id": "astra-070",
+      "collection": "astra",
+      "number": 70,
+      "name": "The Missing Hue",
+      "family": "colors",
+      "family_name": "Palet serileri",
+      "description": "Renkler dolu bir gridin ortasında yalnızca dağın kendisine yer açılıyor.",
+      "sample_image": "070-the-missing-hue.jpg",
+      "source_keys": [
+        "cezanne"
+      ],
+      "required_sources": 1,
+      "sample_head": "A mountain in color"
+    },
+    {
+      "id": "astra-071",
+      "collection": "astra",
+      "number": 71,
+      "name": "Letters as Windows",
+      "family": "typography",
+      "family_name": "Tipografi deneyleri",
+      "description": "WAVE kelimesinin içinde dalga baskısından kesitler görünüyor.",
+      "sample_image": "071-letters-as-windows.jpg",
+      "source_keys": [
+        "wave"
+      ],
+      "required_sources": 1,
+      "sample_head": "WAVE"
+    },
+    {
+      "id": "astra-072",
+      "collection": "astra",
+      "number": 72,
+      "name": "Stacked / Still",
+      "family": "typography",
+      "family_name": "Tipografi deneyleri",
+      "description": "İstiflenen büyük harfler, küçük natürmortun etrafında ağırlık kuruyor.",
+      "sample_image": "072-stacked-still.jpg",
+      "source_keys": [
+        "cezstill"
+      ],
+      "required_sources": 1,
+      "sample_head": "STILL / LIFE"
+    },
+    {
+      "id": "astra-073",
+      "collection": "astra",
+      "number": 73,
+      "name": "Monogram Cut",
+      "family": "typography",
+      "family_name": "Tipografi deneyleri",
+      "description": "Art.folio’nun A harfi, resimle kesişen kişisel bir imzaya dönüşüyor.",
+      "sample_image": "073-monogram-cut.jpg",
+      "source_keys": [
+        "sargent"
+      ],
+      "required_sources": 1,
+      "sample_head": "A"
+    },
+    {
+      "id": "astra-074",
+      "collection": "astra",
+      "number": 74,
+      "name": "Vertical Title",
+      "family": "typography",
+      "family_name": "Tipografi deneyleri",
+      "description": "Dar dikey başlık, ağaç gövdelerinin yönünü takip ediyor.",
+      "sample_image": "074-vertical-title.jpg",
+      "source_keys": [
+        "gogh"
+      ],
+      "required_sources": 1,
+      "sample_head": "TREES"
+    },
+    {
+      "id": "astra-075",
+      "collection": "astra",
+      "number": 75,
+      "name": "A Title in the Sky",
+      "family": "typography",
+      "family_name": "Tipografi deneyleri",
+      "description": "Geniş gökyüzünde ince aralıklı büyük harfler, alttaki ateşle dengeleniyor.",
+      "sample_image": "075-a-title-in-the-sky.jpg",
+      "source_keys": [
+        "turner"
+      ],
+      "required_sources": 1,
+      "sample_head": "AFTERGLOW"
+    },
+    {
+      "id": "astra-076",
+      "collection": "astra",
+      "number": 76,
+      "name": "Split Word",
+      "family": "typography",
+      "family_name": "Tipografi deneyleri",
+      "description": "Bölünmüş kelimenin ortasına ince bir çiçek alanı sıkışıyor.",
+      "sample_image": "076-split-word.jpg",
+      "source_keys": [
+        "redon"
+      ],
+      "required_sources": 1,
+      "sample_head": "BLO / OM"
+    },
+    {
+      "id": "astra-077",
+      "collection": "astra",
+      "number": 77,
+      "name": "Ink Over Ink",
+      "family": "typography",
+      "family_name": "Tipografi deneyleri",
+      "description": "Koyu büyük dizgi, daha açık bir baskı yüzeyi üzerinde gölge gibi duruyor.",
+      "sample_image": "077-ink-over-ink.jpg",
+      "source_keys": [
+        "hiro"
+      ],
+      "required_sources": 1,
+      "sample_head": "RAIN / INK"
+    },
+    {
+      "id": "astra-078",
+      "collection": "astra",
+      "number": 78,
+      "name": "The Long Caption",
+      "family": "typography",
+      "family_name": "Tipografi deneyleri",
+      "description": "Editoryal cümle kenar boyunca dikey bir tasarım elemanına dönüşüyor.",
+      "sample_image": "078-the-long-caption.jpg",
+      "source_keys": [
+        "berthe"
+      ],
+      "required_sources": 1,
+      "sample_head": "Look a little longer"
+    },
+    {
+      "id": "astra-079",
+      "collection": "astra",
+      "number": 79,
+      "name": "Counterform",
+      "family": "typography",
+      "family_name": "Tipografi deneyleri",
+      "description": "Dev bir O harfinin iç boşluğu, portre için çerçeve oluyor.",
+      "sample_image": "079-counterform.jpg",
+      "source_keys": [
+        "renoir"
+      ],
+      "required_sources": 1,
+      "sample_head": "O"
+    },
+    {
+      "id": "astra-080",
+      "collection": "astra",
+      "number": 80,
+      "name": "Baseline",
+      "family": "typography",
+      "family_name": "Tipografi deneyleri",
+      "description": "Harflerin alt çizgisi, dans düzenine eşlik eden keskin bir grafik eksen.",
+      "sample_image": "080-baseline.jpg",
+      "source_keys": [
+        "degas"
+      ],
+      "required_sources": 1,
+      "sample_head": "IN / STEP"
+    },
+    {
+      "id": "astra-081",
+      "collection": "astra",
+      "number": 81,
+      "name": "Follow the Red",
+      "family": "story",
+      "family_name": "Hikâye kapakları",
+      "description": "Portredeki kırmızıyı izleyen dar şerit ve tek bir güçlü başlık.",
+      "sample_image": "081-follow-the-red.jpg",
+      "source_keys": [
+        "red"
+      ],
+      "required_sources": 1,
+      "sample_head": "Follow the red"
+    },
+    {
+      "id": "astra-082",
+      "collection": "astra",
+      "number": 82,
+      "name": "Where Did It Go?",
+      "family": "story",
+      "family_name": "Hikâye kapakları",
+      "description": "Dalganın altındaki boşluğu büyüten soru ve küçülen üç kadraj.",
+      "sample_image": "082-where-did-it-go.jpg",
+      "source_keys": [
+        "wave"
+      ],
+      "required_sources": 1,
+      "sample_head": "Where does the eye go?"
+    },
+    {
+      "id": "astra-083",
+      "collection": "astra",
+      "number": 83,
+      "name": "Who Gets the Light?",
+      "family": "story",
+      "family_name": "Hikâye kapakları",
+      "description": "Işığını kaybeden alanlara bakan sert, iki parçalı kapak.",
+      "sample_image": "083-who-gets-the-light.jpg",
+      "source_keys": [
+        "latour"
+      ],
+      "required_sources": 1,
+      "sample_head": "Who gets the light?"
+    },
+    {
+      "id": "astra-084",
+      "collection": "astra",
+      "number": 84,
+      "name": "The Edge of a Storm",
+      "family": "story",
+      "family_name": "Hikâye kapakları",
+      "description": "Göğü ve suyu ayıran çizgi, üstteki soruyu görselde yanıtlıyor.",
+      "sample_image": "084-the-edge-of-a-storm.jpg",
+      "source_keys": [
+        "turner"
+      ],
+      "required_sources": 1,
+      "sample_head": "Where does the storm begin?"
+    },
+    {
+      "id": "astra-085",
+      "collection": "astra",
+      "number": 85,
+      "name": "Three Seconds Here",
+      "family": "story",
+      "family_name": "Hikâye kapakları",
+      "description": "Resmin içine yerleştirilen üç küçük zaman noktası, sakin bakış öneriyor.",
+      "sample_image": "085-three-seconds-here.jpg",
+      "source_keys": [
+        "lilies"
+      ],
+      "required_sources": 1,
+      "sample_head": "Stay here for a moment"
+    },
+    {
+      "id": "astra-086",
+      "collection": "astra",
+      "number": 86,
+      "name": "Offstage",
+      "family": "story",
+      "family_name": "Hikâye kapakları",
+      "description": "Sahne kenarı küçük bir perde gibi açılıyor, başlık geniş boşlukta kalıyor.",
+      "sample_image": "086-offstage.jpg",
+      "source_keys": [
+        "degas"
+      ],
+      "required_sources": 1,
+      "sample_head": "What happens offstage?"
+    },
+    {
+      "id": "astra-087",
+      "collection": "astra",
+      "number": 87,
+      "name": "The Other Shore",
+      "family": "story",
+      "family_name": "Hikâye kapakları",
+      "description": "Deniz resmini ikiye bölen boşluk, gözü karşı kenara taşıyor.",
+      "sample_image": "087-the-other-shore.jpg",
+      "source_keys": [
+        "homer"
+      ],
+      "required_sources": 1,
+      "sample_head": "Look to the other shore"
+    },
+    {
+      "id": "astra-088",
+      "collection": "astra",
+      "number": 88,
+      "name": "Find the Line",
+      "family": "story",
+      "family_name": "Hikâye kapakları",
+      "description": "Dağın konturunu tek çizgiyle izole eden giriş kapağı.",
+      "sample_image": "088-find-the-line.jpg",
+      "source_keys": [
+        "cezanne"
+      ],
+      "required_sources": 1,
+      "sample_head": "Find the line"
+    },
+    {
+      "id": "astra-089",
+      "collection": "astra",
+      "number": 89,
+      "name": "A Small Silence",
+      "family": "story",
+      "family_name": "Hikâye kapakları",
+      "description": "Portreye yakın, küçük ve seyrek yazılmış bir cümle eşlik ediyor.",
+      "sample_image": "089-a-small-silence.jpg",
+      "source_keys": [
+        "berthe"
+      ],
+      "required_sources": 1,
+      "sample_head": "A small silence"
+    },
+    {
+      "id": "astra-090",
+      "collection": "astra",
+      "number": 90,
+      "name": "Where the Leaves Begin",
+      "family": "story",
+      "family_name": "Hikâye kapakları",
+      "description": "Yaprak yakın planı tam eseri yarı yarıya kapatıyor.",
+      "sample_image": "090-where-the-leaves-begin.jpg",
+      "source_keys": [
+        "rousseau"
+      ],
+      "required_sources": 1,
+      "sample_head": "Find where the leaves begin"
+    },
+    {
+      "id": "astra-091",
+      "collection": "astra",
+      "number": 91,
+      "name": "The Door Is Open",
+      "family": "experimental",
+      "family_name": "Deneysel formlar",
+      "description": "Asimetrik açılan kapı kanadı, iki farklı kadrajı art arda okutuyor.",
+      "sample_image": "091-the-door-is-open.jpg",
+      "source_keys": [
+        "tissot"
+      ],
+      "required_sources": 1,
+      "sample_head": "The door is open"
+    },
+    {
+      "id": "astra-092",
+      "collection": "astra",
+      "number": 92,
+      "name": "Orbit",
+      "family": "experimental",
+      "family_name": "Deneysel formlar",
+      "description": "Tam eser bir yanda; iki dairesel ayrıntı yörünge çizgisini izliyor.",
+      "sample_image": "092-orbit.jpg",
+      "source_keys": [
+        "peacock"
+      ],
+      "required_sources": 1,
+      "sample_head": ""
+    },
+    {
+      "id": "astra-093",
+      "collection": "astra",
+      "number": 93,
+      "name": "Paper Waterfall",
+      "family": "experimental",
+      "family_name": "Deneysel formlar",
+      "description": "Dikey oynamış şeritler, yağmurun ritmini sayfanın geometrisine taşıyor.",
+      "sample_image": "093-paper-waterfall.jpg",
+      "source_keys": [
+        "rain"
+      ],
+      "required_sources": 1,
+      "sample_head": "Rain in pieces"
+    },
+    {
+      "id": "astra-094",
+      "collection": "astra",
+      "number": 94,
+      "name": "Three Rooms",
+      "family": "experimental",
+      "family_name": "Deneysel formlar",
+      "description": "Üç farklı eser, aynı sayfada üç farklı renk ve mimari pencereyle buluşuyor.",
+      "sample_image": "094-three-rooms.jpg",
+      "source_keys": [
+        "red",
+        "gogh",
+        "lilies"
+      ],
+      "required_sources": 3,
+      "sample_head": "Three rooms"
+    },
+    {
+      "id": "astra-095",
+      "collection": "astra",
+      "number": 95,
+      "name": "Afterimage",
+      "family": "experimental",
+      "family_name": "Deneysel formlar",
+      "description": "Günbatımı renkleri birbirine kaymış geniş bir ikinci görüntüye dönüşüyor.",
+      "sample_image": "095-afterimage.jpg",
+      "source_keys": [
+        "church"
+      ],
+      "required_sources": 1,
+      "sample_head": "Afterimage"
+    },
+    {
+      "id": "astra-096",
+      "collection": "astra",
+      "number": 96,
+      "name": "Mirror Fold",
+      "family": "experimental",
+      "family_name": "Deneysel formlar",
+      "description": "Katlanan panel, dağ resminin bir bölümünü yansıtılmış olarak karşılıyor.",
+      "sample_image": "096-mirror-fold.jpg",
+      "source_keys": [
+        "cezanne"
+      ],
+      "required_sources": 1,
+      "sample_head": "Fold the horizon"
+    },
+    {
+      "id": "astra-097",
+      "collection": "astra",
+      "number": 97,
+      "name": "Museum at Midnight",
+      "family": "experimental",
+      "family_name": "Deneysel formlar",
+      "description": "Karanlık kapakta tek bir ışık deliğinden gece resminin bir parçası görülüyor.",
+      "sample_image": "097-museum-at-midnight.jpg",
+      "source_keys": [
+        "whistler"
+      ],
+      "required_sources": 1,
+      "sample_head": "Museum at midnight"
+    },
+    {
+      "id": "astra-098",
+      "collection": "astra",
+      "number": 98,
+      "name": "Shape of a Brushstroke",
+      "family": "experimental",
+      "family_name": "Deneysel formlar",
+      "description": "Düzensiz geniş bir maske, fırça hareketi gibi görünerek resimden kesitler açıyor.",
+      "sample_image": "098-shape-of-a-brushstroke.jpg",
+      "source_keys": [
+        "gogh"
+      ],
+      "required_sources": 1,
+      "sample_head": "Shape of a brushstroke"
+    },
+    {
+      "id": "astra-099",
+      "collection": "astra",
+      "number": 99,
+      "name": "Picture in Pieces",
+      "family": "experimental",
+      "family_name": "Deneysel formlar",
+      "description": "Yüzen poligonal parçalar, tam eserin küçük bir görüntüsüne doğru toplanıyor.",
+      "sample_image": "099-picture-in-pieces.jpg",
+      "source_keys": [
+        "redon"
+      ],
+      "required_sources": 1,
+      "sample_head": "Picture in pieces"
+    },
+    {
+      "id": "astra-100",
+      "collection": "astra",
+      "number": 100,
+      "name": "A Folio in Bloom",
+      "family": "experimental",
+      "family_name": "Deneysel formlar",
+      "description": "Katlanan dört bölüm çiçek görüntüsünü merkezde yeniden bir araya getiriyor.",
+      "sample_image": "100-a-folio-in-bloom.jpg",
+      "source_keys": [
+        "flowers"
+      ],
+      "required_sources": 1,
+      "sample_head": "A folio in bloom"
+    }
+  ]
+}

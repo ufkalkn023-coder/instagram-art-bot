@@ -217,6 +217,17 @@ def _object_number(record: Mapping[str, Any]) -> str | None:
 
 def _title(record: Mapping[str, Any]) -> str:
     names = [item for item in _dicts(record.get("identified_by")) if item.get("type") == "Name"]
+    # First pass: prefer English (rank 0) across primary and display titles
+    for title_type in (PRIMARY_TITLE_TYPE, DISPLAY_TITLE_TYPE):
+        en_matches = [
+            name
+            for name in names
+            if title_type in _classification_ids(name) and _language_rank(name) == 0
+        ]
+        title = _preferred_text(en_matches)
+        if title:
+            return title
+    # Second pass: fall back to any language in primary/display order
     for title_type in (PRIMARY_TITLE_TYPE, DISPLAY_TITLE_TYPE):
         title = _preferred_text(
             [name for name in names if title_type in _classification_ids(name)]
@@ -265,6 +276,14 @@ def _work_types(record: Mapping[str, Any]) -> str | None:
 
 
 def _materials(record: Mapping[str, Any]) -> str | None:
+    medium_notes = [
+        ref
+        for ref in _dicts(record.get("referred_to_by"))
+        if "http://vocab.getty.edu/aat/300435429" in _classification_ids(ref)
+    ]
+    preferred_note = _preferred_text(medium_notes)
+    if preferred_note:
+        return preferred_note
     return _unique_join(_label(material) for material in _dicts(record.get("made_of")))
 
 
@@ -287,14 +306,32 @@ def _dimensions(record: Mapping[str, Any]) -> str | None:
     return _unique_join(values)
 
 
+def _iter_nodes_with_lang(
+    value: object,
+    inherited_lang: object = None,
+) -> Iterable[tuple[dict[str, Any], object]]:
+    if isinstance(value, dict):
+        lang = value.get("language") or inherited_lang
+        yield value, lang
+        for child in value.values():
+            yield from _iter_nodes_with_lang(child, lang)
+    elif isinstance(value, list):
+        for child in value:
+            yield from _iter_nodes_with_lang(child, inherited_lang)
+
+
 def _description(record: Mapping[str, Any]) -> str | None:
-    descriptions = [
-        node
-        for node in _iter_nodes(record.get("subject_of"))
-        if node.get("type") == "LinguisticObject"
-        and DESCRIPTION_TYPE in _classification_ids(node)
-        and isinstance(node.get("content"), str)
-    ]
+    descriptions = []
+    for node, lang in _iter_nodes_with_lang(record.get("subject_of")):
+        if (
+            node.get("type") == "LinguisticObject"
+            and DESCRIPTION_TYPE in _classification_ids(node)
+            and isinstance(node.get("content"), str)
+        ):
+            enriched = dict(node)
+            if not enriched.get("language") and lang:
+                enriched["language"] = lang
+            descriptions.append(enriched)
     return _preferred_text(descriptions) or None
 
 
