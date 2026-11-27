@@ -11,6 +11,7 @@ from urllib.parse import urlsplit
 
 from PIL import Image, ImageOps
 
+from src.editorial_design import MAX_FOCUS_AREA, MIN_FOCUS_AREA
 from src.story_quality import ISSUE_MESSAGES
 
 if TYPE_CHECKING:
@@ -99,7 +100,11 @@ def review_page(project: StoryProject, report: dict) -> str:
         <p class="source">{"<br>".join(credits)}</p></div></article>''')
     payload = (
         json.dumps(
-            dict(revision=project.revision, plan=project.plan.model_dump(mode="json")),
+            dict(
+                revision=project.revision,
+                plan=project.plan.model_dump(mode="json"),
+                focus_area=dict(min=MIN_FOCUS_AREA, max=MAX_FOCUS_AREA),
+            ),
             ensure_ascii=False,
         )
         .replace("<", "\\u003c")
@@ -144,6 +149,8 @@ if(!raw||!Number.isFinite(value)||value<0||value>1)throw new Error('Detay alanı
 return value;
 });
 if(values.length!==4||values[0]>=values[2]||values[1]>=values[3])throw new Error('Sağ sınır soldan, alt sınır üstten büyük olmalı.');
+const area=(values[2]-values[0])*(values[3]-values[1]),{min,max}=original.focus_area;
+if(area<min||area>max)throw new Error(`Detay alanı eserin %${min*100}–%${max*100}'ini kapsamalı.`);
 return values;
 }
 function setupCrop(article){

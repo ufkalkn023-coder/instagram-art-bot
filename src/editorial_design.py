@@ -29,6 +29,8 @@ class CoverStyle(str, Enum):
 
 FIELD = (242, 239, 231)
 INK = (37, 37, 34)
+MIN_FOCUS_AREA = 0.08
+MAX_FOCUS_AREA = 0.85
 
 
 def _validate_focus(
@@ -43,9 +45,9 @@ def _validate_focus(
         raise ValueError("Focus coordinates must be finite values within [0, 1]")
     left, top, right, bottom = values
     area = (right - left) * (bottom - top)
-    if right <= left or bottom <= top or area < 0.08 or area > 0.85:
+    if right <= left or bottom <= top or area < MIN_FOCUS_AREA or area > MAX_FOCUS_AREA:
         raise ValueError(
-            "Focus area must be between 0.08 and 0.85 with positive dimensions"
+            f"Focus area must be between {MIN_FOCUS_AREA} and {MAX_FOCUS_AREA} with positive dimensions"
         )
     return values
 

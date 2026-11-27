@@ -31,7 +31,8 @@ const preview = element({ getContext: () => ({
   drawImage: (_, x, y, width, height) => { previewCrop = [x, y, width, height]; },
 }) });
 const feedback = element();
-const coordinates = [process.argv[3], '0.12', '0.91', '0.6'].map(value => element({ value }));
+const focusInputs = process.argv[5] ? JSON.parse(process.argv[5]).map(String) : [process.argv[3], '0.12', '0.91', '0.6'];
+const coordinates = focusInputs.map(value => element({ value }));
 const articles = plan.slides.map((slide, index) => {
   const controls = {
     '.title': { value: slide.title }, '.body': { value: slide.body }, '.order': { value: String(index + 1) },
@@ -67,7 +68,7 @@ const scenario = process.argv[4];
 const pointer = (x, y) => ({ clientX: x, clientY: y, pointerId: 7, button: 0, isPrimary: true, preventDefault: () => {} });
 if (scenario) {
   const start = scenario === 'reverse' ? [340, 360] : scenario === 'clamp' ? [100, 200] : [130, 240];
-  const end = scenario === 'reverse' ? [130, 240] : scenario === 'clamp' ? [450, 500] : scenario === 'zero' ? start : [340, 360];
+  const end = scenario === 'reverse' ? [130, 240] : scenario === 'clamp' ? [450, 500] : scenario === 'clamp-valid' ? [450, 360] : scenario === 'tiny' ? [145, 250] : scenario === 'zero' ? start : [340, 360];
   surface.emit('pointerdown', pointer(...start));
   surface.emit('pointermove', pointer(...end));
   surface.emit(scenario === 'cancel' ? 'pointercancel' : 'pointerup', pointer(...end));
@@ -82,5 +83,6 @@ button.emit('click').then(() => {
     revision: request?.expected_revision,
     preview_hidden: preview.hidden,
     preview_crop: previewCrop,
+    feedback: feedback.textContent,
   }));
 }).catch(error => { console.error(error); process.exitCode = 1; });

@@ -110,7 +110,9 @@ def test_editor_does_not_convert_missing_crop_input_into_zero(
     [
         ("drag", [0.1, 0.2, 0.8, 0.8]),
         ("reverse", [0.1, 0.2, 0.8, 0.8]),
-        ("clamp", [0, 0, 1, 1]),
+        ("clamp", [0.22, 0.12, 0.91, 0.6]),
+        ("clamp-valid", [0.1, 0.2, 1, 0.8]),
+        ("tiny", [0.22, 0.12, 0.91, 0.6]),
         ("cancel", [0.22, 0.12, 0.91, 0.6]),
         ("zero", [0.22, 0.12, 0.91, 0.6]),
     ],
@@ -149,6 +151,51 @@ def test_visual_crop_selection_reaches_revisioned_save(
             (expected[3] - expected[1]) * 400,
         ]
     )
+
+
+@pytest.mark.parametrize(
+    ("focus", "should_save"),
+    [
+        ([0, 0, 0.079, 1], False),
+        ([0, 0, 0.08, 1], True),
+        ([0, 0, 0.85, 1], True),
+        ([0, 0, 0.851, 1], False),
+        ([0, 0, 1, 1], False),
+        ([0.2, 0.2, 0.3, 0.3], False),
+    ],
+)
+def test_crop_area_limits_apply_to_preview_and_save(
+    tmp_path, editor_html, focus, should_save
+):
+    node = shutil.which("node")
+    if node is None:
+        pytest.skip("Node.js is required to exercise the generated editor script")
+    page = tmp_path / "review.html"
+    page.write_text(editor_html)
+    result = subprocess.run(
+        [
+            node,
+            str(Path(__file__).parent / "fixtures" / "story_editor_harness.cjs"),
+            str(page),
+            "0.22",
+            "",
+            json.dumps(focus),
+        ],
+        check=True,
+        capture_output=True,
+        text=True,
+        timeout=10,
+    )
+    output = json.loads(result.stdout)
+    assert output["saved"] is should_save
+    assert output["reloaded"] is should_save
+    assert output["preview_hidden"] is not should_save
+    if should_save:
+        assert output["focus"] == focus
+    else:
+        assert "%8" in output["feedback"] and "%85" in output["feedback"]
+        assert output["status"] == output["feedback"]
+        assert output["disabled"] is False
 
 
 def test_portable_source_preview_preserves_exif_orientation_and_original(tmp_path):

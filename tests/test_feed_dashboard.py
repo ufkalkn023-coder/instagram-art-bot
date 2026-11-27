@@ -101,6 +101,24 @@ def test_dashboard_preserves_cooldown_seconds_and_explains_hourly_schedule(tmp_p
     assert "Her saatin 17. dakikasında" in page
 
 
+def test_dashboard_explains_six_hour_policy_and_hourly_checks(tmp_path):
+    _inputs(tmp_path)
+    schedule_path = tmp_path / "schedule.json"
+    schedule = json.loads(schedule_path.read_text())
+    schedule["cadence"] = "six_hourly_utc17"
+    schedule_path.write_text(json.dumps(schedule), encoding="utf-8")
+    output = tmp_path / "dashboard.html"
+
+    result = _run(tmp_path, output)
+
+    assert result.returncode == 0, result.stderr
+    page = output.read_text(encoding="utf-8")
+    assert "03:17, 09:17, 15:17 ve 21:17" in page
+    assert "Her saatin 17. dakikasında kontrol edilir" in page
+    assert "Europe/Istanbul" in page
+    assert "Kontrol sıklığı belirtilmedi" not in page
+
+
 def test_real_cohort_schema_shows_reach_and_save_rate_with_sample_caveat():
     now = datetime(2026, 10, 7, 19, tzinfo=timezone.utc)
     published_at = now - timedelta(hours=80)

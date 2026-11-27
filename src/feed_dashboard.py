@@ -45,6 +45,10 @@ def render_feed_dashboard(schedule, queue, history, snapshots, *, now: datetime,
                          "CONSUMED": "Tüketildi", "QUARANTINED": "Karantinada"}
     queue_format_label = {"single": "Tek eser", "carousel": "Carousel"}
     cadence_label = {
+        "six_hourly_utc17": (
+            "Hedef yayın saatleri 03:17, 09:17, 15:17 ve 21:17 (Europe/Istanbul). "
+            "Her saatin 17. dakikasında kontrol edilir."
+        ),
         "hourly_utc17": "Her saatin 17. dakikasında kontrol edilir",
         "daily_utc1717": "Her gün Türkiye saatiyle 20:17'de kontrol edilir",
     }.get(schedule.get("cadence"), "Kontrol sıklığı belirtilmedi")
