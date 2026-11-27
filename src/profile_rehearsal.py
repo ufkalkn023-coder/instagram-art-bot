@@ -169,6 +169,16 @@ def build_real_museum_rehearsal(
         flag_by_id.setdefault(fl["left_id"], []).append(fl)
         flag_by_id.setdefault(fl["right_id"], []).append(fl)
 
+    # Pre-group museum-documented pairs BEFORE single-work allocation so real companion pairs stay together
+    from src.carousel_delivery import extract_documented_pair_groups
+
+    documented_pair_queue, single_pool = extract_documented_pair_groups(
+        pool,
+        max_pairs=carousel_need["carousels_2_works"],
+    )
+    initial_documented_pair_count = len(documented_pair_queue)
+    total_available = len(single_pool) + initial_documented_pair_count * 2
+
     # Determine how many full days can be honestly filled with zero fake padding
     target_need_for_days = (
         carousel_need["carousel_gross_artwork_slots"]
@@ -176,15 +186,15 @@ def build_real_museum_rehearsal(
         else need["total_unique_artworks_needed"]
     )
     works_per_day_avg = target_need_for_days / max(1, resolved_days)
-    if len(pool) >= target_need_for_days:
+    if total_available >= target_need_for_days:
         build_days = resolved_days
         shortfall_works = 0
-    elif len(pool) == 0:
+    elif total_available == 0:
         build_days = 0
         shortfall_works = target_need_for_days
     else:
-        build_days = max(1, int(len(pool) // max(1.0, works_per_day_avg)))
-        shortfall_works = max(0, target_need_for_days - len(pool))
+        build_days = max(1, int(total_available // max(1.0, works_per_day_avg)))
+        shortfall_works = max(0, target_need_for_days - total_available)
 
     slots = (
         build_daily_cadence_schedule(
@@ -222,11 +232,12 @@ def build_real_museum_rehearsal(
     def _take_fresh(n: int, *, for_format: str = "carousel") -> list[dict] | None:
         nonlocal pool_cursor, remaining_carousel_slots
         if for_format == "reel" and carousel_only_need:
-            if (len(pool) - pool_cursor) <= remaining_carousel_slots:
+            single_needed = max(0, remaining_carousel_slots - len(documented_pair_queue) * 2)
+            if (len(single_pool) - pool_cursor) <= single_needed:
                 return None
-        if pool_cursor + n > len(pool):
+        if pool_cursor + n > len(single_pool):
             return None
-        chunk = pool[pool_cursor : pool_cursor + n]
+        chunk = single_pool[pool_cursor : pool_cursor + n]
         pool_cursor += n
         for item in chunk:
             used_artwork_ids.add(item["canonical_id"])
@@ -254,7 +265,15 @@ def build_real_museum_rehearsal(
                 req_n = 2
             else:
                 req_n = 1
-            arts = _take_fresh(req_n)
+            if req_n == 2 and documented_pair_queue:
+                arts = documented_pair_queue.pop(0)
+                for item in arts:
+                    used_artwork_ids.add(item["canonical_id"])
+                    carousel_used_ids.add(item["canonical_id"])
+                if carousel_only_need:
+                    remaining_carousel_slots = max(0, remaining_carousel_slots - 2)
+            else:
+                arts = _take_fresh(req_n)
             if arts is None:
                 arts = _take_fresh(1)
                 req_n = 1
@@ -276,7 +295,13 @@ def build_real_museum_rehearsal(
                 slot_index=slot_num,
                 is_quiz=is_quiz,
             )
-            lead_prof = extract_artwork_visual_profile(cleaned_arts[0]["image_path"], cleaned_arts[0]["title_clean"])
+            if req_n >= 2:
+                headline = compose_multi_work_headline(cleaned_arts)
+            elif is_quiz:
+                headline = f"Guess the year: {cleaned_arts[0]['artist_surname']}"
+            else:
+                headline = cleaned_arts[0]["title_clean"]
+            lead_prof = extract_artwork_visual_profile(cleaned_arts[0]["image_path"], headline)
             design_id, decision = select_profile_design(
                 post_format="carousel",
                 required_sources=req_n,
@@ -286,12 +311,6 @@ def build_real_museum_rehearsal(
                 family_counts=family_counts,
                 is_quiz=is_quiz,
             )
-            if req_n >= 2:
-                headline = compose_multi_work_headline(cleaned_arts)
-            elif is_quiz:
-                headline = f"Guess the year: {cleaned_arts[0]['artist_surname']}"
-            else:
-                headline = cleaned_arts[0]["title_clean"]
 
             if req_n == 1:
                 earlier_carousel_candidates.append((pid, cleaned_arts[0]))
@@ -406,7 +425,7 @@ def build_real_museum_rehearsal(
                     for a in cleaned_arts
                 ),
                 slide_count=len(final_plan),
-                dimensions_cm_text=cleaned_arts[0].get("dimensions_cm", ""),
+                dimensions_cm_text=str(cleaned_arts[0].get("dimensions_cm", ""))[:120],
             )
             inner_rels = _render_inner_carousel_slides(
                 root,
@@ -562,6 +581,7 @@ def build_real_museum_rehearsal(
         "completed_days": max((p["day"] for p in placed_posts), default=0),
         "shortfall_unique_artworks": shortfall_works,
         "blocked_by_reuse_ledger": blocked_by_reuse_ledger,
+        "pregrouped_documented_pairs": initial_documented_pair_count,
         "carousels_rendered": sum(1 for p in placed_posts if p["post_format"] == "carousel"),
         "reels_covers_rendered": sum(1 for p in placed_posts if p["post_format"] == "reel"),
         "reels_full_mp4_rendered": len(mp4_rendered_ids),

@@ -11,7 +11,7 @@ from src.neon_kit import (
     ImageFilter, ImageOps, add_shadow, apply_scrim, byline_for,
     compute_image_metrics, contain_fit, cover_crop, draw_brand_tag,
     draw_fit_text, duotone_image, extract_pigments, extract_vivid_accent,
-    hexcol, ink, load_source_image, make_noise_surface, math, mix, np,
+    format_duet_artists_line, hexcol, ink, load_source_image, make_noise_surface, math, mix, np,
     parse_year, paste_centered, short_museum,
 )
 
@@ -314,7 +314,7 @@ def _board_3(num: int, pils: list[Image.Image], sources: Sequence[AstraArtworkIn
         d = ImageDraw.Draw(c)
         draw_brand_tag(d, 48, 48, GOLD, "CENTURIES APART")
         draw_fit_text(d, title, (48, 1094), "didot", 54, W - 96, SOFT_IVORY, max_lines=2, align="center")
-        draw_fit_text(d, f"{art.artist} ({art.date})  vs  {art_b.artist} ({art_b.date})", (48, 1246), "mono", 19, W - 96, MUTED_LIGHT, max_lines=1, align="center")
+        draw_fit_text(d, format_duet_artists_line(art, art_b, sep="  vs  ", include_dates=True), (48, 1246), "mono", 19, W - 96, MUTED_LIGHT, max_lines=1, align="center")
         return c
     if num == 26:  # Cinema Before Film Echo
         c = Image.new("RGB", (W, H), (14, 16, 20))
@@ -345,7 +345,7 @@ def _board_3(num: int, pils: list[Image.Image], sources: Sequence[AstraArtworkIn
         d = ImageDraw.Draw(c)
         draw_brand_tag(d, 64, 54, VERMILION, "EARLY  //  LATE")
         draw_fit_text(d, title, (64, 1084), "serif", 52, W - 128, INK, max_lines=2)
-        draw_fit_text(d, f"{art.artist} · {art.date}  /  {art_b.artist} · {art_b.date}", (64, 1236), "mono", 19, W - 128, MUTED_INK, max_lines=1)
+        draw_fit_text(d, format_duet_artists_line(art, art_b, sep="  /  ", include_dates=True), (64, 1236), "mono", 19, W - 128, MUTED_INK, max_lines=1)
         return c
     if num == 29:  # First Glance / Closer Look
         c = Image.new("RGB", (W, H), CHARCOAL)
@@ -380,7 +380,7 @@ def _board_4(num: int, pils: list[Image.Image], sources: Sequence[AstraArtworkIn
         d.line((W // 2, 160, W // 2, 980), fill=VERMILION, width=2)
         draw_brand_tag(d, 48, 56, VERMILION, "CROSS-CULTURAL DIALOGUE")
         draw_fit_text(d, title, (48, 1028), "didot", 54, W - 96, INK, max_lines=2, align="center")
-        draw_fit_text(d, f"{art.artist}  ↔  {art_b.artist}", (48, 1230), "mono", 20, W - 96, MUTED_INK, max_lines=1, align="center")
+        draw_fit_text(d, format_duet_artists_line(art, art_b, sep="  ↔  "), (48, 1230), "mono", 20, W - 96, MUTED_INK, max_lines=1, align="center")
         return c
     if num == 32:  # Proportional Pigment Bar
         pig = extract_pigments(pil, 5)
@@ -712,7 +712,7 @@ def _board_6(num: int, pils: list[Image.Image], sources: Sequence[AstraArtworkIn
     d.line(seam, fill=(235, 198, 96), width=10)
     d.line(seam, fill=(255, 240, 178), width=3)
     draw_fit_text(d, title, (64, 1020), "didot", 58, W - 128, PURE_WHITE, max_lines=2)
-    draw_fit_text(d, f"{art.artist}  ×  {art_b.artist}", (64, 1220), "mono", 20, W - 128, GOLD, max_lines=1)
+    draw_fit_text(d, format_duet_artists_line(art, art_b, sep="  ×  "), (64, 1220), "mono", 20, W - 128, GOLD, max_lines=1)
     return c
 
 

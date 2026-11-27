@@ -381,6 +381,60 @@ def evaluate_multi_work_connection(artworks: Sequence[dict]) -> dict:
     }
 
 
+def extract_documented_pair_groups(
+    pool_artworks: Sequence[dict],
+    *,
+    max_pairs: int = 20,
+) -> tuple[list[list[dict]], list[dict]]:
+    """Pre-group museum-documented pairs before single-work allocation so companion works stay together.
+
+    Uses O(N) bucketing by series key, shared museum description prefix, or same artist+institution,
+    then verifies each pair via evaluate_multi_work_connection(...).
+    """
+    if max_pairs <= 0 or len(pool_artworks) < 2:
+        return [], list(pool_artworks)
+
+    cleaned = [clean_museum_artwork(a) for a in pool_artworks]
+    buckets: dict[str, list[int]] = {}
+    for idx, c in enumerate(cleaned):
+        skey, _, _ = _extract_series_key(c)
+        if skey:
+            buckets.setdefault(f"s:{skey}", []).append(idx)
+        desc = " ".join(str(c.get("museum_relation_note") or c.get("description") or "").lower().split())[:160]
+        if len(desc) >= 40:
+            buckets.setdefault(f"d:{desc}", []).append(idx)
+        if not c["is_anonymous"] and c.get("artist_short") and c.get("institution"):
+            buckets.setdefault(f"ai:{c['artist_short'].lower()}:{c['institution'].strip().lower()}", []).append(idx)
+
+    paired_indices: set[int] = set()
+    pairs: list[list[dict]] = []
+    for idxs in buckets.values():
+        if len(idxs) < 2:
+            continue
+        for pos_i in range(len(idxs)):
+            i = idxs[pos_i]
+            if i in paired_indices:
+                continue
+            for pos_j in range(pos_i + 1, len(idxs)):
+                j = idxs[pos_j]
+                if j in paired_indices:
+                    continue
+                if pool_artworks[i].get("canonical_id") == pool_artworks[j].get("canonical_id"):
+                    continue
+                conn = evaluate_multi_work_connection([cleaned[i], cleaned[j]])
+                if conn["tier"] == "documented_pair_or_series":
+                    paired_indices.add(i)
+                    paired_indices.add(j)
+                    pairs.append([pool_artworks[i], pool_artworks[j]])
+                    if len(pairs) >= max_pairs:
+                        remaining = [aw for k, aw in enumerate(pool_artworks) if k not in paired_indices]
+                        return pairs, remaining
+                    break
+
+    remaining = [aw for k, aw in enumerate(pool_artworks) if k not in paired_indices]
+    return pairs, remaining
+
+
 def plan_final_carousel_slides(
     *,
     post_id: str,
@@ -878,7 +932,7 @@ def build_weekly_carousel_delivery(
                 new_headline = compose_multi_work_headline(arts, conn)
                 if new_headline != headline or get_design(design_id).required_sources != len(arts):
                     if get_design(design_id).required_sources != len(arts):
-                        lead_prof_mw = extract_artwork_visual_profile(arts[0]["image_path"], arts[0]["title_clean"])
+                        lead_prof_mw = extract_artwork_visual_profile(arts[0]["image_path"], new_headline)
                         design_id, dec_mw = select_profile_design(
                             post_format="carousel",
                             required_sources=len(arts),
@@ -1004,7 +1058,7 @@ def build_weekly_carousel_delivery(
                     for a in arts
                 ),
                 slide_count=final_total_slides,
-                dimensions_cm_text=arts[0].get("dimensions_cm", ""),
+                dimensions_cm_text=str(arts[0].get("dimensions_cm", ""))[:120],
             )
             rel_inners = _render_inner_carousel_slides(
                 tmp_render_root,

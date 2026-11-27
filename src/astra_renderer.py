@@ -843,6 +843,31 @@ def _render_detail(i: int, sources: Sequence[AstraArtworkInput], head: str, deta
     return c, {"family": "detail", "source_count": 1}
 
 
+def format_duet_artists_line(
+    art_a: AstraArtworkInput,
+    art_b: AstraArtworkInput,
+    *,
+    sep: str = " / ",
+    include_dates: bool = False,
+) -> str:
+    """Format 2-work cover artist credit without repeating identical artist names ('Artist / Artist')."""
+    a_name = " ".join((art_a.artist or "").split()).strip() or "Archive"
+    b_name = " ".join((art_b.artist or "").split()).strip() or "Archive"
+    da = " ".join((art_a.date or "").split()).strip()
+    db = " ".join((art_b.date or "").split()).strip()
+    if a_name.casefold() == b_name.casefold():
+        if da and db and da != db:
+            return f"{a_name} · {da} & {db}"
+        if da or db:
+            return f"{a_name} · {da or db}"
+        return a_name
+    if include_dates:
+        left = f"{a_name} ({da})" if da else a_name
+        right = f"{b_name} ({db})" if db else b_name
+        return f"{left}{sep}{right}"
+    return f"{a_name}{sep}{b_name}"
+
+
 def _render_duet(i: int, sources: Sequence[AstraArtworkInput], head: str, detail_focuses) -> tuple[AstraCard, dict]:
     del detail_focuses
     art_a, art_b = sources[0], sources[1]
@@ -850,8 +875,8 @@ def _render_duet(i: int, sources: Sequence[AstraArtworkInput], head: str, detail
     pil_b = load_source_image(art_b.validated_path())
     fa = art_a.focal_point((0.5, 0.5))
     fb = art_b.focal_point((0.5, 0.5))
-    title_str = head or f"{art_a.artist} / {art_b.artist}"
-    artists_line = f"{art_a.artist} / {art_b.artist}"
+    title_str = head or format_duet_artists_line(art_a, art_b)
+    artists_line = format_duet_artists_line(art_a, art_b)
     c = AstraCard(["#182126", "#c2ae97", "#eae0c4", "#3e181d", "#e7e5d9", "#172537", "#ded2b6", "#d8bd90", "#282321", "#182e37"][i])
     if i == 0:
         c.art_image(pil_a, 0, 128, 270, 358, z=1.24, focus=fa)
@@ -891,7 +916,7 @@ def _render_duet(i: int, sources: Sequence[AstraArtworkInput], head: str, detail
         c.art_image(pil_a, 35, 171, 470, 243, z=1.04, focus=fa)
         c.art_image(pil_b, 148, 343, 244, 233, mode="fit")
         c.line([(35, 601), (504, 601)], "#585847")
-        c.text(f"{art_a.artist}  /  {art_b.artist}", 35, 621, 12, BLACK, "sans", "lt", 466)
+        c.text(artists_line, 35, 621, 12, BLACK, "sans", "lt", 466)
     elif i == 5:
         c.art_image(pil_a, 0, 0, 540, 303, z=1.1, focus=fa)
         c.art_image(pil_b, 0, 373, 540, 302, z=1.1, focus=fb)

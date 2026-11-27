@@ -9,13 +9,16 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
+from src.astra_renderer import AstraArtworkInput, format_duet_artists_line
 from src.carousel_delivery import (
     _compose_strong_multi_work_caption,
     _find_strong_partner_group,
     build_per_slide_alt_texts,
     evaluate_multi_work_connection,
+    extract_documented_pair_groups,
     plan_final_carousel_slides,
 )
+from src.design_selector import extract_artwork_visual_profile, select_profile_design
 from src.curatorial_brief import (
     _extract_event_date_from_text,
     compose_multi_work_headline,
@@ -462,3 +465,67 @@ def test_zero_within_month_partner_borrowing_and_slide2_truth(tmp_path: Path) ->
     alts = build_per_slide_alt_texts({"design_id": "astra-092", "tone_band": "dark", "artworks": [lead]}, plan)
     assert "Uncropped" in alts[1]["alt_text_en"]
     assert "Museum Record" in alts[2]["alt_text_en"]
+
+
+def test_documented_pair_pregrouping_duet_artist_dedup_and_no_astra_069_truncation(tmp_path: Path) -> None:
+    from collections import Counter
+
+    p1 = _img(tmp_path / "w1.jpg", (1200, 1400), (60, 50, 40))
+    p2 = _img(tmp_path / "w2.jpg", (1200, 1400), (70, 55, 45))
+    p3 = _img(tmp_path / "w3.jpg", (1200, 1400), (140, 130, 120))
+
+    pool = [
+        {
+            "canonical_id": "rijks_w1",
+            "artist": "Master of the St Elizabeth Panels",
+            "title": "The Saint Elizabeth’s Day Flood",
+            "date": "c. 1490 - c. 1495",
+            "institution": "Rijksmuseum, Amsterdam",
+            "description": "On 19 November 1421 Holland flooded. The survivors had an altarpiece made. The outer panels depict the disaster.",
+            "image_path": str(p1),
+        },
+        {
+            "canonical_id": "solo_1",
+            "artist": "Jean-Baptiste Corot",
+            "title": "Landscape with Trees",
+            "date": "1860",
+            "institution": "Rijksmuseum, Amsterdam",
+            "image_path": str(p3),
+        },
+        {
+            "canonical_id": "rijks_w2",
+            "artist": "Master of the St Elizabeth Panels",
+            "title": "The Saint Elizabeth’s Day Flood",
+            "date": "c. 1490 - c. 1495",
+            "institution": "Rijksmuseum, Amsterdam",
+            "description": "On 19 November 1421 Holland flooded. The survivors had an altarpiece made. The outer panels depict the disaster.",
+            "image_path": str(p2),
+        },
+    ]
+    pairs, remaining = extract_documented_pair_groups(pool, max_pairs=5)
+    assert len(pairs) == 1
+    assert {a["canonical_id"] for a in pairs[0]} == {"rijks_w1", "rijks_w2"}
+    assert [a["canonical_id"] for a in remaining] == ["solo_1"]
+
+    # Deduplicate same-artist duet bylines
+    a_same = AstraArtworkInput(image_path=p1, title="Portrait A", artist="attributed to Willem Jansz. Ploy", date="1663")
+    b_same = AstraArtworkInput(image_path=p2, title="Portrait B", artist="attributed to Willem Jansz. Ploy", date="1663")
+    assert format_duet_artists_line(a_same, b_same) == "attributed to Willem Jansz. Ploy · 1663"
+
+    b_diff_yr = AstraArtworkInput(image_path=p2, title="Portrait B", artist="attributed to Willem Jansz. Ploy", date="1668")
+    assert format_duet_artists_line(a_same, b_diff_yr) == "attributed to Willem Jansz. Ploy · 1663 & 1668"
+
+    c_other = AstraArtworkInput(image_path=p3, title="Harbor", artist="Claude Monet", date="1875")
+    assert format_duet_artists_line(a_same, c_other) == "attributed to Willem Jansz. Ploy / Claude Monet"
+
+    # Long duet title must never select astra-069 (narrow 1-line split box)
+    long_prof = extract_artwork_visual_profile(p1, "The Saint Elizabeth’s Day Flood: Outer Wings")
+    design_id, _ = select_profile_design(
+        post_format="carousel",
+        required_sources=2,
+        lead_profile=long_prof,
+        placed_posts=[],
+        usage_counts=Counter(),
+        family_counts=Counter(),
+    )
+    assert design_id != "astra-069"

@@ -38,6 +38,9 @@ AVOID_PROFILE_COVER_IDS = frozenset({
 # Warm/breathing cover families that keep the artwork clearly visible in 3:4 profile grids
 PROFILE_BALANCED_FAMILIES = frozenset({"archive", "gallery", "story", "detail"})
 
+# 2-source split templates with narrow 1-line boxes that truncate long duet titles (e.g. 'THE SAINT...')
+SHORT_DUET_TITLE_ONLY_IDS = frozenset({"astra-069"})
+
 
 def audit_design_catalog_eligibility() -> dict:
     """Analyze all 280 usable designs by source count, family, and format suitability."""
@@ -161,6 +164,11 @@ def _score_candidate(
     elif post_format == "carousel" and design.family in PROFILE_BALANCED_FAMILIES:
         score += 2.2
         reasons.append("profile_3x4_visibility")
+
+    # Never assign narrow 1-line split-word duet templates to long multi-work titles
+    if design.id in SHORT_DUET_TITLE_ONLY_IDS and lead_profile["title_length"] > 18:
+        score -= 16.0
+        reasons.append("avoid_truncated_duet_title")
 
     # Format alignment
     if post_format == "reel":
