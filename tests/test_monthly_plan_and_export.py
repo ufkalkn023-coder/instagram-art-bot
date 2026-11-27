@@ -23,7 +23,7 @@ from src.monthly_planner import (
     render_monthly_reel_video,
     update_monthly_post_design,
 )
-from src.reel_studio import GRID_H, GRID_TOP_OFFSET, REEL_H, REEL_W, verify_reel_mp4
+from src.reel_studio import GRID_H, REEL_H, REEL_W, verify_reel_mp4
 from tests.test_editorial_project import make_editorial_project
 
 

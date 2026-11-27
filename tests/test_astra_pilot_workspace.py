@@ -7,7 +7,6 @@ import threading
 import urllib.request
 from pathlib import Path
 
-import pytest
 from PIL import Image, ImageDraw
 
 from src.astra_pilot_workspace import (

@@ -7,13 +7,12 @@ from datetime import date
 from pathlib import Path
 from typing import Literal
 
-from PIL import Image, ImageDraw, ImageFilter
+from PIL import Image, ImageDraw
 
 from src.astra_renderer import AstraArtworkInput
 from src.neon_kit import (
     F,
     GOLD,
-    INK,
     MUTED_LIGHT,
     OBSIDIAN,
     PURE_WHITE,

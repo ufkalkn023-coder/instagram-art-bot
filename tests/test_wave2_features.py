@@ -1,16 +1,11 @@
 from __future__ import annotations
 
 import json
-import sys
 from datetime import date, datetime
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
 from PIL import Image, ImageDraw
-
-ROOT = Path(__file__).resolve().parents[1]
-if str(ROOT) not in sys.path:
-    sys.path.insert(0, str(ROOT))
 
 from src.art_calendar import find_anniversaries_for_date, render_split_screen_comparison
 from src.astra_renderer import AstraArtworkInput

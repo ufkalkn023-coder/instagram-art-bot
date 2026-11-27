@@ -232,7 +232,7 @@ def decide_slide_two_intent(
                 "fallback_reason": "",
                 "use_color_card": use_color_card,
                 "gain_en": f"Side-by-side close comparison of '{a0['title_clean']}' and '{a1['title_clean']}' before opening each full {support_sg}.",
-                "gain_tr": f"İki eserin odak bölgelerini yan yana açarak pozu, fırçayı ve kompozisyon bağını doğrudan gösterir.",
+                "gain_tr": "İki eserin odak bölgelerini yan yana açarak pozu, fırçayı ve kompozisyon bağını doğrudan gösterir.",
             }
         return {
             "spec": "duet_work_1",
@@ -391,7 +391,6 @@ def build_curatorial_brief(
     date_txt = (lead.get("date") or "").strip()
     date_part = _date_phrase(date_txt)
     support_sg = _support_noun(lead.get("medium", ""), plural=False)
-    support_pl = _support_noun(lead.get("medium", ""), plural=True)
     # Color card only when color/tone contrast is genuinely central (not default on every post)
     color_spread = sum(abs(int(a) - int(b)) for a, b in zip(pri_rgb, sec_rgb))
     use_color_card = color_spread >= 165 or (slot_index % 4 == 0 and color_spread >= 110)
@@ -451,7 +450,7 @@ def build_curatorial_brief(
         opening = f"Three rooms in one post: {a0['artist_surname']}'s \"{a0['title_clean']}\", {a1['artist_surname']}'s \"{a1['title_clean']}\", and {a2['artist_surname']}'s \"{a2['title_clean']}\"."
         body = f"Swipe through each work uncropped — moving from {palette_words} in the opening piece across three distinct museum rooms."
         closings = (
-            f"If you could linger in front of only one of these three in a gallery, which room would hold you?",
+            "If you could linger in front of only one of these three in a gallery, which room would hold you?",
             "Each work carries its own pace when seen at full height.",
             "Which of the three feels closest to the mood of today?",
         )

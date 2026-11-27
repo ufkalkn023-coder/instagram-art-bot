@@ -19,7 +19,6 @@ from PIL import Image
 from src.astra_catalog import get_design
 from src.astra_renderer import AstraArtworkInput, render_astra_design
 from src.curatorial_brief import (
-    COPY_VERSION,
     _extract_event_date_from_text,
     _support_noun,
     build_curatorial_brief,

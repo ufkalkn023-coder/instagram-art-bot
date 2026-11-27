@@ -2,18 +2,17 @@
 
 from __future__ import annotations
 
-import hashlib
 import json
-import shutil
+import re
 from collections import Counter
 from datetime import datetime
 from pathlib import Path
-from typing import Literal, Sequence
+from typing import Sequence
 from zoneinfo import ZoneInfo
 
 from PIL import Image, ImageDraw
 
-from src.art_calendar import find_anniversaries_for_date, match_anniversary_artist
+from src.art_calendar import find_anniversaries_for_date
 from src.astra_catalog import get_design
 from src.astra_renderer import AstraArtworkInput, render_astra_design
 from src.curatorial_brief import (
@@ -44,13 +43,12 @@ from src.museum_pool import (
     flag_visual_near_duplicates,
     normalize_artist_name,
 )
-from src.neon_kit import F, GOLD, MUTED_LIGHT, OBSIDIAN, PURE_WHITE, SOFT_IVORY
+from src.neon_kit import F, SOFT_IVORY
 from src.preflight_and_feedback import (
-    EditorialFeedbackStore,
     InsightsMediaLinkRegistry,
     run_preflight_checks,
 )
-from src.reel_studio import REEL_MOTION_PRESETS, ReelMotionPreset, render_local_reel_mp4, render_reel_9x16_cover
+from src.reel_studio import ReelMotionPreset, render_local_reel_mp4, render_reel_9x16_cover
 
 ISTANBUL_TZ = ZoneInfo("Europe/Istanbul")
 
@@ -65,9 +63,6 @@ LEGACY_REELS = [
     "astra-083", "neon-050", "astra-051", "neon-113", "astra-053",
     "neon-168", "astra-057", "neon-171", "astra-059", "neon-069",
 ]
-
-
-import re
 
 
 def _clean_artist_surname(artist: str) -> str:
@@ -750,7 +745,6 @@ def _render_rehearsal_html(manifest: dict) -> str:
     """Render a standalone, file://-compatible phone-width 3-column Instagram profile rehearsal."""
     payload = json.dumps(manifest, ensure_ascii=False).replace("<", "\\u003c").replace("&", "\\u0026")
     s = manifest["summary"]
-    max_day = max(1, int(s.get("completed_days", 1)))
     return f"""<!doctype html>
 <html lang="tr">
 <head>

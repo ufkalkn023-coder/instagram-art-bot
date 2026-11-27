@@ -6,7 +6,7 @@ import re
 from pathlib import Path
 
 import numpy as np
-from PIL import Image, ImageDraw, ImageFilter
+from PIL import Image, ImageDraw
 
 MONUMENTAL_THRESHOLD_CM = 180.0
 

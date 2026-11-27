@@ -1,13 +1,8 @@
 from __future__ import annotations
 
-import sys
 from pathlib import Path
 
 from PIL import Image, ImageDraw
-
-ROOT = Path(__file__).resolve().parents[1]
-if str(ROOT) not in sys.path:
-    sys.path.insert(0, str(ROOT))
 
 from src.astra_renderer import AstraArtworkInput, format_duet_artists_line
 from src.carousel_delivery import (

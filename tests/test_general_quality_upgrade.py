@@ -1,13 +1,8 @@
 from __future__ import annotations
 
-import sys
 from pathlib import Path
 
 from PIL import Image, ImageDraw
-
-ROOT = Path(__file__).resolve().parents[1]
-if str(ROOT) not in sys.path:
-    sys.path.insert(0, str(ROOT))
 
 from src.curatorial_brief import (
     build_curatorial_brief,
@@ -80,7 +75,7 @@ def test_curatorial_brief_distinct_roles_and_zero_pigment_claim(tmp_path: Path) 
 
 
 def test_preflight_checks_feedback_store_and_insights_registry(tmp_path: Path) -> None:
-    p = _img(tmp_path / "slide1.jpg")
+    _img(tmp_path / "slide1.jpg")
     bad_post = {
         "id": "post-001",
         "post_format": "carousel",

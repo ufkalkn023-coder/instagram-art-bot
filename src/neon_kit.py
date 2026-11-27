@@ -7,7 +7,6 @@ import math
 import re
 from functools import lru_cache
 from pathlib import Path
-from typing import Sequence
 
 import numpy as np
 from PIL import Image, ImageChops, ImageDraw, ImageEnhance, ImageFilter, ImageFont, ImageOps

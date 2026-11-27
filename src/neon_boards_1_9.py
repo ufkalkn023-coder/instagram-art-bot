@@ -11,8 +11,7 @@ from src.neon_kit import (
     ImageFilter, ImageOps, add_shadow, apply_scrim, byline_for,
     compute_image_metrics, contain_fit, cover_crop, draw_brand_tag,
     draw_fit_text, duotone_image, extract_pigments, extract_vivid_accent,
-    format_duet_artists_line, hexcol, ink, load_source_image, make_noise_surface, math, mix, np,
-    parse_year, paste_centered, short_museum,
+    format_duet_artists_line, hexcol, ink, load_source_image, make_noise_surface, math, mix, parse_year, paste_centered, short_museum,
 )
 
 
@@ -27,7 +26,6 @@ def _draw_footer(draw: ImageDraw.ImageDraw, art: AstraArtworkInput, y: int = 126
 def _board_1(num: int, pils: list[Image.Image], sources: Sequence[AstraArtworkInput], title: str, focus: tuple[float, float]) -> Image.Image:
     art, pil = sources[0], pils[0]
     pal = _palette(pil, 5)
-    accent = extract_vivid_accent(pil)
     if num == 1:  # The Curatorial Aperture
         c = Image.new("RGB", (W, H), OBSIDIAN)
         paste_centered(c, pil, (96, 176, W - 96, 980), shadow=True)
@@ -151,7 +149,6 @@ def _board_1(num: int, pils: list[Image.Image], sources: Sequence[AstraArtworkIn
 
 def _board_2(num: int, pils: list[Image.Image], sources: Sequence[AstraArtworkInput], title: str, focus: tuple[float, float]) -> Image.Image:
     art, pil = sources[0], pils[0]
-    pal = _palette(pil, 5)
     if num == 11:  # Spotlight Dimming Mask
         c = ImageEnhance.Brightness(cover_crop(pil, W, H, focus=focus)).enhance(0.28)
         bright = cover_crop(pil, W, H, focus=focus)
@@ -590,7 +587,6 @@ def _board_5(num: int, pils: list[Image.Image], sources: Sequence[AstraArtworkIn
 
 def _board_6(num: int, pils: list[Image.Image], sources: Sequence[AstraArtworkInput], title: str, focus: tuple[float, float]) -> Image.Image:
     art, pil = sources[0], pils[0]
-    pal = _palette(pil, 5)
     if num == 51:  # Museum Postage Stamp
         c = Image.new("RGB", (W, H), (34, 42, 46))
         d = ImageDraw.Draw(c)

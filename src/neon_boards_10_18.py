@@ -5,11 +5,10 @@ from __future__ import annotations
 from typing import Sequence
 
 from src.neon_kit import (
-    CHARCOAL, DEEP_NIGHT, GOLD, H, INK, MUTED_INK, MUTED_LIGHT, NEWSPRINT,
-    OBSIDIAN, PAPER, PURE_WHITE, RULE_DARK, RULE_LIGHT, SOFT_IVORY, VELLUM,
+    CHARCOAL, DEEP_NIGHT, GOLD, H, INK, MUTED_INK, MUTED_LIGHT, OBSIDIAN, PAPER, PURE_WHITE, RULE_LIGHT, SOFT_IVORY, VELLUM,
     VERMILION, W, AstraArtworkInput, F, Image, ImageChops, ImageDraw,
-    ImageEnhance, ImageFilter, ImageOps, add_shadow, apply_scrim, byline_for,
-    compute_image_metrics, contain_fit, cover_crop, draw_brand_tag,
+    ImageFilter, ImageOps, add_shadow, apply_scrim, byline_for,
+    compute_image_metrics, cover_crop, draw_brand_tag,
     draw_fit_text, duotone_image, extract_pigments, extract_vivid_accent,
     halftone_dots, hexcol, ink, load_source_image, make_noise_surface, math,
     mix, np, parse_year, paste_centered, short_museum, thermal_false_color,
