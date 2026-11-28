@@ -1230,8 +1230,12 @@ def prepare_carousel_content(args, *, excluded_ids: set[str] | None = None) -> P
         **({"use_gemini": False} if getattr(args, "automatic_editorial", False) else {}),
     )
     if getattr(args, "automatic_editorial", False):
-        # Automatic editorial snapshots raw local_image_path bytes and renders
-        # its own 1080x1350 pages; legacy cover/featured JPEGs are never read.
+        # Preserve legacy fail-closed behavior if the selected cover file became
+        # unreadable before handoff, while skipping all legacy JPEG renders.
+        from PIL import Image
+
+        with Image.open(plan.cover.local_image_path) as cover_source:
+            cover_source.load()
         output_media_paths = [
             plan.cover.artwork["local_image_path"],
             *(art["local_image_path"] for art in plan.featured_artworks),

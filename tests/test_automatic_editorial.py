@@ -673,3 +673,153 @@ def test_automatic_single_rejects_unpublishable_first_candidate_and_fails_when_e
     )
     with pytest.raises(RuntimeError, match='Instagram image validation'):
         main.prepare_single_content(args)
+
+
+def test_run_fresh_feed_carousel_hides_raw_paths_and_fails_on_unreadable_cover(
+    monkeypatch, tmp_path
+):
+    import main
+    from src.feed_content import PreparedStoryContent
+    from src.story_feed import validate_story_media
+
+    sources_dir = tmp_path / 'sources'
+    sources_dir.mkdir()
+    selected = _fixed_carousel_selection(sources_dir)
+
+    monkeypatch.setenv('ARTFOLIO_FEED_CONTENT_MODE', 'automatic')
+    monkeypatch.setattr(main.history_tracker, 'get_posted_ids', lambda: set())
+    monkeypatch.setattr(main.history_tracker, 'get_recent_carousel_theme_history', lambda: [])
+    monkeypatch.setattr(main, '_get_grid_color_tone_for_run', lambda _dry_run: 'warm')
+    monkeypatch.setattr(main, '_select_carousel_artworks', lambda *_args, **_kwargs: selected)
+    monkeypatch.setattr(
+        main, '_render_carousel_content',
+        lambda *_args, **_kwargs: pytest.fail('legacy carousel render must not run'),
+    )
+
+    captured = {}
+
+    def fake_run_carousel_post(args, authorization=None, *, prepared_content=None):
+        captured['content'] = prepared_content
+        captured['media_names'] = [Path(p).name for p in prepared_content.media_paths]
+        captured['media_bytes'] = [Path(p).read_bytes() for p in prepared_content.media_paths]
+        validate_story_media(prepared_content)
+        return 'ok'
+
+    monkeypatch.setattr(main, 'run_carousel_post', fake_run_carousel_post)
+    args = SimpleNamespace(dry_run=True, content_mode='automatic', mode='carousel')
+    assert main._run_fresh_feed(args, main.ProductionMode.CAROUSEL, None) == 'ok'
+
+    content = captured['content']
+    assert isinstance(content, PreparedStoryContent)
+    assert content.story_delivery.schema_version == 'artfolio-story-delivery-v3'
+    assert captured['media_names'] == [f'editorial-0{i}.jpg' for i in range(1, 6)]
+    raw_paths = {selected.cover.local_image_path, *(a['local_image_path'] for a in selected.artworks)}
+    assert not raw_paths.intersection(content.media_paths)
+    assert all('local_image_path' not in art for art in content.artworks)
+
+    # Error parity: unreadable cover slot must stop before publication.
+    Path(selected.cover.local_image_path).write_bytes(b'not-a-valid-image')
+    captured.clear()
+    with pytest.raises(OSError):
+        main._run_fresh_feed(args, main.ProductionMode.CAROUSEL, None)
+    assert captured == {}
+
+
+def test_prepare_feed_queue_cli_automatic_carousel_hides_raw_paths_and_fails_on_bad_cover(
+    monkeypatch, tmp_path
+):
+    import main
+    from scripts import prepare_feed_queue as command
+    from src.feed_queue import PreparedFeedQueue
+    from src.story_feed import validate_story_media
+
+    sources_dir = tmp_path / 'sources'
+    sources_dir.mkdir()
+    selected = _fixed_carousel_selection(sources_dir)
+
+    single_dir = tmp_path / 'single_src'
+    single_dir.mkdir()
+    single_source = make_sources(single_dir, 1)[0]
+    single_candidate = dict(
+        single_source.artwork.model_dump(mode='json'),
+        id='cleveland_900',
+        source='cleveland',
+        source_id='900',
+        artist=single_source.artwork.artist_name,
+        date=single_source.artwork.creation_date,
+        museum=single_source.artwork.museum_name,
+        local_image_path=single_source.image_path,
+    )
+
+    monkeypatch.setattr(main.history_tracker, 'get_posted_ids', lambda: set())
+    monkeypatch.setattr(main.history_tracker, 'get_recent_carousel_theme_history', lambda: [])
+    monkeypatch.setattr(main, '_get_grid_color_tone_for_run', lambda _dry_run: 'warm')
+    monkeypatch.setattr(main, '_select_carousel_artworks', lambda *_args, **_kwargs: selected)
+    monkeypatch.setattr(
+        main, '_render_carousel_content',
+        lambda *_args, **_kwargs: pytest.fail('legacy carousel render must not run'),
+    )
+    monkeypatch.setattr(
+        main.art_fetcher,
+        'iter_single_post_candidates',
+        lambda *_args, **_kwargs: (item for item in [single_candidate]),
+    )
+
+    # Build a 3-package queue starting with carousel: carousel, single, carousel.
+    # Provide a second distinct carousel set for slot 3 so artworks don't collide.
+    sources_dir_2 = tmp_path / 'sources_2'
+    sources_dir_2.mkdir()
+    selected_2 = _fixed_carousel_selection(sources_dir_2)
+    shifted_featured = [
+        dict(art, id=f'cleveland_{idx + 20}', source_id=str(idx + 20))
+        for idx, art in enumerate(selected_2.artworks, start=1)
+    ]
+    shifted_cover_art = dict(selected_2.cover.artwork, id='cleveland_20', source_id='20')
+    from dataclasses import replace as dc_replace
+    selected_2 = main._SelectedCarousel(
+        shifted_featured,
+        dc_replace(selected_2.cover, artwork=shifted_cover_art),
+        selected_2.theme,
+        selected_2.caption_hook_type,
+        None,
+    )
+    carousel_iter = iter([selected, selected_2])
+    monkeypatch.setattr(main, '_select_carousel_artworks', lambda *_args, **_kwargs: next(carousel_iter))
+
+    queue_dir = tmp_path / 'auto_queue'
+    rc = command.run([
+        '--directory', str(queue_dir),
+        '--target', '3',
+        '--first-format', 'carousel',
+        '--content-mode', 'automatic',
+        '--skip-keychain',
+    ])
+    assert rc == 0
+    assert list(queue_dir.rglob('carousel_*.jpg')) == []
+
+    manifest_text = (queue_dir / 'queue.json').read_text(encoding='utf-8')
+    assert str(sources_dir) not in manifest_text
+    assert 'local_image_path' not in manifest_text
+
+    queue = PreparedFeedQueue(queue_dir)
+    claim = queue.claim('carousel', protected_ids=set(), owner='run:test')
+    assert claim is not None
+    assert claim.content.story_delivery.schema_version == 'artfolio-story-delivery-v3'
+    assert len(claim.content.media_paths) == 5
+    assert all('local_image_path' not in art for art in claim.content.artworks)
+    validate_story_media(claim.content)
+
+    # Error parity: unreadable cover fails closed and leaves no queue manifest.
+    Path(selected.cover.local_image_path).write_bytes(b'corrupted-cover')
+    monkeypatch.setattr(main, '_select_carousel_artworks', lambda *_args, **_kwargs: selected)
+    bad_queue_dir = tmp_path / 'bad_auto_queue'
+    with pytest.raises(SystemExit) as exc:
+        command.run([
+            '--directory', str(bad_queue_dir),
+            '--target', '3',
+            '--first-format', 'carousel',
+            '--content-mode', 'automatic',
+            '--skip-keychain',
+        ])
+    assert exc.value.code == 1
+    assert not (bad_queue_dir / 'queue.json').exists()
