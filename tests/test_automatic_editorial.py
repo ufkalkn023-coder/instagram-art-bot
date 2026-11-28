@@ -467,3 +467,359 @@ def test_strict_copy_schema_is_sent_as_json_schema_through_real_sdk(monkeypatch,
     assert len(requests) == 1
     schema = requests[0]['generationConfig']['responseJsonSchema']
     assert schema['additionalProperties'] is False
+
+
+def _fixed_carousel_selection(tmp_path):
+    import main
+    from src.artwork_visual_features import extract_visual_features
+    from src.carousel_plan import CoverAsset, CoverMode, CoverScoreBreakdown
+    from src.carousel_themes import get_default_theme_registry
+    from src.editorial_experiments import CaptionHookType
+
+    sources = make_sources(tmp_path, 6)
+    artworks = [
+        dict(
+            source.artwork.model_dump(mode='json'),
+            id=f'cleveland_{index}',
+            source_id=str(index),
+            artist=source.artwork.artist_name,
+            date=source.artwork.creation_date,
+            museum=source.artwork.museum_name,
+            local_image_path=source.image_path,
+        )
+        for index, source in enumerate(sources)
+    ]
+    cover_art = artworks[0]
+    featured = artworks[1:]
+    cover = CoverAsset(
+        artwork=cover_art,
+        local_image_path=cover_art['local_image_path'],
+        mode=CoverMode.FULL_ARTWORK,
+        cover_score=90.0,
+        score_breakdown=CoverScoreBreakdown(
+            theme_relevance=20.0,
+            technical_quality=20.0,
+            resolution=15.0,
+            composition_suitability=10.0,
+            crop_flexibility=10.0,
+            visual_readability=10.0,
+            aspect_ratio=5.0,
+        ),
+        visual_features=extract_visual_features(cover_art['local_image_path']),
+    )
+    theme = get_default_theme_registry().enabled_themes[0]
+    return main._SelectedCarousel(
+        featured, cover, theme, CaptionHookType.CURIOSITY, None,
+    )
+
+
+def test_automatic_carousel_skips_redundant_legacy_render_with_equivalent_delivery(
+    monkeypatch, tmp_path
+):
+    import main
+    from src.automatic_editorial import prepare_automatic_editorial
+    from src.instagram_image import inspect_instagram_image_publishability
+    from src.story_feed import validate_story_media
+
+    sources_dir = tmp_path / 'sources'
+    sources_dir.mkdir()
+    selected = _fixed_carousel_selection(sources_dir)
+
+    monkeypatch.setattr(main.history_tracker, 'get_posted_ids', lambda: set())
+    monkeypatch.setattr(main.history_tracker, 'get_recent_carousel_theme_history', lambda: [])
+    monkeypatch.setattr(main, '_get_grid_color_tone_for_run', lambda _dry_run: 'warm')
+    monkeypatch.setattr(main, '_select_carousel_artworks', lambda *_args, **_kwargs: selected)
+    monkeypatch.setattr(main.gemini_ai, 'analyze_carousel', lambda *_args, **_kwargs: None)
+    monkeypatch.setenv('ARTFOLIO_SELECTION_SEED', 'tour3-equivalence-seed')
+
+    # Baseline: legacy render enabled (writes 1 cover + 5 featured intermediate JPGs).
+    legacy_prep_dir = tmp_path / 'legacy_prep'
+    legacy_prep_dir.mkdir()
+    legacy_args = SimpleNamespace(
+        dry_run=True, prepare_only=True, automatic_editorial=False,
+        preparation_directory=legacy_prep_dir,
+    )
+    baseline_acquired = main.prepare_carousel_content(legacy_args)
+    assert len(list(legacy_prep_dir.glob('carousel_*.jpg'))) == 6
+    baseline_delivery = prepare_automatic_editorial(baseline_acquired, tmp_path / 'baseline_editorial')
+
+    # Optimized automatic editorial path: skips all 6 intermediate legacy JPG renders.
+    auto_prep_dir = tmp_path / 'auto_prep'
+    auto_prep_dir.mkdir()
+    render_calls = []
+    monkeypatch.setattr(
+        main, '_render_carousel_content',
+        lambda *args, **kwargs: render_calls.append((args, kwargs)),
+    )
+    auto_args = SimpleNamespace(
+        dry_run=True, prepare_only=True, automatic_editorial=True,
+        preparation_directory=auto_prep_dir,
+    )
+    auto_acquired = main.prepare_carousel_content(auto_args)
+    assert render_calls == []
+    assert list(auto_prep_dir.glob('carousel_*.jpg')) == []
+    assert auto_acquired.publication_ids == baseline_acquired.publication_ids
+    assert auto_acquired.featured_ids == baseline_acquired.featured_ids
+    assert auto_acquired.theme_id == baseline_acquired.theme_id
+    assert auto_acquired.theme_family == baseline_acquired.theme_family
+    assert auto_acquired.carousel_format == baseline_acquired.carousel_format
+
+    auto_delivery = prepare_automatic_editorial(auto_acquired, tmp_path / 'auto_editorial')
+    validate_story_media(auto_delivery)
+    assert len(auto_delivery.media_paths) == 5
+    for path in auto_delivery.media_paths:
+        assert inspect_instagram_image_publishability(path).publishable
+
+    assert auto_delivery.publication_ids == baseline_delivery.publication_ids
+    assert auto_delivery.caption == baseline_delivery.caption
+    assert auto_delivery.theme_id == baseline_delivery.theme_id
+    assert auto_delivery.theme_family == baseline_delivery.theme_family
+    assert auto_delivery.carousel_format == baseline_delivery.carousel_format
+    assert auto_delivery.story_delivery == baseline_delivery.story_delivery
+    assert [Path(p).read_bytes() for p in auto_delivery.media_paths] == [
+        Path(p).read_bytes() for p in baseline_delivery.media_paths
+    ]
+
+
+def test_automatic_queue_preparation_skips_legacy_carousel_render(monkeypatch, tmp_path):
+    import main
+    from scripts import prepare_feed_queue as command
+    from src.automatic_editorial import prepare_automatic_editorial
+
+    sources_dir = tmp_path / 'sources'
+    sources_dir.mkdir()
+    selected = _fixed_carousel_selection(sources_dir)
+
+    monkeypatch.setattr(main.history_tracker, 'get_posted_ids', lambda: set())
+    monkeypatch.setattr(main.history_tracker, 'get_recent_carousel_theme_history', lambda: [])
+    monkeypatch.setattr(main, '_get_grid_color_tone_for_run', lambda _dry_run: 'warm')
+    monkeypatch.setattr(main, '_select_carousel_artworks', lambda *_args, **_kwargs: selected)
+    monkeypatch.setattr(
+        main, '_render_carousel_content',
+        lambda *_args, **_kwargs: pytest.fail('legacy carousel render should be skipped'),
+    )
+
+    prep_dir = tmp_path / 'queue_slot'
+    prep_dir.mkdir()
+    acquired = command._prepare('carousel', prep_dir, set(), automatic_editorial=True)
+    assert list(prep_dir.glob('carousel_*.jpg')) == []
+    content = prepare_automatic_editorial(acquired, prep_dir / 'editorial')
+    assert content.story_delivery.schema_version == 'artfolio-story-delivery-v3'
+    assert len(content.media_paths) == 5
+
+
+def test_automatic_single_rejects_unpublishable_first_candidate_and_fails_when_exhausted(
+    monkeypatch, tmp_path
+):
+    import main
+    from src.automatic_editorial import prepare_automatic_editorial
+    from src.instagram_image import inspect_instagram_image_publishability
+
+    sources_dir = tmp_path / 'single_sources'
+    sources_dir.mkdir()
+    template_source = make_sources(sources_dir, 1)[0]
+    bad_path = tmp_path / 'bad_aspect.jpg'
+    Image.new('RGB', (2000, 200), (120, 40, 40)).save(bad_path, format='JPEG', quality=90)
+    good_path = tmp_path / 'good_portrait.jpg'
+    Image.new('RGB', (1200, 1500), (40, 80, 140)).save(good_path, format='JPEG', quality=90)
+
+    def _candidate(cid: str, path: Path) -> dict:
+        return dict(
+            template_source.artwork.model_dump(mode='json'),
+            id=cid,
+            source='cleveland',
+            source_id=cid.split('_', 1)[1],
+            title=f'Work {cid}',
+            artist=template_source.artwork.artist_name,
+            date=template_source.artwork.creation_date,
+            museum=template_source.artwork.museum_name,
+            local_image_path=str(path),
+        )
+
+    bad = _candidate('cleveland_101', bad_path)
+    good = _candidate('cleveland_102', good_path)
+
+    monkeypatch.setattr(main.history_tracker, 'get_posted_ids', lambda: set())
+    monkeypatch.setattr(
+        main.art_fetcher,
+        'iter_single_post_candidates',
+        lambda *_args, **_kwargs: (item for item in [bad, good]),
+    )
+    monkeypatch.setattr(
+        main.gemini_ai, 'analyze_artwork',
+        lambda *_args, **_kwargs: pytest.fail('legacy single gemini should be skipped'),
+    )
+
+    prep_dir = tmp_path / 'single_prep'
+    prep_dir.mkdir()
+    args = SimpleNamespace(
+        dry_run=True, prepare_only=True, automatic_editorial=True,
+        preparation_directory=prep_dir,
+    )
+    acquired = main.prepare_single_content(args)
+    assert acquired.publication_ids == ('cleveland_102',)
+    assert list(prep_dir.glob('single_*.jpg')) == []
+
+    content = prepare_automatic_editorial(acquired, tmp_path / 'single_editorial')
+    assert content.publication_ids == ('cleveland_102',)
+    assert len(content.media_paths) == 1
+    assert inspect_instagram_image_publishability(content.media_paths[0]).publishable
+
+    # Exhausted pool (no publishable candidate) must fail closed.
+    monkeypatch.setattr(
+        main.art_fetcher,
+        'iter_single_post_candidates',
+        lambda *_args, **_kwargs: (item for item in [bad]),
+    )
+    with pytest.raises(RuntimeError, match='Instagram image validation'):
+        main.prepare_single_content(args)
+
+
+def test_run_fresh_feed_carousel_hides_raw_paths_and_fails_on_unreadable_cover(
+    monkeypatch, tmp_path
+):
+    import main
+    from src.feed_content import PreparedStoryContent
+    from src.story_feed import validate_story_media
+
+    sources_dir = tmp_path / 'sources'
+    sources_dir.mkdir()
+    selected = _fixed_carousel_selection(sources_dir)
+
+    monkeypatch.setenv('ARTFOLIO_FEED_CONTENT_MODE', 'automatic')
+    monkeypatch.setattr(main.history_tracker, 'get_posted_ids', lambda: set())
+    monkeypatch.setattr(main.history_tracker, 'get_recent_carousel_theme_history', lambda: [])
+    monkeypatch.setattr(main, '_get_grid_color_tone_for_run', lambda _dry_run: 'warm')
+    monkeypatch.setattr(main, '_select_carousel_artworks', lambda *_args, **_kwargs: selected)
+    monkeypatch.setattr(
+        main, '_render_carousel_content',
+        lambda *_args, **_kwargs: pytest.fail('legacy carousel render must not run'),
+    )
+
+    captured = {}
+
+    def fake_run_carousel_post(args, authorization=None, *, prepared_content=None):
+        captured['content'] = prepared_content
+        captured['media_names'] = [Path(p).name for p in prepared_content.media_paths]
+        captured['media_bytes'] = [Path(p).read_bytes() for p in prepared_content.media_paths]
+        validate_story_media(prepared_content)
+        return 'ok'
+
+    monkeypatch.setattr(main, 'run_carousel_post', fake_run_carousel_post)
+    args = SimpleNamespace(dry_run=True, content_mode='automatic', mode='carousel')
+    assert main._run_fresh_feed(args, main.ProductionMode.CAROUSEL, None) == 'ok'
+
+    content = captured['content']
+    assert isinstance(content, PreparedStoryContent)
+    assert content.story_delivery.schema_version == 'artfolio-story-delivery-v3'
+    assert captured['media_names'] == [f'editorial-0{i}.jpg' for i in range(1, 6)]
+    raw_paths = {selected.cover.local_image_path, *(a['local_image_path'] for a in selected.artworks)}
+    assert not raw_paths.intersection(content.media_paths)
+    assert all('local_image_path' not in art for art in content.artworks)
+
+    # Error parity: unreadable cover slot must stop before publication.
+    Path(selected.cover.local_image_path).write_bytes(b'not-a-valid-image')
+    captured.clear()
+    with pytest.raises(OSError):
+        main._run_fresh_feed(args, main.ProductionMode.CAROUSEL, None)
+    assert captured == {}
+
+
+def test_prepare_feed_queue_cli_automatic_carousel_hides_raw_paths_and_fails_on_bad_cover(
+    monkeypatch, tmp_path
+):
+    import main
+    from scripts import prepare_feed_queue as command
+    from src.feed_queue import PreparedFeedQueue
+    from src.story_feed import validate_story_media
+
+    sources_dir = tmp_path / 'sources'
+    sources_dir.mkdir()
+    selected = _fixed_carousel_selection(sources_dir)
+
+    single_dir = tmp_path / 'single_src'
+    single_dir.mkdir()
+    single_source = make_sources(single_dir, 1)[0]
+    single_candidate = dict(
+        single_source.artwork.model_dump(mode='json'),
+        id='cleveland_900',
+        source='cleveland',
+        source_id='900',
+        artist=single_source.artwork.artist_name,
+        date=single_source.artwork.creation_date,
+        museum=single_source.artwork.museum_name,
+        local_image_path=single_source.image_path,
+    )
+
+    monkeypatch.setattr(main.history_tracker, 'get_posted_ids', lambda: set())
+    monkeypatch.setattr(main.history_tracker, 'get_recent_carousel_theme_history', lambda: [])
+    monkeypatch.setattr(main, '_get_grid_color_tone_for_run', lambda _dry_run: 'warm')
+    monkeypatch.setattr(main, '_select_carousel_artworks', lambda *_args, **_kwargs: selected)
+    monkeypatch.setattr(
+        main, '_render_carousel_content',
+        lambda *_args, **_kwargs: pytest.fail('legacy carousel render must not run'),
+    )
+    monkeypatch.setattr(
+        main.art_fetcher,
+        'iter_single_post_candidates',
+        lambda *_args, **_kwargs: (item for item in [single_candidate]),
+    )
+
+    # Build a 3-package queue starting with carousel: carousel, single, carousel.
+    # Provide a second distinct carousel set for slot 3 so artworks don't collide.
+    sources_dir_2 = tmp_path / 'sources_2'
+    sources_dir_2.mkdir()
+    selected_2 = _fixed_carousel_selection(sources_dir_2)
+    shifted_featured = [
+        dict(art, id=f'cleveland_{idx + 20}', source_id=str(idx + 20))
+        for idx, art in enumerate(selected_2.artworks, start=1)
+    ]
+    shifted_cover_art = dict(selected_2.cover.artwork, id='cleveland_20', source_id='20')
+    from dataclasses import replace as dc_replace
+    selected_2 = main._SelectedCarousel(
+        shifted_featured,
+        dc_replace(selected_2.cover, artwork=shifted_cover_art),
+        selected_2.theme,
+        selected_2.caption_hook_type,
+        None,
+    )
+    carousel_iter = iter([selected, selected_2])
+    monkeypatch.setattr(main, '_select_carousel_artworks', lambda *_args, **_kwargs: next(carousel_iter))
+
+    queue_dir = tmp_path / 'auto_queue'
+    rc = command.run([
+        '--directory', str(queue_dir),
+        '--target', '3',
+        '--first-format', 'carousel',
+        '--content-mode', 'automatic',
+        '--skip-keychain',
+    ])
+    assert rc == 0
+    assert list(queue_dir.rglob('carousel_*.jpg')) == []
+
+    manifest_text = (queue_dir / 'queue.json').read_text(encoding='utf-8')
+    assert str(sources_dir) not in manifest_text
+    assert 'local_image_path' not in manifest_text
+
+    queue = PreparedFeedQueue(queue_dir)
+    claim = queue.claim('carousel', protected_ids=set(), owner='run:test')
+    assert claim is not None
+    assert claim.content.story_delivery.schema_version == 'artfolio-story-delivery-v3'
+    assert len(claim.content.media_paths) == 5
+    assert all('local_image_path' not in art for art in claim.content.artworks)
+    validate_story_media(claim.content)
+
+    # Error parity: unreadable cover fails closed and leaves no queue manifest.
+    Path(selected.cover.local_image_path).write_bytes(b'corrupted-cover')
+    monkeypatch.setattr(main, '_select_carousel_artworks', lambda *_args, **_kwargs: selected)
+    bad_queue_dir = tmp_path / 'bad_auto_queue'
+    with pytest.raises(SystemExit) as exc:
+        command.run([
+            '--directory', str(bad_queue_dir),
+            '--target', '3',
+            '--first-format', 'carousel',
+            '--content-mode', 'automatic',
+            '--skip-keychain',
+        ])
+    assert exc.value.code == 1
+    assert not (bad_queue_dir / 'queue.json').exists()

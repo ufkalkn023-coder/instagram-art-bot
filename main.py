@@ -1229,7 +1229,19 @@ def prepare_carousel_content(args, *, excluded_ids: set[str] | None = None) -> P
         selected, selection_run_seed=selection_run_seed,
         **({"use_gemini": False} if getattr(args, "automatic_editorial", False) else {}),
     )
-    output_media_paths = _render_carousel_content(args, plan, color_tone=color_tone)
+    if getattr(args, "automatic_editorial", False):
+        # Preserve legacy fail-closed behavior if the selected cover file became
+        # unreadable before handoff, while skipping all legacy JPEG renders.
+        from PIL import Image
+
+        with Image.open(plan.cover.local_image_path) as cover_source:
+            cover_source.load()
+        output_media_paths = [
+            plan.cover.artwork["local_image_path"],
+            *(art["local_image_path"] for art in plan.featured_artworks),
+        ]
+    else:
+        output_media_paths = _render_carousel_content(args, plan, color_tone=color_tone)
 
     if args.dry_run and not getattr(args, "prepare_only", False):
         _log_carousel_dry_run_success(plan, output_media_paths)
