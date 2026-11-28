@@ -6,7 +6,9 @@ Kurulum, araçlar ve operasyon kurallarının ayrıntıları bu belgede toplanm�
 Varsayılan otomatik akış ile isteğe bağlı editoryal ve legacy araçlar ilgili
 başlıklarda ayrılır. Yayın izinlerinin güncel prosedürü [takvim rehberindedir](STAGE-B-SCHEDULE.md).
 
+- [İçerik modları ve kuyruk geçişi](#content-modes)
 - [Otomatik içerik](#automatic-content)
+- [Aylık stüdyo ve Meta Business Suite paketi](#monthly-studio)
 - [Editoryal araçlar](#editorial-tools)
 - [Insights ve analiz](#insights)
 - [Hazır içerik kuyruğu](#feed-queue)
@@ -15,7 +17,35 @@ başlıklarda ayrılır. Yayın izinlerinin güncel prosedürü [takvim rehberin
 - [Ortam değişkenleri](#configuration)
 - [Yerel panel ve takvim](#dashboard)
 
-Bu proje, müze API'lerinden gelen eserleri hak bilgisini koruyarak seçer, güvenli biçimde indirir ve resmi Meta Instagram Graph API üzerinden sırayla editorial carousel ve tekli görsel gönderisi olarak paylaşır. GitHub Actions zamanlaması, aynı checkout üzerinde önce compile ve test doğrulamasını tamamlar; yalnız ardından production bot çalışır.
+Bu proje, müze API'lerinden gelen eserleri hak bilgisini koruyarak seçer, güvenli biçimde indirir; hem yerel aylık planlama/paketleme araçlarını hem de resmi Meta Instagram Graph API üzerinden çalışan otomatik Feed/Reel akışlarını barındırır. Aşağıdaki bölümlerde anlatılan GitHub Actions workflow'ları repoda tanımlı davranışı açıklar; bunların canlı GitHub Actions ortamında etkin olup olmadığı repository variable'larına ve operatör izinlerine bağlıdır.
+
+<a id="content-modes"></a>
+
+## İçerik modları, hazır kuyruk ve taze üretim kuralları
+
+`src/feed_content_policy.py` içindeki `resolve_content_mode`, Feed içerik modunu şu öncelik sırasıyla çözer:
+
+1. Açık CLI bayrağı (`--content-mode`)
+2. Ortam değişkeni (`ARTFOLIO_FEED_CONTENT_MODE`)
+3. Çağrılan giriş noktasının varsayılanı (`main.py` için `automatic`; `scripts/prepare_feed_queue.py` için `editorial`)
+
+| Mod | Görevi | Kuyrukta kabul edilen paket | Kuyruk boşsa davranış |
+| --- | --- | --- | --- |
+| `automatic` | Otomatik editoryal Feed akışı (`.github/workflows/instagram_bot.yml` tarafından açıkça sabitlenir). | `artfolio-story-delivery-v2` veya `ai_proposal` başlıklı `artfolio-story-delivery-v3` | Taze üretime (`_run_fresh_feed`) düşer; `src/automatic_editorial.py` tek Gemini çağrısıyla v3 paket üretir. Gemini kapalı/hatalıysa legacy şablona düşmez, fail-closed durur. |
+| `editorial` | Yalnız insan onaylı editoryal projelerle yayın yolu. | Yalnız `artfolio-story-delivery-v2` | **Taze üretime düşmez**; `EDITORIAL_REVIEW_REQUIRED` ile durur (`main.py`). `--dry-run` bu modda desteklenmez. |
+| `legacy` | Eski 6–9 eserli carousel / tekli hazırlama ve şablon fallback'li Gemini uyumluluk yolu. | Kuyruktaki mevcut uyumlu paketler (v2/v3 filtresi uygulanmaz) | Taze legacy üretime (`_run_fresh_feed`) düşer; Gemini yoksa yerel şablon fallback'i kullanılabilir. |
+
+### Hazır kuyruk ne zaman kullanılır, taze üretime ne zaman düşülür?
+
+`main.py` içindeki `run_feed_with_queue` / `_consume_feed_queue` akışına göre:
+
+- `--dry-run` çalıştırıldığında kuyruk tüketilmez; `automatic` veya `legacy` modda doğrudan `_run_fresh_feed` çalışır (`editorial` modda hata verir).
+- Canlı koşuda yerel `--prepared-queue`, R2 kuyruğu (`--prepared-queue-r2` veya `ARTFOLIO_FEED_QUEUE_ENABLED=true`) ya da yerel dizin verilmemiş `editorial` modu aktifse sistem önce kuyruktan uygun bir `READY` paket sahiplenmeyi (`claim`) dener.
+- Kuyrukta uygun paket yoksa `editorial` modda koşu `EDITORIAL_REVIEW_REQUIRED` ile durur; `automatic` ve `legacy` modlarda ise `prepared_queue_empty ... fallback=fresh_acquisition` kaydıyla `_run_fresh_feed` üzerinden taze üretime geçilir.
+
+### Yerel `prepare_feed_queue.py` varsayılanı (`editorial`)
+
+`scripts/prepare_feed_queue.py`, `main.py`’den farklı olarak `--content-mode` ve `ARTFOLIO_FEED_CONTENT_MODE` verilmediğinde varsayılan olarak **`editorial`** modunda çalışır. Bu kasıtlı bir güvenlik sınırıdır: yerel operatör onaylı `--editorial-workspace` veya `--story-project` vermeden yanlışlıkla onaysız/legacy stok üretemez (`EDITORIAL_REVIEW_REQUIRED`). `.github/workflows/prepare_feed_queue.yml` ise çalışma zamanında açıkça `ARTFOLIO_FEED_CONTENT_MODE: automatic` geçirerek salt okunur stok kontrolü (`--check-refill`) çalıştırır.
 
 <a id="automatic-content"></a>
 
@@ -100,6 +130,51 @@ Eski hazırlama/karışık v1 akışı yalnız açık `--content-mode legacy` ve
 Eski acquisition dry-run örneklerine `--content-mode legacy` ekleyin. Editoryal
 önizleme için yukarıdaki masayı kullanın. Aşağıdaki eski 6–9 eserli carousel,
 AI önerisi ve otomatik refill açıklamaları bu uyumluluk yoluna aittir.
+
+<a id="monthly-studio"></a>
+
+## Aylık stüdyo, 30 günlük grid ve Meta Business Suite paketi
+
+`scripts/review_monthly_plan.py`, Astra ve Neon şablon kataloglarıyla yerel aylık Carousel + Reels planlama, 30 günlük 3×3 grid inceleme, taşınabilir haftalık carousel teslim paketi ve Meta Business Suite dışa aktarım akışlarının tek CLI giriş noktasıdır. Bu araçlar doğrudan Instagram Graph API yayını yapmaz ve Cloudflare R2 yayın state'ine yazmaz.
+
+Temel alt komutlar:
+
+```bash
+# Kayıtlı ve kullanıma hazır Astra + Neon tasarımlarını listele
+python scripts/review_monthly_plan.py list-designs --collection all
+
+# 30 günlük Carousel + Reels plan çalışma alanı oluştur (varsayılan: 4 carousel + 2 reel/gün)
+python scripts/review_monthly_plan.py create --output data/monthly-plan --days 30
+
+# Yerel 30 günlük grid ve inceleme stüdyosunu aç (varsayılan port: 38150)
+python scripts/review_monthly_plan.py serve --workspace data/monthly-plan --port 38150
+
+# Onaylı gönderileri Meta Business Suite yerel paketi olarak dışa aktar
+python scripts/review_monthly_plan.py export-meta \
+  --workspace data/monthly-plan --output data/meta-export --split-weeks
+
+# Doğrulanmış müze havuzundan (pool_index.json) haftalık/aylık taşınabilir carousel paketi üret
+python scripts/review_monthly_plan.py build-carousel-delivery \
+  --pool /path/to/pool_index.json --output data/carousel-delivery
+
+# Çalışma alanındaki Reel gönderilerini yerel FFmpeg ile toplu render et (varsayılan --workers 2)
+python scripts/review_monthly_plan.py render-reels --workspace data/monthly-plan --approved-only
+
+# Dışa aktarılmış Instagram Insights CSV dosyasından tasarım/format skoru çıkar
+python scripts/review_monthly_plan.py analyze-insights --csv /path/to/insights.csv
+```
+
+- `create` varsayılan varlık dizini olarak `~/Downloads/ARTFOLIO_ASTRA/assets` yolunu kullanır (`--assets-dir` ile değiştirilebilir) ve isteğe bağlı `--project-dir`, `--pin`, `--reuse-ledger` seçeneklerini kabul eder.
+- `export-meta` yalnız onaylı gönderileri dışa aktarır; `--approve-all` ile çalışma alanındaki gönderiler topluca onaylanabilir, `--split-weeks` ile `Week-01..Week-04` klasörleri oluşturulur, `--reuse-ledger` ile dışa aktarılan eserler yerel tekrar defterine kaydedilir.
+- `build-carousel-delivery` varsayılan olarak `--auto-fetch` açıktır (eksik uygun eserlerde müze adaptörlerinden havuzu tamamlar; `--no-auto-fetch` ile kapatılabilir) ve `--status` (`preview`, `reserved`, `published`; varsayılan `reserved`) ile tekrar defteri durumunu yönetir.
+
+### Aylık stüdyo tekrar geçmişi ile otomatik yayın geçmişi arasındaki ilişki
+
+Kodda iki ayrı tekrar koruma mekanizması bulunur ve bunlar birbirine otomatik bağlı değildir:
+
+- **Aylık stüdyo tekrar defteri (`ArtworkReuseLedger`, `src/museum_pool.py`):** Yerel JSON dosyasında 180 günlük (`REUSE_COOLDOWN_DAYS = 180`) eser tekrar koruması tutar. `preview` kayıtları diğer planları engellemez; `reserved` ve `published` kayıtları aynı eserin 180 gün içinde başka bir `plan_id` altında yeniden seçilmesini engeller. `build-carousel-delivery` komutunda `--reuse-ledger` verilmezse varsayılan yol `<pool_dir>/carousel_reuse_ledger.json` olur.
+- **Otomatik Feed/Reel yayın geçmişi (`src/history_tracker.py` & `src/publication_state.py`):** Cloudflare R2 durable-state bucket'ındaki `publication_safety_state.v2.json` ve `publication_receipts.v2.json` (yerel/legacy testlerde `data/posted_history.json`) üzerinden çalışır.
+- **Kod sınırı:** `src/museum_pool.py`, `src/monthly_planner.py`, `src/carousel_delivery.py`, `src/meta_business_export.py` ve `src/profile_rehearsal.py` modülleri `src/history_tracker.py` veya `src/publication_state.py` import etmez ve R2 yayın geçmişini okumaz/yazmaz. Benzer şekilde otomatik `main.py` akışı da `ArtworkReuseLedger` dosyasını okumaz. İki yol aynı hesap için birlikte kullanılıyorsa çapraz eser tekrar kontrolü kod tarafından otomatik sağlanmaz.
 
 <a id="editorial-tools"></a>
 
