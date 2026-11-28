@@ -46,7 +46,7 @@ def _refill_decision(remote: R2PreparedFeedQueue, expected_sha: str, *, early: b
 
 
 def _prepare(format_name: str, directory: Path, excluded_ids: set[str], *, theme_definition=None,
-             excluded_theme_ids=None, inventory_context=()):
+             excluded_theme_ids=None, inventory_context=(), automatic_editorial: bool = False):
     # This CLI owns its process. Isolate the existing acquisition paths as well
     # as rendered outputs so preparing another package cannot overwrite one.
     original_data, original_raw = config.DATA_DIR, config.OUTPUT_RAW_IMAGE_PATH
@@ -54,6 +54,7 @@ def _prepare(format_name: str, directory: Path, excluded_ids: set[str], *, theme
         config.DATA_DIR = str(directory)
         config.OUTPUT_RAW_IMAGE_PATH = str(directory / "source-artwork.jpg")
         args = SimpleNamespace(dry_run=True, prepare_only=True, preparation_directory=directory,
+                               automatic_editorial=automatic_editorial,
                                image_url=None, pinterest=False, excluded_theme_ids=excluded_theme_ids or set(),
                                inventory_context=inventory_context)
         prepare = main.prepare_single_content if format_name == "single" else main.prepare_carousel_content
@@ -216,7 +217,12 @@ def run(argv: list[str] | None = None) -> int:
                     return story
                 if content_mode == 'editorial':
                     raise EditorialStockUnavailable('EDITORIAL_REVIEW_REQUIRED: no reviewed project for this slot')
-                acquired = planner.prepare(format_name, directory, excluded | story_ids | set((decision or {}).get("excluded_artwork_ids", [])), prepare=_prepare)
+                slot_prepare = (
+                    (lambda *a, **kw: _prepare(*a, automatic_editorial=True, **kw))
+                    if content_mode == 'automatic'
+                    else _prepare
+                )
+                acquired = planner.prepare(format_name, directory, excluded | story_ids | set((decision or {}).get("excluded_artwork_ids", [])), prepare=slot_prepare)
                 if content_mode == 'automatic':
                     from src.automatic_editorial import prepare_automatic_editorial
                     return prepare_automatic_editorial(acquired, directory / 'editorial')
